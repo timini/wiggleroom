@@ -9,6 +9,7 @@ This document covers the architecture, patterns, and practices for developing mo
 - [Native C++ Modules](#native-c-modules)
 - [Testing Framework](#testing-framework)
 - [Adding a New Module](#adding-a-new-module)
+- [Agent-Based Development](#agent-based-development)
 
 ---
 
@@ -975,3 +976,100 @@ just install
 - Enum values use `SCREAMING_SNAKE_CASE`
 - Member variables use `camelCase`
 - Follow existing patterns in the codebase
+
+---
+
+## Agent-Based Development
+
+WiggleRoom includes a multi-agent system for structured Faust module development. The agents automate verification, quality evaluation, and provide actionable fix instructions.
+
+### Agent Definitions
+
+Agent definitions for Claude Code are located in `.claude/agents/`:
+
+| Agent | File | Purpose |
+|-------|------|---------|
+| **Verifier** | [`.claude/agents/verifier.md`](../.claude/agents/verifier.md) | Builds modules and runs comprehensive tests |
+| **Judge** | [`.claude/agents/judge.md`](../.claude/agents/judge.md) | Evaluates results and generates fix instructions |
+| **Faust Dev** | [`.claude/agents/faust-dev.md`](../.claude/agents/faust-dev.md) | Claude's role for applying DSP fixes |
+
+### Agent Architecture
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Verifier Agent │────▶│   Judge Agent   │────▶│ Faust Dev Agent │
+│                 │     │                 │     │    (Claude)     │
+│ - Build         │     │ - Evaluate      │     │                 │
+│ - Render tests  │     │ - Prioritize    │     │ - Read DSP      │
+│ - Quality tests │     │ - Score         │     │ - Apply fixes   │
+│ - Param sweep   │     │ - Generate fix  │     │ - Rebuild       │
+│ - AI analysis   │     │   instructions  │     │                 │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+         │                                               │
+         └───────────────────────────────────────────────┘
+                        (iterate until pass)
+```
+
+### Agent Commands
+
+```bash
+# Single verification + judgment iteration
+just agent-verify ModuleName
+
+# Get fix instructions (for Claude to execute)
+just agent-fix ModuleName
+
+# Run full development loop (iterates until pass or max iterations)
+just agent-loop ModuleName [iterations]
+
+# Get JSON output for programmatic use
+just agent-json ModuleName
+```
+
+### Development Loop Workflow
+
+When Claude Code acts as the Faust Dev Agent:
+
+1. **Run verification**: `just agent-fix ModuleName`
+2. **Receive fix instructions** with priority issues and Faust code hints
+3. **Read the DSP file** specified in the instructions
+4. **Apply targeted fixes** one issue at a time (CRITICAL first, then HIGH)
+5. **Rebuild**: `just build`
+6. **Re-verify**: `just agent-verify ModuleName`
+7. **Repeat** until verdict is PASS
+
+### Severity Levels
+
+| Severity | Action | Examples |
+|----------|--------|----------|
+| **CRITICAL** | Fix immediately | Build failure, silent output, severe clipping (>15%) |
+| **HIGH** | Fix before release | Major clipping (5-15%), very low quality score (<60) |
+| **MEDIUM** | Should fix | Parameter issues, AI-detected problems |
+| **LOW** | Optional | Minor suggestions, optimizations |
+
+### Implementation Files
+
+The Python implementations that power the agents:
+
+| File | Description |
+|------|-------------|
+| `test/agents/verifier_agent.py` | Verification logic and test execution |
+| `test/agents/judge_agent.py` | Result evaluation and fix generation |
+| `test/agents/orchestrator.py` | Development loop coordination |
+
+### Programmatic Usage
+
+```python
+from test.agents import Orchestrator, run_development_loop
+
+# Quick development loop
+session = run_development_loop("ChaosFlute")
+
+# Or with more control
+orchestrator = Orchestrator(max_iterations=10)
+judgment, verification = orchestrator.run_iteration("ChaosFlute", verbose=True)
+
+if judgment.verdict != "pass":
+    fix_instructions = orchestrator.generate_fix_instructions("ChaosFlute", judgment)
+    print(fix_instructions.to_prompt())
+```

@@ -10,6 +10,11 @@ Always use feature-dev agents for feature development tasks. When implementing n
 
 ```
 WiggleRoom/
+├── .claude/                  # Claude Code configuration
+│   └── agents/               # Agent definitions (for Claude Code)
+│       ├── verifier.md       # Build & test verification agent
+│       ├── judge.md          # Quality evaluation agent
+│       └── faust-dev.md      # Faust DSP development agent
 ├── cmake/                    # CMake helpers & toolchains
 │   ├── RackSDK.cmake         # SDK finder/downloader
 │   └── Toolchain-*.cmake     # Cross-compilation toolchains
@@ -24,14 +29,14 @@ WiggleRoom/
 │   │   └── ModuleName/
 │   │       ├── ModuleName.cpp
 │   │       ├── CMakeLists.txt
-│   │       └── module_name.dsp  # (Faust modules only)
+│   │       ├── test_config.json  # Module test configuration
+│   │       └── module_name.dsp   # (Faust modules only)
 │   └── plugin.cpp            # Plugin entry point
 ├── test/                     # Testing framework
-│   ├── agents/               # Multi-agent development system
+│   ├── agents/               # Agent implementation scripts
 │   │   ├── verifier_agent.py # Build and test runner
 │   │   ├── judge_agent.py    # Quality evaluator
-│   │   ├── orchestrator.py   # Development loop coordinator
-│   │   └── faust_dev_agent.md # Claude instructions
+│   │   └── orchestrator.py   # Development loop coordinator
 │   ├── faust_render.cpp      # Audio rendering tool
 │   ├── test_framework.py     # Main test runner
 │   ├── audio_quality.py      # Audio quality analysis (THD, aliasing, etc.)
@@ -251,14 +256,23 @@ if judgment.verdict != "pass":
     print(fix_instructions.to_prompt())
 ```
 
-### Files
+### Agent Definitions
+
+Claude Code agents are defined in `.claude/agents/`:
+
+| Agent | Definition | Description |
+|-------|------------|-------------|
+| **Verifier** | [`.claude/agents/verifier.md`](.claude/agents/verifier.md) | Builds modules and runs comprehensive tests |
+| **Judge** | [`.claude/agents/judge.md`](.claude/agents/judge.md) | Evaluates results and generates fix instructions |
+| **Faust Dev** | [`.claude/agents/faust-dev.md`](.claude/agents/faust-dev.md) | Claude's role for applying DSP fixes |
+
+### Implementation Files
 
 | File | Description |
 |------|-------------|
-| `test/agents/verifier_agent.py` | Runs builds and all test suites |
-| `test/agents/judge_agent.py` | Evaluates results, generates fix instructions |
+| `test/agents/verifier_agent.py` | Python implementation for verification |
+| `test/agents/judge_agent.py` | Python implementation for judging |
 | `test/agents/orchestrator.py` | Coordinates the development loop |
-| `test/agents/faust_dev_agent.md` | Instructions for Claude as Faust Dev Agent |
 
 ## Module Architecture
 

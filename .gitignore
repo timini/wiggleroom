@@ -68,4 +68,7 @@ dist/
 # Local development notes
 notes.md
 TODO.local
-.claude/
+
+# Claude Code - ignore cache but keep agent definitions
+.claude/*
+!.claude/agents/
