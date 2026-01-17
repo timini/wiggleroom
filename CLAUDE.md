@@ -324,6 +324,7 @@ soft_limit = ma.tanh;
    - `src/modules/MyModule/my_module.dsp` (Faust DSP)
    - `src/modules/MyModule/MyModule.cpp` (VCV wrapper)
    - `src/modules/MyModule/CMakeLists.txt`
+   - `src/modules/MyModule/test_config.json` (test configuration)
    - `res/MyModule.svg` (panel)
 
 2. **Register module:**
@@ -339,12 +340,28 @@ soft_limit = ma.tanh;
    ```
    **Without this step, the module will not be registered and VCV Rack will fail to load the plugin!**
 
-4. **Add to tests:**
+4. **Create test_config.json:**
+   ```json
+   {
+     "module_type": "instrument",
+     "description": "Brief description of your module",
+     "quality_thresholds": {
+       "thd_max_percent": 15.0,
+       "clipping_max_percent": 1.0
+     },
+     "test_scenarios": [
+       {"name": "default", "duration": 2.0}
+     ]
+   }
+   ```
+   Module types: `instrument`, `filter`, `effect`, `resonator`, `utility`
+
+5. **Add to tests:**
    - `test/faust_render.cpp`: Factory declaration and function
    - `test/dsp_wrappers.cpp`: DSP wrapper
    - `test/CMakeLists.txt`: Module mapping
 
-5. **Build and test:**
+6. **Build and test:**
    ```bash
    just build
    python3 test/test_framework.py --module MyModule -v

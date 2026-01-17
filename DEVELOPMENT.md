@@ -295,6 +295,94 @@ test/
 └── analyze_sensitivity.py # Parameter sensitivity analysis
 ```
 
+### Module Test Configuration
+
+Each module can have a `test_config.json` file in its directory that defines module-specific test settings:
+
+```
+src/modules/ModuleName/
+├── ModuleName.cpp
+├── module_name.dsp          # (Faust modules only)
+├── CMakeLists.txt
+└── test_config.json         # <-- Test configuration
+```
+
+#### test_config.json Format
+
+```json
+{
+  "module_type": "instrument",
+  "description": "Module description for context",
+  "quality_thresholds": {
+    "thd_max_percent": 15.0,
+    "clipping_max_percent": 1.0,
+    "hnr_min_db": 0.0,
+    "allow_hot_signal": false
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 2.0,
+      "description": "Default settings"
+    },
+    {
+      "name": "extreme",
+      "duration": 3.0,
+      "parameters": { "drive": 0.9, "mix": 1.0 },
+      "description": "Extreme parameter settings"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": ["gate", "trigger"],
+    "steps": 10
+  }
+}
+```
+
+#### Module Types
+
+| Type | Description | Test Input |
+|------|-------------|------------|
+| `instrument` | Generates sound from gate/trigger | Gate signal only |
+| `filter` | Processes continuous audio | Saw wave input |
+| `effect` | Processes audio with memory | Short burst then silence |
+| `resonator` | Needs excitation to ring | Repeated noise bursts |
+| `utility` | Non-audio (LFO, clock, etc.) | Skip audio tests |
+
+#### Quality Thresholds
+
+| Threshold | Description | Default |
+|-----------|-------------|---------|
+| `thd_max_percent` | Maximum acceptable THD | 15.0 |
+| `clipping_max_percent` | Maximum clipping ratio | 1.0 |
+| `hnr_min_db` | Minimum harmonic-to-noise ratio | 0.0 |
+| `allow_hot_signal` | Allow higher output (wavefolders) | false |
+
+#### Skip Audio Tests
+
+For utility modules (LFOs, clocks, sequencers) that don't produce audio output:
+
+```json
+{
+  "module_type": "utility",
+  "skip_audio_tests": true,
+  "skip_reason": "LFO - outputs control voltages, not audio"
+}
+```
+
+#### Using Test Scenarios
+
+```bash
+# List available scenarios
+./build/test/faust_render --module ChaosFlute --list-scenarios
+
+# Render with a specific scenario
+./build/test/faust_render --module ChaosFlute --scenario high_chaos --output test.wav
+
+# Show full module config
+./build/test/faust_render --module ChaosFlute --show-config
+```
+
 ### Test Pyramid
 
 ```

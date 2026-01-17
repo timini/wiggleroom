@@ -39,6 +39,44 @@ except ImportError:
 SAMPLE_RATE = 48000
 TEST_DURATION = 2.0
 
+# Default quality thresholds (can be overridden by module config)
+DEFAULT_QUALITY_THRESHOLDS = {
+    "thd_max_percent": 15.0,
+    "clipping_max_percent": 1.0,
+    "hnr_min_db": 0.0,
+    "allow_hot_signal": False
+}
+
+
+def load_module_config(module_name: str) -> dict:
+    """Load test configuration for a module from its test_config.json file."""
+    project_root = get_project_root()
+    config_path = project_root / "src" / "modules" / module_name / "test_config.json"
+
+    if not config_path.exists():
+        return {"thresholds": DEFAULT_QUALITY_THRESHOLDS.copy()}
+
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+
+        thresholds = DEFAULT_QUALITY_THRESHOLDS.copy()
+        if "quality_thresholds" in data:
+            qt = data["quality_thresholds"]
+            thresholds["thd_max_percent"] = qt.get("thd_max_percent", 15.0)
+            thresholds["clipping_max_percent"] = qt.get("clipping_max_percent", 1.0)
+            thresholds["hnr_min_db"] = qt.get("hnr_min_db", 0.0)
+            thresholds["allow_hot_signal"] = qt.get("allow_hot_signal", False)
+
+        return {
+            "module_type": data.get("module_type", "instrument"),
+            "skip_audio_tests": data.get("skip_audio_tests", False),
+            "skip_reason": data.get("skip_reason", ""),
+            "thresholds": thresholds
+        }
+    except (json.JSONDecodeError, IOError):
+        return {"thresholds": DEFAULT_QUALITY_THRESHOLDS.copy()}
+
 
 # =============================================================================
 # Data Classes
@@ -800,7 +838,8 @@ def analyze_envelope(audio: np.ndarray, sr: int = SAMPLE_RATE) -> EnvelopeAnalys
 # =============================================================================
 
 def analyze_audio_quality(audio: np.ndarray, sr: int = SAMPLE_RATE,
-                          module_name: str = "Unknown") -> AudioQualityReport:
+                          module_name: str = "Unknown",
+                          thresholds: dict | None = None) -> AudioQualityReport:
     """
     Run complete audio quality analysis.
 
@@ -808,10 +847,18 @@ def analyze_audio_quality(audio: np.ndarray, sr: int = SAMPLE_RATE,
         audio: Audio samples
         sr: Sample rate
         module_name: Name of the module being tested
+        thresholds: Optional dict with quality thresholds (thd_max_percent, hnr_min_db, etc.)
 
     Returns:
         AudioQualityReport with all metrics
     """
+    # Use provided thresholds or defaults
+    if thresholds is None:
+        thresholds = DEFAULT_QUALITY_THRESHOLDS.copy()
+
+    thd_max = thresholds.get("thd_max_percent", 15.0)
+    hnr_min = thresholds.get("hnr_min_db", 0.0)
+
     report = AudioQualityReport(module_name=module_name)
     issues = []
     quality_score = 100.0
@@ -828,10 +875,10 @@ def analyze_audio_quality(audio: np.ndarray, sr: int = SAMPLE_RATE,
         thd_result = measure_thd(audio, sr)
         report.thd = thd_result
 
-        if thd_result.thd_percent > 15:
-            issues.append(f"High THD: {thd_result.thd_percent:.1f}%")
+        if thd_result.thd_percent > thd_max:
+            issues.append(f"High THD: {thd_result.thd_percent:.1f}% (threshold: {thd_max}%)")
             quality_score -= 20
-        elif thd_result.thd_percent > 5:
+        elif thd_result.thd_percent > thd_max * 0.5:
             issues.append(f"Moderate THD: {thd_result.thd_percent:.1f}%")
             quality_score -= 5
     except Exception as e:
@@ -864,8 +911,8 @@ def analyze_audio_quality(audio: np.ndarray, sr: int = SAMPLE_RATE,
         if spectral_result.crest_factor > 20:
             issues.append(f"Very high crest factor: {spectral_result.crest_factor:.1f}")
 
-        if spectral_result.harmonic_to_noise_ratio < 0:
-            issues.append(f"Low HNR (noisy): {spectral_result.harmonic_to_noise_ratio:.1f} dB")
+        if spectral_result.harmonic_to_noise_ratio < hnr_min:
+            issues.append(f"Low HNR: {spectral_result.harmonic_to_noise_ratio:.1f} dB (threshold: {hnr_min} dB)")
             quality_score -= 5
     except Exception as e:
         issues.append(f"Spectral analysis failed: {e}")
@@ -897,17 +944,31 @@ def get_modules() -> list[str]:
             if line.strip() and not line.startswith("Available")]
 
 
-def test_module_quality(module_name: str, tmp_dir: Path) -> AudioQualityReport:
+def test_module_quality(module_name: str, tmp_dir: Path,
+                        thresholds: dict | None = None) -> AudioQualityReport:
     """
     Test audio quality for a specific module.
 
     Args:
         module_name: Name of the module
         tmp_dir: Temporary directory for rendered audio
+        thresholds: Optional dict with quality thresholds (overrides module config)
 
     Returns:
         AudioQualityReport
     """
+    # Load module config if no thresholds provided
+    config = load_module_config(module_name)
+    if thresholds is None:
+        thresholds = config.get("thresholds", DEFAULT_QUALITY_THRESHOLDS.copy())
+
+    # Check if module should skip audio tests
+    if config.get("skip_audio_tests", False):
+        report = AudioQualityReport(module_name=module_name)
+        report.overall_quality_score = 100.0
+        report.issues = [f"Audio tests skipped: {config.get('skip_reason', 'utility module')}"]
+        return report
+
     wav_path = tmp_dir / f"{module_name}_quality.wav"
 
     # Render with default parameters
@@ -922,7 +983,7 @@ def test_module_quality(module_name: str, tmp_dir: Path) -> AudioQualityReport:
         report.issues = ["Failed to load audio"]
         return report
 
-    return analyze_audio_quality(audio, SAMPLE_RATE, module_name)
+    return analyze_audio_quality(audio, SAMPLE_RATE, module_name, thresholds)
 
 
 def print_quality_report(report: AudioQualityReport, verbose: bool = False):

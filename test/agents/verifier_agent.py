@@ -17,6 +17,51 @@ from pathlib import Path
 from typing import Any
 
 
+def load_module_config(module_name: str, project_root: Path) -> dict:
+    """Load test configuration for a module from its test_config.json file."""
+    config_path = project_root / "src" / "modules" / module_name / "test_config.json"
+
+    default_thresholds = {
+        "thd_max_percent": 15.0,
+        "clipping_max_percent": 1.0,
+        "hnr_min_db": 0.0,
+        "allow_hot_signal": False
+    }
+
+    if not config_path.exists():
+        return {
+            "module_type": "instrument",
+            "skip_audio_tests": False,
+            "thresholds": default_thresholds
+        }
+
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+
+        thresholds = default_thresholds.copy()
+        if "quality_thresholds" in data:
+            qt = data["quality_thresholds"]
+            thresholds["thd_max_percent"] = qt.get("thd_max_percent", 15.0)
+            thresholds["clipping_max_percent"] = qt.get("clipping_max_percent", 1.0)
+            thresholds["hnr_min_db"] = qt.get("hnr_min_db", 0.0)
+            thresholds["allow_hot_signal"] = qt.get("allow_hot_signal", False)
+
+        return {
+            "module_type": data.get("module_type", "instrument"),
+            "skip_audio_tests": data.get("skip_audio_tests", False),
+            "skip_reason": data.get("skip_reason", ""),
+            "description": data.get("description", ""),
+            "thresholds": thresholds
+        }
+    except (json.JSONDecodeError, IOError):
+        return {
+            "module_type": "instrument",
+            "skip_audio_tests": False,
+            "thresholds": default_thresholds
+        }
+
+
 @dataclass
 class ParameterIssue:
     """Issue found during parameter sweep."""
@@ -70,12 +115,27 @@ class AIAnalysis:
 
 
 @dataclass
+class ModuleConfig:
+    """Module test configuration from test_config.json."""
+    module_type: str = "instrument"
+    skip_audio_tests: bool = False
+    skip_reason: str = ""
+    thd_max_percent: float = 15.0
+    clipping_max_percent: float = 1.0
+    hnr_min_db: float = 0.0
+    allow_hot_signal: bool = False
+
+
+@dataclass
 class VerificationResult:
     """Complete verification results for a module."""
     module_name: str
     success: bool = True
     build_success: bool = True
     build_error: str = ""
+
+    # Module config (from test_config.json)
+    config: ModuleConfig = field(default_factory=ModuleConfig)
 
     # Basic render
     render: RenderMetrics = field(default_factory=RenderMetrics)
@@ -128,6 +188,23 @@ class VerifierAgent:
         """
         result = VerificationResult(module_name=module_name)
 
+        # Load module config
+        config_data = load_module_config(module_name, self.project_root)
+        thresholds = config_data.get("thresholds", {})
+        result.config = ModuleConfig(
+            module_type=config_data.get("module_type", "instrument"),
+            skip_audio_tests=config_data.get("skip_audio_tests", False),
+            skip_reason=config_data.get("skip_reason", ""),
+            thd_max_percent=thresholds.get("thd_max_percent", 15.0),
+            clipping_max_percent=thresholds.get("clipping_max_percent", 1.0),
+            hnr_min_db=thresholds.get("hnr_min_db", 0.0),
+            allow_hot_signal=thresholds.get("allow_hot_signal", False)
+        )
+
+        if verbose:
+            print(f"[Verifier] Module config: type={result.config.module_type}, "
+                  f"skip_audio={result.config.skip_audio_tests}")
+
         # 1. Build
         if verbose:
             print(f"[Verifier] Building {module_name}...")
@@ -137,6 +214,14 @@ class VerifierAgent:
 
         if not build_ok:
             result.success = False
+            return result
+
+        # Handle modules that skip audio tests
+        if result.config.skip_audio_tests:
+            if verbose:
+                reason = result.config.skip_reason or "utility module"
+                print(f"[Verifier] Skipping audio tests ({reason})")
+            result.success = True
             return result
 
         # 2. Basic render test
@@ -164,10 +249,14 @@ class VerifierAgent:
                 print(f"[Verifier] Running AI analysis...")
             result.ai = self._run_ai_analysis(module_name)
 
-        # Determine overall success
+        # Determine overall success using config thresholds
+        clipping_threshold = result.config.clipping_max_percent
+        if result.config.allow_hot_signal:
+            clipping_threshold = max(clipping_threshold, 15.0)  # More lenient for hot signals
+
         result.success = (
             result.build_success and
-            result.render.clipping_percent < 1.0 and
+            result.render.clipping_percent < clipping_threshold and
             not result.render.is_silent and
             result.quality.overall_score >= 70
         )
