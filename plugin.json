@@ -1,0 +1,215 @@
+{
+  "slug": "WiggleRoom",
+  "name": "Wiggle Room",
+  "version": "2.0.0",
+  "license": "GPL-3.0-or-later",
+  "brand": "Wiggle Room",
+  "author": "Tim Richardson",
+  "authorEmail": "",
+  "authorUrl": "",
+  "pluginUrl": "https://github.com/YOUR_USERNAME/WiggleRoom",
+  "manualUrl": "https://github.com/YOUR_USERNAME/WiggleRoom#documentation",
+  "sourceUrl": "https://github.com/YOUR_USERNAME/WiggleRoom",
+  "donateUrl": "",
+  "changelogUrl": "https://github.com/YOUR_USERNAME/WiggleRoom/releases",
+  "modules": [
+    {
+      "slug": "SuperOsc",
+      "name": "Super Oscillator",
+      "description": "Simple sine/saw oscillator with V/Oct tracking",
+      "tags": [
+        "Oscillator",
+        "VCO"
+      ]
+    },
+    {
+      "slug": "Intersect",
+      "name": "Intersect",
+      "description": "Rhythmic trigger generator using discrete gradient analysis - generates Euclidean and Euclidean-adjacent rhythms from CV signals",
+      "tags": [
+        "Clock modulator",
+        "Sequencer",
+        "Sample and hold"
+      ]
+    },
+    {
+      "slug": "Cycloid",
+      "name": "Cycloid",
+      "description": "Polar Euclidean Sequencer - rotating clock hand triggers when crossing polygon vertices",
+      "tags": [
+        "Clock modulator",
+        "Sequencer",
+        "LFO",
+        "Visual"
+      ]
+    },
+    {
+      "slug": "MoogLPF",
+      "name": "Moog LPF",
+      "description": "Classic Moog ladder lowpass filter with resonance, built with Faust DSP",
+      "tags": [
+        "Filter",
+        "Lowpass gate"
+      ]
+    },
+    {
+      "slug": "ModalBell",
+      "name": "Modal Bell",
+      "description": "Physical model of a struck bar - Vibraphone, Marimba, Bell sounds with Faust DSP",
+      "tags": [
+        "Physical modeling",
+        "Instrument"
+      ]
+    },
+    {
+      "slug": "BigReverb",
+      "name": "Big Reverb",
+      "description": "Lush stereo reverb with Zita Rev1 algorithm - high-quality FDN reverb with independent bass/treble decay, predelay, and damping",
+      "tags": [
+        "Reverb",
+        "Effect"
+      ]
+    },
+    {
+      "slug": "SaturationEcho",
+      "name": "Saturation Echo",
+      "description": "Vintage tape delay with saturation and wobble in the feedback loop, built with Faust DSP",
+      "tags": [
+        "Delay",
+        "Effect",
+        "Distortion"
+      ]
+    },
+    {
+      "slug": "SpectralResonator",
+      "name": "Spectral Resonator",
+      "description": "6-band resonant filter bank for spectral chord processing - transforms noise and simple waves into lush melodic chords",
+      "tags": [
+        "Filter",
+        "Effect",
+        "Physical modeling"
+      ]
+    },
+    {
+      "slug": "PluckedString",
+      "name": "Plucked String",
+      "description": "Karplus-Strong physical model of a plucked string - creates guitar, harp, and plucked instrument sounds",
+      "tags": [
+        "Physical modeling",
+        "Instrument",
+        "Oscillator"
+      ]
+    },
+    {
+      "slug": "ChaosFlute",
+      "name": "Chaos Flute",
+      "description": "Physical flute model with internal breath envelope and overblow chaos - from soft woodwind to screaming multiphonics",
+      "tags": [
+        "Physical modeling",
+        "Instrument",
+        "Oscillator"
+      ]
+    },
+    {
+      "slug": "SolinaEnsemble",
+      "name": "Solina Ensemble",
+      "description": "Classic 3-voice BBD string ensemble effect - recreates the ARP Solina tri-phase chorus for massive orchestral strings",
+      "tags": [
+        "Effect",
+        "Chorus",
+        "Flanger"
+      ]
+    },
+    {
+      "slug": "InfiniteFolder",
+      "name": "Infinite Folder",
+      "description": "West Coast wavefolder - creates complex metallic harmonics by folding waveforms using sine function",
+      "tags": [
+        "Waveshaper",
+        "Distortion",
+        "Effect"
+      ]
+    },
+    {
+      "slug": "SpaceCello",
+      "name": "Space Cello",
+      "description": "Digital Yaybahar - coupled physical model with string, dispersive spring, and resonant tube body for sci-fi acoustic sounds",
+      "tags": [
+        "Physical modeling",
+        "Instrument",
+        "Oscillator"
+      ]
+    },
+    {
+      "slug": "TheAbyss",
+      "name": "The Abyss",
+      "description": "Waterphone - bowed metal rods with hydro-modulation for horror movie soundscapes",
+      "tags": [
+        "Physical modeling",
+        "Instrument",
+        "Oscillator"
+      ]
+    },
+    {
+      "slug": "Matter",
+      "name": "Matter",
+      "description": "Physical model of a struck solid inside a resonant tube - morphs from strings to bells with acoustic chamber",
+      "tags": [
+        "Physical modeling",
+        "Instrument",
+        "Oscillator"
+      ]
+    },
+    {
+      "slug": "GravityClock",
+      "name": "Gravity Clock",
+      "description": "Clock-synced bouncing ball physics - generates LFO and triggers locked to musical divisions with optional ratcheting decay",
+      "tags": [
+        "LFO",
+        "Clock modulator",
+        "Envelope generator"
+      ]
+    },
+    {
+      "slug": "Linkage",
+      "name": "Linkage",
+      "description": "Chaotic percussion generator - 3-mass spring chain physical model for rattling, metallic, and delayed rhythms",
+      "tags": [
+        "Physical modeling",
+        "Instrument",
+        "Drum"
+      ]
+    },
+    {
+      "slug": "OctoLFO",
+      "name": "Octo LFO",
+      "description": "Clock-synced 8-channel LFO with wave shaping - Skew, Curve, and Fold modifiers with mini scope per channel",
+      "tags": [
+        "LFO",
+        "Clock modulator",
+        "Polyphonic"
+      ]
+    },
+    {
+      "slug": "TheCauldron",
+      "name": "The Cauldron",
+      "description": "Fluid wave math processor - 4 inputs combined through 7 analog algorithms: Mix, Ring, Peaks, Valleys, Diff, Fold, Morph",
+      "tags": [
+        "Mixer",
+        "Ring modulator",
+        "Waveshaper",
+        "Effect"
+      ]
+    },
+    {
+      "slug": "TheArchitect",
+      "name": "The Architect",
+      "description": "Poly-Quantizer & Chord Machine - 8 independent quantizer tracks with shared Key/Scale and chord generator",
+      "tags": [
+        "Quantizer",
+        "Polyphonic",
+        "Tuner"
+      ]
+    }
+  ]
+}

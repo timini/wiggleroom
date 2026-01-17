@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="30.48" height="128.5" viewBox="0 0 30.48 128.5">
+  <!-- 6HP Panel -->
+  <rect width="30.48" height="128.5" fill="#2a2a2a"/>
+
+  <!-- Panel border -->
+  <rect x="0.5" y="0.5" width="29.48" height="127.5" fill="none" stroke="#444" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="15.24" y="14" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" font-weight="bold" fill="#e0e0e0">LINKAGE</text>
+
+  <!-- Tension label -->
+  <text x="15.24" y="28" text-anchor="middle" font-family="Arial, sans-serif" font-size="3" fill="#aaa">TENSION</text>
+
+  <!-- Slack label -->
+  <text x="15.24" y="52" text-anchor="middle" font-family="Arial, sans-serif" font-size="3" fill="#aaa">SLACK</text>
+
+  <!-- Damping label -->
+  <text x="15.24" y="74" text-anchor="middle" font-family="Arial, sans-serif" font-size="3" fill="#aaa">DAMPING</text>
+
+  <!-- CV section -->
+  <text x="15.24" y="90" text-anchor="middle" font-family="Arial, sans-serif" font-size="3" fill="#aaa">CV</text>
+  <text x="7.62" y="97" text-anchor="middle" font-family="Arial, sans-serif" font-size="2.5" fill="#666">TENS</text>
+  <text x="22.86" y="97" text-anchor="middle" font-family="Arial, sans-serif" font-size="2.5" fill="#666">SLCK</text>
+
+  <!-- Gate label -->
+  <text x="15.24" y="112" text-anchor="middle" font-family="Arial, sans-serif" font-size="3" fill="#aaa">GATE</text>
+
+  <!-- Output label -->
+  <text x="15.24" y="123" text-anchor="middle" font-family="Arial, sans-serif" font-size="3" fill="#aaa">OUT</text>
+
+  <!-- Decorative lines -->
+  <g stroke="#333" stroke-width="0.3" fill="none">
+    <line x1="3" y1="20" x2="27.48" y2="20"/>
+    <line x1="3" y1="84" x2="27.48" y2="84"/>
+    <line x1="3" y1="105" x2="27.48" y2="105"/>
+  </g>
+
+  <!-- Chain icon - 3 connected masses (decorative at bottom) -->
+  <g transform="translate(5, 0)">
+    <!-- Top mass -->
+    <circle cx="5" cy="122" r="1.2" fill="#555" stroke="#777" stroke-width="0.3"/>
+    <!-- Spring 1 -->
+    <line x1="5" y1="123.2" x2="5" y2="124.8" stroke="#666" stroke-width="0.3"/>
+    <!-- Middle mass -->
+    <circle cx="5" cy="126" r="1.2" fill="#555" stroke="#777" stroke-width="0.3"/>
+  </g>
+</svg>

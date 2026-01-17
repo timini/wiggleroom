@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="81.28mm" height="128.5mm" viewBox="0 0 81.28 128.5">
+  <!-- 16HP Panel -->
+  <rect width="81.28" height="128.5" fill="#1a1a1a"/>
+
+  <!-- Panel border -->
+  <rect x="0.5" y="0.5" width="80.28" height="127.5" fill="none" stroke="#333" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="40.64" y="8" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" font-weight="bold" fill="#e0e0e0">THE ARCHITECT</text>
+  <text x="40.64" y="13" text-anchor="middle" font-family="Arial, sans-serif" font-size="2.5" fill="#666">POLY QUANTIZER</text>
+
+  <!-- Root and Scale labels -->
+  <text x="30" y="17" text-anchor="middle" font-family="Arial, sans-serif" font-size="2.5" fill="#888">ROOT</text>
+  <text x="51" y="17" text-anchor="middle" font-family="Arial, sans-serif" font-size="2.5" fill="#888">SCALE</text>
+
+  <!-- Transpose label -->
+  <text x="40.64" y="35" text-anchor="middle" font-family="Arial, sans-serif" font-size="2" fill="#666">TRANSPOSE</text>
+
+  <!-- Scale display area -->
+  <rect x="22" y="48" width="37" height="12" rx="1" fill="#0a0a0a" stroke="#333" stroke-width="0.5"/>
+  <text x="40.64" y="47" text-anchor="middle" font-family="Arial, sans-serif" font-size="2" fill="#555">ACTIVE NOTES</text>
+
+  <!-- CV input labels -->
+  <text x="25" y="68" text-anchor="middle" font-family="Arial, sans-serif" font-size="1.8" fill="#555">ROOT</text>
+  <text x="40.64" y="68" text-anchor="middle" font-family="Arial, sans-serif" font-size="1.8" fill="#555">SCALE</text>
+  <text x="56" y="68" text-anchor="middle" font-family="Arial, sans-serif" font-size="1.8" fill="#555">CHORD</text>
+
+  <!-- Track section labels -->
+  <text x="8" y="69" text-anchor="middle" font-family="Arial, sans-serif" font-size="2" fill="#888">IN</text>
+  <text x="73" y="69" text-anchor="middle" font-family="Arial, sans-serif" font-size="2" fill="#888">OUT</text>
+
+  <!-- Track numbers -->
+  <g font-family="Arial, sans-serif" font-size="2" fill="#444" text-anchor="middle">
+    <text x="15" y="73">1</text>
+    <text x="15" y="80">2</text>
+    <text x="15" y="87">3</text>
+    <text x="15" y="94">4</text>
+    <text x="15" y="101">5</text>
+    <text x="15" y="108">6</text>
+    <text x="15" y="115">7</text>
+    <text x="15" y="122">8</text>
+  </g>
+
+  <!-- Chord section -->
+  <text x="40.64" y="95" text-anchor="middle" font-family="Arial, sans-serif" font-size="2" fill="#666">INVERSION</text>
+  <text x="56" y="95" text-anchor="middle" font-family="Arial, sans-serif" font-size="1.8" fill="#555">INV CV</text>
+
+  <!-- Chord output label -->
+  <text x="40.64" y="113" text-anchor="middle" font-family="Arial, sans-serif" font-size="2.5" fill="#888">CHORD</text>
+  <text x="40.64" y="124" text-anchor="middle" font-family="Arial, sans-serif" font-size="1.8" fill="#555">4-VOICE</text>
+
+  <!-- Brand at bottom -->
+  <text x="73" y="125" text-anchor="middle" font-family="Arial, sans-serif" font-size="2" fill="#333">WIGGLE ROOM</text>
+</svg>

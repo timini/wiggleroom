@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="121.92" height="380" viewBox="0 0 121.92 380">
+  <!-- 8HP Panel (1HP = 15.24px, 8HP = 121.92px) -->
+  <!-- Height: 380px (3U) -->
+
+  <!-- Main background -->
+  <rect width="121.92" height="380" fill="#1a1a2e"/>
+
+  <!-- Panel border -->
+  <rect x="1.5" y="1.5" width="118.92" height="377" fill="none" stroke="#3d3d5c" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="60.96" y="24" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#e0e0e0">INTERSECT</text>
+
+  <!-- Display area placeholder (actual display is drawn by widget) -->
+  <rect x="6" y="30" width="109.92" height="84" fill="#14141e" stroke="#404060" stroke-width="1" rx="2"/>
+
+  <!-- Control labels -->
+  <text x="30" y="132" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#808090">TIME</text>
+  <text x="92" y="132" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#808090">DENS</text>
+
+  <!-- Scale switch label -->
+  <text x="60.96" y="172" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#606070">BI/UNI</text>
+
+  <!-- Input labels -->
+  <text x="30" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">CLK</text>
+  <text x="92" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">RST</text>
+  <text x="30" y="248" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">CV</text>
+  <text x="92" y="248" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">D.CV</text>
+
+  <!-- Mode switch labels -->
+  <text x="30" y="280" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#606070">T/G</text>
+  <text x="92" y="280" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#606070">↑/↕/↓</text>
+
+  <!-- Output labels -->
+  <text x="30" y="310" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">TRIG</text>
+  <text x="92" y="310" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">STEP</text>
+
+  <!-- Brand -->
+  <text x="60.96" y="370" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#505070">WiggleRoom</text>
+</svg>

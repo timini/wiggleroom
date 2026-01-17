@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="60.96" height="380" viewBox="0 0 60.96 380">
+  <!-- 4HP Panel - Dark deep blue/black for underwater feel -->
+  <rect width="60.96" height="380" fill="#0a0a1a"/>
+
+  <!-- Panel border -->
+  <rect x="0.5" y="0.5" width="59.96" height="379" fill="none" stroke="#1a2a3a" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="30.48" y="16" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#4080a0">THE</text>
+  <text x="30.48" y="27" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#4080a0">ABYSS</text>
+
+  <!-- PITCH label -->
+  <text x="30.48" y="38" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#406080">PITCH</text>
+
+  <!-- PRESSURE and SLOSH labels -->
+  <text x="15.48" y="88" text-anchor="middle" font-family="Arial, sans-serif" font-size="3.5" fill="#406080">PRESS</text>
+  <text x="45.48" y="88" text-anchor="middle" font-family="Arial, sans-serif" font-size="3.5" fill="#406080">SLOSH</text>
+
+  <!-- DECAY label -->
+  <text x="30.48" y="145" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#406080">DECAY</text>
+
+  <!-- CV Input labels -->
+  <text x="15.48" y="208" text-anchor="middle" font-family="Arial, sans-serif" font-size="3.5" fill="#305060">V/OCT</text>
+  <text x="45.48" y="208" text-anchor="middle" font-family="Arial, sans-serif" font-size="3.5" fill="#305060">BOW</text>
+  <text x="30.48" y="253" text-anchor="middle" font-family="Arial, sans-serif" font-size="3.5" fill="#305060">WATER</text>
+
+  <!-- OUT labels -->
+  <text x="15.48" y="308" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#406080">L</text>
+  <text x="45.48" y="308" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#406080">R</text>
+
+  <!-- Decorative: water ripples -->
+  <path d="M 10 285 Q 20 280, 30.48 285 Q 41 280, 51 285" fill="none" stroke="#203040" stroke-width="0.5"/>
+  <path d="M 12 290 Q 21 286, 30.48 290 Q 40 286, 49 290" fill="none" stroke="#203040" stroke-width="0.5"/>
+  <path d="M 14 295 Q 22 292, 30.48 295 Q 39 292, 47 295" fill="none" stroke="#203040" stroke-width="0.5"/>
+
+  <!-- Brand -->
+  <text x="30.48" y="365" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#304050">WiggleRoom</text>
+</svg>

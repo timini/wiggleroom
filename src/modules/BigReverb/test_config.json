@@ -1,0 +1,30 @@
+{
+  "module_type": "effect",
+  "description": "Stereo algorithmic reverb effect",
+  "quality_thresholds": {
+    "thd_max_percent": 15.0,
+    "clipping_max_percent": 1.0,
+    "hnr_min_db": 0.0,
+    "allow_hot_signal": false
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 3.0,
+      "description": "Default reverb settings"
+    },
+    {
+      "name": "long_decay",
+      "duration": 5.0,
+      "parameters": {
+        "decay": 0.95,
+        "size": 0.8
+      },
+      "description": "Long reverb tail"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": [],
+    "steps": 10
+  }
+}

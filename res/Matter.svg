@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="121.92" height="380" viewBox="0 0 121.92 380">
+  <!-- 8HP Panel -->
+  <rect width="121.92" height="380" fill="#1a1a2e"/>
+  <rect x="0.5" y="0.5" width="120.92" height="379" fill="none" stroke="#3d3d5c" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="60.96" y="30" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#e0e0e0">MATTER</text>
+
+  <!-- Section: THE OBJECT -->
+  <text x="60.96" y="48" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#606090">THE OBJECT</text>
+
+  <!-- STRUCT and POS labels -->
+  <text x="30.48" y="75" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">STRUCT</text>
+  <text x="91.44" y="75" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">POS</text>
+
+  <!-- HARD and DECAY labels -->
+  <text x="30.48" y="125" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">HARD</text>
+  <text x="91.44" y="125" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">DECAY</text>
+
+  <!-- Section: THE TUBE -->
+  <text x="60.96" y="150" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#606090">THE TUBE</text>
+
+  <!-- TUBE and MIX labels -->
+  <text x="30.48" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">SIZE</text>
+  <text x="91.44" y="180" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">MIX</text>
+
+  <!-- CV labels -->
+  <text x="20" y="228" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">STR</text>
+  <text x="60.96" y="228" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">POS</text>
+  <text x="102" y="228" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">HRD</text>
+
+  <!-- V/OCT and GATE labels -->
+  <text x="30.48" y="285" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">V/OCT</text>
+  <text x="91.44" y="285" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">GATE</text>
+
+  <!-- OUT labels -->
+  <text x="30.48" y="335" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">L</text>
+  <text x="91.44" y="335" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">R</text>
+
+  <!-- Faust indicator -->
+  <text x="60.96" y="355" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">FAUST DSP</text>
+
+  <!-- Brand -->
+  <text x="60.96" y="370" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">WiggleRoom</text>
+</svg>

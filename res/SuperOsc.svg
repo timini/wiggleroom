@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="45.72" height="380" viewBox="0 0 45.72 380">
+  <!-- 3HP Panel (1HP = 15.24mm = 5.08mm * 3) -->
+  <rect width="45.72" height="380" fill="#1a1a2e"/>
+
+  <!-- Panel border -->
+  <rect x="0.5" y="0.5" width="44.72" height="379" fill="none" stroke="#3d3d5c" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="22.86" y="30" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" font-weight="bold" fill="#e0e0e0">SUPER</text>
+  <text x="22.86" y="42" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" font-weight="bold" fill="#e0e0e0">OSC</text>
+
+  <!-- FREQ label -->
+  <text x="22.86" y="60" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#808080">FREQ</text>
+
+  <!-- FINE label -->
+  <text x="22.86" y="125" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#808080">FINE</text>
+
+  <!-- WAVE label -->
+  <text x="22.86" y="175" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#808080">WAVE</text>
+
+  <!-- V/OCT label -->
+  <text x="22.86" y="245" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#808080">V/OCT</text>
+
+  <!-- OUT label -->
+  <text x="22.86" y="305" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#808080">OUT</text>
+
+  <!-- Brand -->
+  <text x="22.86" y="365" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">WiggleRoom</text>
+</svg>

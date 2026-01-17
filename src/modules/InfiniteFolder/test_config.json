@@ -1,0 +1,30 @@
+{
+  "module_type": "filter",
+  "description": "Multi-stage wavefolder/saturator",
+  "quality_thresholds": {
+    "thd_max_percent": 50.0,
+    "clipping_max_percent": 15.0,
+    "hnr_min_db": 0.0,
+    "allow_hot_signal": true
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 2.0,
+      "description": "Default wavefolder settings"
+    },
+    {
+      "name": "extreme_fold",
+      "duration": 2.0,
+      "parameters": {
+        "folds": 0.9,
+        "drive": 0.8
+      },
+      "description": "Extreme wavefolding"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": [],
+    "steps": 10
+  }
+}

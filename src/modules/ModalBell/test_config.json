@@ -1,0 +1,29 @@
+{
+  "module_type": "instrument",
+  "description": "Modal synthesis bell/percussion voice",
+  "quality_thresholds": {
+    "thd_max_percent": 15.0,
+    "clipping_max_percent": 1.0,
+    "hnr_min_db": 10.0,
+    "allow_hot_signal": false
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 3.0,
+      "description": "Default bell settings with decay"
+    },
+    {
+      "name": "bright",
+      "duration": 3.0,
+      "parameters": {
+        "brightness": 0.8
+      },
+      "description": "Bright bell tone"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": ["gate", "trigger", "volts"],
+    "steps": 10
+  }
+}

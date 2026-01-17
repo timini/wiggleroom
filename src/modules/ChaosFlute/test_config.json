@@ -1,0 +1,39 @@
+{
+  "module_type": "instrument",
+  "description": "Chaotic flute physical model with breath noise and growl",
+  "quality_thresholds": {
+    "thd_max_percent": 25.0,
+    "clipping_max_percent": 5.0,
+    "hnr_min_db": 5.0,
+    "allow_hot_signal": true
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 2.0,
+      "description": "Default flute settings"
+    },
+    {
+      "name": "high_chaos",
+      "duration": 2.0,
+      "parameters": {
+        "pressure": 1.2,
+        "growl": 0.7
+      },
+      "description": "High chaos/growl settings"
+    },
+    {
+      "name": "pure_tone",
+      "duration": 2.0,
+      "parameters": {
+        "pressure": 0.5,
+        "growl": 0.0
+      },
+      "description": "Clean flute tone"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": ["attack", "release"],
+    "steps": 10
+  }
+}

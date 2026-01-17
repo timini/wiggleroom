@@ -1,0 +1,5 @@
+add_library(Cycloid_Module STATIC Cycloid.cpp)
+target_link_libraries(Cycloid_Module PRIVATE RackSDK)
+if(TARGET CommonLib)
+    target_link_libraries(Cycloid_Module PRIVATE CommonLib)
+endif()

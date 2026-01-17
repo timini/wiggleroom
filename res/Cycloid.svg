@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="182.88" height="380" viewBox="0 0 182.88 380">
+  <!-- 12HP Panel (1HP = 15.24px, 12HP = 182.88px) -->
+  <!-- Height: 380px (3U) -->
+
+  <!-- Main background -->
+  <rect width="182.88" height="380" fill="#1a1a2e"/>
+
+  <!-- Panel border -->
+  <rect x="1.5" y="1.5" width="179.88" height="377" fill="none" stroke="#3d3d5c" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="91.44" y="18" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#00ddff">CYCLOID</text>
+
+  <!-- Display area placeholder -->
+  <rect x="31.44" y="22" width="120" height="120" fill="#0f0f19" stroke="#404060" stroke-width="1" rx="4"/>
+
+  <!-- Row 1 labels: Speed, Divisions -->
+  <text x="28" y="152" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">SPEED</text>
+  <text x="154.88" y="152" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">DIV</text>
+
+  <!-- Row 2 labels: Hits, Offset -->
+  <text x="28" y="192" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#ff6496">HITS</text>
+  <text x="62" y="192" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#606070">CV</text>
+  <text x="154.88" y="192" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">OFF</text>
+
+  <!-- Row 3 labels: Ratio, Depth -->
+  <text x="28" y="232" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#00aaff">RATIO</text>
+  <text x="120.88" y="232" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#606070">CV</text>
+  <text x="154.88" y="232" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#00aaff">DEPTH</text>
+
+  <!-- Input labels -->
+  <text x="28" y="272" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#808090">CLK</text>
+  <text x="62" y="272" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#808090">RST</text>
+  <text x="120.88" y="272" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#808090">H.CV</text>
+  <text x="154.88" y="272" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" fill="#808090">D.CV</text>
+
+  <!-- Output labels -->
+  <text x="28" y="320" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">X</text>
+  <text x="91.44" y="320" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">TRIG</text>
+  <text x="154.88" y="320" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">Y</text>
+
+  <!-- Brand -->
+  <text x="91.44" y="370" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#505070">WiggleRoom</text>
+</svg>

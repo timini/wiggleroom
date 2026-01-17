@@ -1,0 +1,29 @@
+{
+  "module_type": "filter",
+  "description": "Moog-style ladder lowpass filter",
+  "quality_thresholds": {
+    "thd_max_percent": 10.0,
+    "clipping_max_percent": 1.0,
+    "hnr_min_db": 0.0,
+    "allow_hot_signal": false
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 2.0,
+      "description": "Default filter settings"
+    },
+    {
+      "name": "high_resonance",
+      "duration": 2.0,
+      "parameters": {
+        "resonance": 0.9
+      },
+      "description": "High resonance, near self-oscillation"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": [],
+    "steps": 10
+  }
+}

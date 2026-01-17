@@ -1,0 +1,29 @@
+{
+  "module_type": "instrument",
+  "description": "Bowed string physical model with space/ambient character",
+  "quality_thresholds": {
+    "thd_max_percent": 20.0,
+    "clipping_max_percent": 2.0,
+    "hnr_min_db": 5.0,
+    "allow_hot_signal": false
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 3.0,
+      "description": "Default bowed string"
+    },
+    {
+      "name": "high_bow_pressure",
+      "duration": 3.0,
+      "parameters": {
+        "bow_pressure": 0.8
+      },
+      "description": "Heavy bow pressure"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": ["gate", "volts"],
+    "steps": 10
+  }
+}

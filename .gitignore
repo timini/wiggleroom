@@ -1,0 +1,71 @@
+# Build directories
+build/
+cmake-build-*/
+
+# VCV Rack SDK (downloaded by CMake)
+Rack-SDK/
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Compiled objects
+*.o
+*.obj
+*.a
+*.lib
+*.dylib
+*.so
+*.dll
+
+# Faust generated files (these are rebuilt)
+**/faust_gen/
+
+# Test artifacts
+test/baselines/*.json
+*.wav
+*.png
+*.mp3
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+venv/
+.venv/
+env/
+
+# Environment and secrets
+.env
+.env.*
+*.key
+*.pem
+credentials.json
+*secret*
+
+# Package outputs
+dist/
+*.vcvplugin
+*.zip
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Local development notes
+notes.md
+TODO.local
+.claude/

@@ -1,0 +1,5 @@
+add_library(Intersect_Module STATIC Intersect.cpp)
+target_link_libraries(Intersect_Module PRIVATE RackSDK)
+if(TARGET CommonLib)
+    target_link_libraries(Intersect_Module PRIVATE CommonLib)
+endif()

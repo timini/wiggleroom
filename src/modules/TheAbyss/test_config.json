@@ -1,0 +1,29 @@
+{
+  "module_type": "instrument",
+  "description": "Deep atmospheric drone/pad synthesizer",
+  "quality_thresholds": {
+    "thd_max_percent": 20.0,
+    "clipping_max_percent": 2.0,
+    "hnr_min_db": 5.0,
+    "allow_hot_signal": false
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 3.0,
+      "description": "Default abyss drone"
+    },
+    {
+      "name": "deep_drone",
+      "duration": 4.0,
+      "parameters": {
+        "depth": 0.9
+      },
+      "description": "Deep atmospheric drone"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": ["gate", "volts"],
+    "steps": 10
+  }
+}

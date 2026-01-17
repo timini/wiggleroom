@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ChaosFlute - Parameter Sensitivity Analysis</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            margin: 0; padding: 20px;
+            background: #1a1a2e; color: #eee;
+        }
+        h1 { color: #fff; }
+        h2 { color: #a0a0ff; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        .summary {
+            background: #252540; padding: 20px; border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .param-card {
+            background: #252540; padding: 20px; border-radius: 10px;
+            margin-bottom: 15px;
+        }
+        .score {
+            font-size: 24px; font-weight: bold;
+            padding: 5px 15px; border-radius: 20px;
+            display: inline-block; margin-left: 10px;
+        }
+        .high { background: #4caf50; color: white; }
+        .medium { background: #ff9800; color: white; }
+        .low { background: #f44336; color: white; }
+        .feature-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px; margin-top: 15px;
+        }
+        .feature-item {
+            background: #1e1e35; padding: 10px; border-radius: 6px;
+        }
+        .feature-name { color: #888; font-size: 12px; }
+        .feature-value { color: #aaf; font-size: 16px; font-weight: bold; }
+        .bar {
+            height: 8px; background: #333; border-radius: 4px;
+            margin-top: 5px; overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%; background: linear-gradient(90deg, #4a4a8a, #7a7aff);
+            border-radius: 4px;
+        }
+        img { max-width: 100%; border-radius: 8px; margin: 10px 0; }
+        .skipped { color: #888; font-style: italic; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #333; }
+        th { color: #888; }
+    </style>
+</head>
+<body>
+    <h1>ChaosFlute - Parameter Sensitivity Analysis</h1>
+
+    <div class="summary">
+        <h2>Summary</h2>
+        <p><strong>Parameters analyzed:</strong> 6</p>
+        <p><strong>Parameters skipped:</strong> 2 (control signals)</p>
+        <img src="ChaosFlute_sensitivity.png" alt="Sensitivity Overview">
+    </div>
+
+    <h2>Parameter Details</h2>
+
+    <div class="param-card">
+        <h3>release
+            <span class="score high">1.365 - HIGH IMPACT</span>
+        </h3>
+        <p>Range: 0.01 to 5.00</p>
+
+        <div class="feature-grid">
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Mean</div>
+                <div class="feature-value">CV: 1.991</div>
+                <div style="font-size: 11px; color: #666;">r = -0.71</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Std</div>
+                <div class="feature-value">CV: 1.998</div>
+                <div style="font-size: 11px; color: #666;">r = -0.71</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Centroid</div>
+                <div class="feature-value">CV: 0.589</div>
+                <div style="font-size: 11px; color: #666;">r = +0.48</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Bandwidth</div>
+                <div class="feature-value">CV: 0.813</div>
+                <div style="font-size: 11px; color: #666;">r = +0.29</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Rolloff</div>
+                <div class="feature-value">CV: 0.518</div>
+                <div style="font-size: 11px; color: #666;">r = +0.73</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Zero Crossing Rate</div>
+                <div class="feature-value">CV: 1.362</div>
+                <div style="font-size: 11px; color: #666;">r = -0.70</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Flux</div>
+                <div class="feature-value">CV: 1.935</div>
+                <div style="font-size: 11px; color: #666;">r = -0.72</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+        </div>
+        <img src="ChaosFlute_release_sweep.png" alt="release sweep">
+    </div>
+
+    <div class="param-card">
+        <h3>pressure
+            <span class="score high">1.092 - HIGH IMPACT</span>
+        </h3>
+        <p>Range: 0.00 to 1.50</p>
+
+        <div class="feature-grid">
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Mean</div>
+                <div class="feature-value">CV: 1.027</div>
+                <div style="font-size: 11px; color: #666;">r = +0.95</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Std</div>
+                <div class="feature-value">CV: 0.958</div>
+                <div style="font-size: 11px; color: #666;">r = +0.95</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Centroid</div>
+                <div class="feature-value">CV: 1.165</div>
+                <div style="font-size: 11px; color: #666;">r = -0.86</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Bandwidth</div>
+                <div class="feature-value">CV: 1.114</div>
+                <div style="font-size: 11px; color: #666;">r = -0.86</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Rolloff</div>
+                <div class="feature-value">CV: 1.119</div>
+                <div style="font-size: 11px; color: #666;">r = -0.86</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Zero Crossing Rate</div>
+                <div class="feature-value">CV: 0.670</div>
+                <div style="font-size: 11px; color: #666;">r = -0.20</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Flux</div>
+                <div class="feature-value">CV: 1.357</div>
+                <div style="font-size: 11px; color: #666;">r = -0.61</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+        </div>
+        <img src="ChaosFlute_pressure_sweep.png" alt="pressure sweep">
+    </div>
+
+    <div class="param-card">
+        <h3>attack
+            <span class="score high">0.906 - HIGH IMPACT</span>
+        </h3>
+        <p>Range: 0.00 to 0.50</p>
+
+        <div class="feature-grid">
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Mean</div>
+                <div class="feature-value">CV: 1.495</div>
+                <div style="font-size: 11px; color: #666;">r = -0.81</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Std</div>
+                <div class="feature-value">CV: 1.577</div>
+                <div style="font-size: 11px; color: #666;">r = -0.79</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Centroid</div>
+                <div class="feature-value">CV: 0.538</div>
+                <div style="font-size: 11px; color: #666;">r = +0.89</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Bandwidth</div>
+                <div class="feature-value">CV: 0.531</div>
+                <div style="font-size: 11px; color: #666;">r = +0.87</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Rolloff</div>
+                <div class="feature-value">CV: 0.532</div>
+                <div style="font-size: 11px; color: #666;">r = +0.88</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Zero Crossing Rate</div>
+                <div class="feature-value">CV: 0.673</div>
+                <div style="font-size: 11px; color: #666;">r = +0.40</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Flux</div>
+                <div class="feature-value">CV: 0.622</div>
+                <div style="font-size: 11px; color: #666;">r = +0.98</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+        </div>
+        <img src="ChaosFlute_attack_sweep.png" alt="attack sweep">
+    </div>
+
+    <div class="param-card">
+        <h3>growl
+            <span class="score high">0.838 - HIGH IMPACT</span>
+        </h3>
+        <p>Range: 0.00 to 1.00</p>
+
+        <div class="feature-grid">
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Mean</div>
+                <div class="feature-value">CV: 0.785</div>
+                <div style="font-size: 11px; color: #666;">r = +0.99</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Std</div>
+                <div class="feature-value">CV: 0.943</div>
+                <div style="font-size: 11px; color: #666;">r = +0.97</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Centroid</div>
+                <div class="feature-value">CV: 0.665</div>
+                <div style="font-size: 11px; color: #666;">r = +0.35</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Bandwidth</div>
+                <div class="feature-value">CV: 1.589</div>
+                <div style="font-size: 11px; color: #666;">r = -0.69</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Rolloff</div>
+                <div class="feature-value">CV: 0.901</div>
+                <div style="font-size: 11px; color: #666;">r = -0.23</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Zero Crossing Rate</div>
+                <div class="feature-value">CV: 0.565</div>
+                <div style="font-size: 11px; color: #666;">r = +0.95</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Flux</div>
+                <div class="feature-value">CV: 0.502</div>
+                <div style="font-size: 11px; color: #666;">r = +0.76</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+        </div>
+        <img src="ChaosFlute_growl_sweep.png" alt="growl sweep">
+    </div>
+
+    <div class="param-card">
+        <h3>reverb
+            <span class="score high">0.828 - HIGH IMPACT</span>
+        </h3>
+        <p>Range: 0.00 to 1.00</p>
+
+        <div class="feature-grid">
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Mean</div>
+                <div class="feature-value">CV: 0.997</div>
+                <div style="font-size: 11px; color: #666;">r = +0.96</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Std</div>
+                <div class="feature-value">CV: 0.807</div>
+                <div style="font-size: 11px; color: #666;">r = -0.99</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Centroid</div>
+                <div class="feature-value">CV: 0.818</div>
+                <div style="font-size: 11px; color: #666;">r = -0.59</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Bandwidth</div>
+                <div class="feature-value">CV: 0.524</div>
+                <div style="font-size: 11px; color: #666;">r = +0.46</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Rolloff</div>
+                <div class="feature-value">CV: 0.913</div>
+                <div style="font-size: 11px; color: #666;">r = -0.44</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Zero Crossing Rate</div>
+                <div class="feature-value">CV: 1.000</div>
+                <div style="font-size: 11px; color: #666;">r = -0.38</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Flux</div>
+                <div class="feature-value">CV: 0.691</div>
+                <div style="font-size: 11px; color: #666;">r = +1.00</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+        </div>
+        <img src="ChaosFlute_reverb_sweep.png" alt="reverb sweep">
+    </div>
+
+    <div class="param-card">
+        <h3>mouth
+            <span class="score high">0.742 - HIGH IMPACT</span>
+        </h3>
+        <p>Range: 0.10 to 0.90</p>
+
+        <div class="feature-grid">
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Mean</div>
+                <div class="feature-value">CV: 0.717</div>
+                <div style="font-size: 11px; color: #666;">r = +1.00</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">RMS Std</div>
+                <div class="feature-value">CV: 0.715</div>
+                <div style="font-size: 11px; color: #666;">r = +1.00</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Centroid</div>
+                <div class="feature-value">CV: 0.742</div>
+                <div style="font-size: 11px; color: #666;">r = -1.00</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Bandwidth</div>
+                <div class="feature-value">CV: 0.826</div>
+                <div style="font-size: 11px; color: #666;">r = -0.19</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Rolloff</div>
+                <div class="feature-value">CV: 0.644</div>
+                <div style="font-size: 11px; color: #666;">r = -0.64</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Zero Crossing Rate</div>
+                <div class="feature-value">CV: 0.963</div>
+                <div style="font-size: 11px; color: #666;">r = +0.48</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+            <div class="feature-item">
+                <div class="feature-name">Spectral Flux</div>
+                <div class="feature-value">CV: 0.659</div>
+                <div style="font-size: 11px; color: #666;">r = -0.75</div>
+                <div class="bar"><div class="bar-fill" style="width: 100%"></div></div>
+            </div>
+
+        </div>
+        <img src="ChaosFlute_mouth_sweep.png" alt="mouth sweep">
+    </div>
+
+    <h2>Skipped Parameters</h2>
+    <ul class="skipped">
+        <li>gate: control parameter</li>
+        <li>volts: control parameter</li>
+    </ul>
+
+    <h2>Interpretation Guide</h2>
+    <table>
+        <tr><th>Metric</th><th>Meaning</th></tr>
+        <tr><td>Sensitivity Score</td><td>Overall measure of parameter impact (0-1). Higher = more effect on sound.</td></tr>
+        <tr><td>CV (Coefficient of Variation)</td><td>Relative spread of feature values. Higher = more variation.</td></tr>
+        <tr><td>Correlation (r)</td><td>Linear relationship with parameter. +1/-1 = strong, 0 = none.</td></tr>
+    </table>
+    <p style="margin-top: 20px; color: #888;">
+        <strong>LOW IMPACT</strong> (score &lt; 0.1): Parameter may not be working or has subtle effect.<br>
+        <strong>MEDIUM</strong> (0.1 - 0.3): Parameter has noticeable effect.<br>
+        <strong>HIGH IMPACT</strong> (score &gt; 0.3): Parameter significantly changes the sound.
+    </p>
+</body>
+</html>

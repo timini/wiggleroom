@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="60.96" height="380" viewBox="0 0 60.96 380">
+  <!-- 4HP Panel -->
+  <rect width="60.96" height="380" fill="#1a1a2e"/>
+  <rect x="0.5" y="0.5" width="59.96" height="379" fill="none" stroke="#3d3d5c" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="30.48" y="22" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#e0e0e0">BIG</text>
+  <text x="30.48" y="32" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#e0e0e0">REVERB</text>
+
+  <!-- DECAY LOW/HIGH labels (big knobs at top) -->
+  <text x="10" y="45" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">BASS</text>
+  <text x="51" y="45" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">TREBLE</text>
+
+  <!-- PREDELAY/DAMPING labels -->
+  <text x="10" y="100" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">PRE</text>
+  <text x="51" y="100" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">DAMP</text>
+
+  <!-- XOVER/MIX labels -->
+  <text x="10" y="150" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">XOVER</text>
+  <text x="51" y="150" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">MIX</text>
+
+  <!-- CV label -->
+  <text x="30.48" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">MIX CV</text>
+
+  <!-- IN labels -->
+  <text x="10" y="250" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">IN L</text>
+  <text x="51" y="250" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">IN R</text>
+
+  <!-- OUT labels -->
+  <text x="10" y="300" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">OUT L</text>
+  <text x="51" y="300" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">OUT R</text>
+
+  <!-- Algorithm indicator -->
+  <text x="30.48" y="350" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">ZITA REV1</text>
+
+  <!-- Brand -->
+  <text x="30.48" y="365" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">WiggleRoom</text>
+</svg>

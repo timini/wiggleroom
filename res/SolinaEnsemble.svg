@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="60.96" height="380" viewBox="0 0 60.96 380">
+  <!-- 4HP Panel (1HP = 15.24mm) -->
+  <rect width="60.96" height="380" fill="#1a1a2e"/>
+
+  <!-- Panel border -->
+  <rect x="0.5" y="0.5" width="59.96" height="379" fill="none" stroke="#3d3d5c" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="30.48" y="20" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" font-weight="bold" fill="#e0e0e0">SOLINA</text>
+  <text x="30.48" y="30" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" font-weight="bold" fill="#e0e0e0">ENSEMBLE</text>
+
+  <!-- DEPTH label -->
+  <text x="30.48" y="42" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#c09060">DEPTH</text>
+
+  <!-- RATE and TONE labels -->
+  <text x="12.48" y="98" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">RATE</text>
+  <text x="48.48" y="98" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">TONE</text>
+
+  <!-- MIX label -->
+  <text x="30.48" y="148" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">MIX</text>
+
+  <!-- CV label -->
+  <text x="30.48" y="188" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">CV</text>
+
+  <!-- IN labels -->
+  <text x="12.48" y="255" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">IN L</text>
+  <text x="48.48" y="255" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">IN R</text>
+
+  <!-- OUT labels -->
+  <text x="12.48" y="310" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">L</text>
+  <text x="48.48" y="310" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">R</text>
+
+  <!-- Faust indicator -->
+  <text x="30.48" y="350" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">FAUST DSP</text>
+
+  <!-- Brand -->
+  <text x="30.48" y="365" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">WiggleRoom</text>
+</svg>

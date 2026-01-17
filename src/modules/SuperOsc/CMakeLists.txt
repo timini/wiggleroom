@@ -1,0 +1,5 @@
+add_library(SuperOsc_Module STATIC SuperOsc.cpp)
+target_link_libraries(SuperOsc_Module PRIVATE RackSDK)
+if(TARGET CommonLib)
+    target_link_libraries(SuperOsc_Module PRIVATE CommonLib)
+endif()

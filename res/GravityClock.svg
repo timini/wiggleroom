@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="30.48" height="128.5" viewBox="0 0 30.48 128.5">
+  <!-- 6HP Panel -->
+  <rect width="30.48" height="128.5" fill="#2a2a2a"/>
+
+  <!-- Panel border -->
+  <rect x="0.5" y="0.5" width="29.48" height="127.5" fill="none" stroke="#444" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="15.24" y="12" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" font-weight="bold" fill="#e0e0e0">GRAVITY</text>
+  <text x="15.24" y="18" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" font-weight="bold" fill="#e0e0e0">CLOCK</text>
+
+  <!-- Ratio label -->
+  <text x="15.24" y="32" text-anchor="middle" font-family="Arial, sans-serif" font-size="3" fill="#aaa">RATIO</text>
+
+  <!-- Elasticity label -->
+  <text x="15.24" y="56" text-anchor="middle" font-family="Arial, sans-serif" font-size="3" fill="#aaa">ELASTIC</text>
+
+  <!-- Lock indicator label -->
+  <text x="15.24" y="68" text-anchor="middle" font-family="Arial, sans-serif" font-size="2.5" fill="#666">LOCK</text>
+
+  <!-- Input section -->
+  <text x="15.24" y="80" text-anchor="middle" font-family="Arial, sans-serif" font-size="3" fill="#aaa">INPUT</text>
+  <text x="7.62" y="87" text-anchor="middle" font-family="Arial, sans-serif" font-size="2.5" fill="#666">CLK</text>
+  <text x="22.86" y="87" text-anchor="middle" font-family="Arial, sans-serif" font-size="2.5" fill="#666">CV</text>
+
+  <!-- Output section -->
+  <text x="15.24" y="104" text-anchor="middle" font-family="Arial, sans-serif" font-size="3" fill="#aaa">OUTPUT</text>
+  <text x="7.62" y="111" text-anchor="middle" font-family="Arial, sans-serif" font-size="2.5" fill="#666">LFO</text>
+  <text x="22.86" y="111" text-anchor="middle" font-family="Arial, sans-serif" font-size="2.5" fill="#666">TRIG</text>
+
+  <!-- Decorative lines -->
+  <g stroke="#333" stroke-width="0.3" fill="none">
+    <line x1="3" y1="24" x2="27.48" y2="24"/>
+    <line x1="3" y1="73" x2="27.48" y2="73"/>
+    <line x1="3" y1="97" x2="27.48" y2="97"/>
+  </g>
+
+  <!-- Bouncing ball icon -->
+  <circle cx="15.24" cy="122" r="2" fill="#555" stroke="#777" stroke-width="0.5"/>
+  <line x1="5" y1="125" x2="25.48" y2="125" stroke="#555" stroke-width="0.5"/>
+</svg>

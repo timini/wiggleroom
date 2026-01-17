@@ -1,0 +1,30 @@
+{
+  "module_type": "effect",
+  "description": "Saturating delay/echo effect with feedback",
+  "quality_thresholds": {
+    "thd_max_percent": 20.0,
+    "clipping_max_percent": 5.0,
+    "hnr_min_db": 0.0,
+    "allow_hot_signal": true
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 3.0,
+      "description": "Default echo settings"
+    },
+    {
+      "name": "high_feedback",
+      "duration": 4.0,
+      "parameters": {
+        "feedback": 0.85,
+        "saturation": 0.7
+      },
+      "description": "High feedback with saturation"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": [],
+    "steps": 10
+  }
+}

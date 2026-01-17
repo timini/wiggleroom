@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="60.96" height="380" viewBox="0 0 60.96 380">
+  <!-- 4HP Panel -->
+  <rect width="60.96" height="380" fill="#1a1a2e"/>
+  <rect x="0.5" y="0.5" width="59.96" height="379" fill="none" stroke="#3d3d5c" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="30.48" y="22" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#e0e0e0">SATURATION</text>
+  <text x="30.48" y="32" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#e0e0e0">ECHO</text>
+
+  <!-- TIME label -->
+  <text x="30.48" y="45" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">TIME</text>
+
+  <!-- FDBK/TONE labels -->
+  <text x="13" y="92" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">FDBK</text>
+  <text x="48" y="92" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">TONE</text>
+
+  <!-- DRIVE/WOBBLE labels -->
+  <text x="13" y="137" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">DRIVE</text>
+  <text x="48" y="137" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">WOBBLE</text>
+
+  <!-- MIX label -->
+  <text x="30.48" y="182" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">MIX</text>
+
+  <!-- CV labels -->
+  <text x="13" y="222" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">TIME</text>
+  <text x="48" y="222" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">FDBK</text>
+
+  <!-- IN labels -->
+  <text x="13" y="272" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">IN L</text>
+  <text x="48" y="272" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">IN R</text>
+
+  <!-- OUT labels -->
+  <text x="13" y="322" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">OUT L</text>
+  <text x="48" y="322" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">OUT R</text>
+
+  <!-- Faust indicator -->
+  <text x="30.48" y="355" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">FAUST DSP</text>
+
+  <!-- Brand -->
+  <text x="30.48" y="368" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">WiggleRoom</text>
+</svg>

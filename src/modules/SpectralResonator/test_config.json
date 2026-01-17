@@ -1,0 +1,29 @@
+{
+  "module_type": "resonator",
+  "description": "Spectral resonator bank excited by audio input",
+  "quality_thresholds": {
+    "thd_max_percent": 15.0,
+    "clipping_max_percent": 1.0,
+    "hnr_min_db": 10.0,
+    "allow_hot_signal": false
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 3.0,
+      "description": "Default resonator settings"
+    },
+    {
+      "name": "high_decay",
+      "duration": 5.0,
+      "parameters": {
+        "decay": 0.95
+      },
+      "description": "Long resonator decay"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": [],
+    "steps": 10
+  }
+}

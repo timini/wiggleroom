@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="91.44" height="380" viewBox="0 0 91.44 380">
+  <!-- 6HP Panel (1HP = 15.24mm) -->
+  <rect width="91.44" height="380" fill="#1a1a2e"/>
+
+  <!-- Panel border -->
+  <rect x="0.5" y="0.5" width="90.44" height="379" fill="none" stroke="#3d3d5c" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="45.72" y="20" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" font-weight="bold" fill="#e0e0e0">PLUCKED STRING</text>
+
+  <!-- DAMP and STR labels (top row big knobs) -->
+  <text x="25" y="38" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">DAMP</text>
+  <text x="66.44" y="38" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">STR</text>
+
+  <!-- POS and BRIGHT labels -->
+  <text x="25" y="90" text-anchor="middle" font-family="Arial, sans-serif" font-size="4.5" fill="#808080">POS</text>
+  <text x="66.44" y="90" text-anchor="middle" font-family="Arial, sans-serif" font-size="4.5" fill="#808080">BRIGHT</text>
+
+  <!-- CHORUS and REVERB labels -->
+  <text x="25" y="133" text-anchor="middle" font-family="Arial, sans-serif" font-size="4.5" fill="#808080">CHORUS</text>
+  <text x="66.44" y="133" text-anchor="middle" font-family="Arial, sans-serif" font-size="4.5" fill="#808080">REVERB</text>
+
+  <!-- CV section label -->
+  <text x="45.72" y="170" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#606080">- CV -</text>
+
+  <!-- CV labels row 1 -->
+  <text x="25" y="185" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">DAMP</text>
+  <text x="66.44" y="185" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">STR</text>
+
+  <!-- CV labels row 2 -->
+  <text x="25" y="220" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">POS</text>
+  <text x="66.44" y="220" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">BRIGHT</text>
+
+  <!-- V/OCT and GATE labels -->
+  <text x="25" y="260" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">V/OCT</text>
+  <text x="66.44" y="260" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">GATE</text>
+
+  <!-- OUT labels -->
+  <text x="25" y="305" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">L</text>
+  <text x="66.44" y="305" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">R</text>
+
+  <!-- Faust indicator -->
+  <text x="45.72" y="350" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">FAUST DSP</text>
+
+  <!-- Brand -->
+  <text x="45.72" y="365" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">WiggleRoom</text>
+</svg>

@@ -1,0 +1,130 @@
+name: Test Faust Modules
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**/*.dsp'
+      - 'src/**/*.cpp'
+      - 'src/**/*.hpp'
+      - 'test/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/test.yml'
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            build-essential \
+            libsndfile1-dev \
+            python3 \
+            python3-pip \
+            python3-venv
+
+      - name: Install Faust
+        run: |
+          # Install Faust from GitHub releases
+          FAUST_VERSION="2.72.14"
+          wget -q "https://github.com/grame-cncm/faust/releases/download/${FAUST_VERSION}/faust-${FAUST_VERSION}-linux-x86_64.tar.gz"
+          tar xzf "faust-${FAUST_VERSION}-linux-x86_64.tar.gz"
+          sudo mv faust-*/bin/* /usr/local/bin/
+          sudo mv faust-*/share/faust /usr/local/share/
+          faust --version
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy librosa matplotlib
+
+      - name: Configure and Build
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Run Faust compilation tests
+        run: |
+          echo "Testing Faust DSP files..."
+          for dsp in $(find src/modules -name "*.dsp"); do
+            echo "  $dsp"
+            faust "$dsp" -o /dev/null
+          done
+
+      - name: Run module tests
+        run: |
+          python3 test/test_framework.py --ci --output test/results.json
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: test/results.json
+
+      - name: Check test results
+        if: always()
+        run: |
+          if [ -f test/results.json ]; then
+            python3 -c "
+          import json
+          with open('test/results.json') as f:
+              results = json.load(f)
+          summary = results['summary']
+          print(f\"Tests: {summary['passed']}/{summary['total']} passed\")
+          if summary['failed'] > 0:
+              print('Failed modules:')
+              for m in results['modules']:
+                  if not m['passed']:
+                      print(f\"  - {m['name']}\")
+                      for t in m['tests']:
+                          if not t['passed']:
+                              print(f\"      {t['name']}: {t['message']}\")
+              exit(1)
+          "
+          fi
+
+  # Optional: Run sensitivity analysis on PRs
+  sensitivity:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libsndfile1-dev python3-pip
+          # Install Faust
+          FAUST_VERSION="2.72.14"
+          wget -q "https://github.com/grame-cncm/faust/releases/download/${FAUST_VERSION}/faust-${FAUST_VERSION}-linux-x86_64.tar.gz"
+          tar xzf "faust-${FAUST_VERSION}-linux-x86_64.tar.gz"
+          sudo mv faust-*/bin/* /usr/local/bin/
+          sudo mv faust-*/share/faust /usr/local/share/
+          pip install numpy scipy librosa matplotlib
+
+      - name: Build
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Run sensitivity analysis
+        run: |
+          python3 test/analyze_sensitivity.py --output test/sensitivity
+
+      - name: Upload sensitivity report
+        uses: actions/upload-artifact@v4
+        with:
+          name: sensitivity-report
+          path: test/sensitivity/

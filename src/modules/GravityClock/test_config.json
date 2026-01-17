@@ -1,0 +1,6 @@
+{
+  "module_type": "utility",
+  "skip_audio_tests": true,
+  "skip_reason": "Clock/trigger generator - no audio output",
+  "description": "Gravity-based clock generator with variable timing"
+}
