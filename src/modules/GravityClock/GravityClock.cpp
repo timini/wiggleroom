@@ -13,6 +13,7 @@
  ******************************************************************************/
 
 #include "rack.hpp"
+#include "ImagePanel.hpp"
 
 using namespace rack;
 
@@ -167,7 +168,9 @@ struct GravityClock : Module {
 struct GravityClockWidget : ModuleWidget {
     GravityClockWidget(GravityClock* module) {
         setModule(module);
-        setPanel(createPanel(asset::plugin(pluginInstance, "res/GravityClock.svg")));
+        box.size = Vec(2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        addChild(new WiggleRoom::ImagePanel(
+            asset::plugin(pluginInstance, "res/GravityClock.png"), box.size));
 
         // Screws
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));

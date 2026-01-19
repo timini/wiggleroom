@@ -15,6 +15,7 @@
  ******************************************************************************/
 
 #include "rack.hpp"
+#include "ImagePanel.hpp"
 #include <cmath>
 #include <vector>
 #include <string>
@@ -264,7 +265,9 @@ struct TheArchitect : Module {
 struct TheArchitectWidget : ModuleWidget {
     TheArchitectWidget(TheArchitect* module) {
         setModule(module);
-        setPanel(createPanel(asset::plugin(pluginInstance, "res/TheArchitect.svg")));
+        box.size = Vec(5 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        addChild(new WiggleRoom::ImagePanel(
+            asset::plugin(pluginInstance, "res/TheArchitect.png"), box.size));
 
         // Screws
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));

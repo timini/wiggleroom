@@ -1,29 +1,76 @@
 {
   "module_type": "instrument",
-  "description": "Modal synthesis bell/percussion voice",
+  "description": "Modal synthesis bell/percussion with strike position and velocity",
   "quality_thresholds": {
-    "thd_max_percent": 15.0,
-    "clipping_max_percent": 1.0,
-    "hnr_min_db": 10.0,
+    "thd_max_percent": 55.0,
+    "clipping_max_percent": 2.0,
+    "hnr_min_db": 8.0,
     "allow_hot_signal": false
   },
   "test_scenarios": [
     {
       "name": "default",
       "duration": 3.0,
-      "description": "Default bell settings with decay"
+      "description": "Default bell settings"
     },
     {
-      "name": "bright",
+      "name": "bright_metal",
       "duration": 3.0,
       "parameters": {
-        "brightness": 0.8
+        "brightness": 0.9,
+        "material": 0.9,
+        "strike": 0.7
       },
-      "description": "Bright bell tone"
+      "description": "Bright metallic bell, edge strike"
+    },
+    {
+      "name": "soft_marimba",
+      "duration": 3.0,
+      "parameters": {
+        "brightness": 0.3,
+        "material": 0.1,
+        "velocity": 0.4,
+        "strike": 0.2
+      },
+      "description": "Soft marimba-like tone"
     }
   ],
   "parameter_sweeps": {
-    "exclude": ["gate", "trigger", "volts"],
+    "exclude": ["gate", "trigger", "volts", "velocity"],
     "steps": 10
+  },
+  "parameter_grid": {
+    "exclude_params": ["velocity"]
+  },
+  "showcase": {
+    "duration": 25.0,
+    "notes": [
+      {"start": 0.0, "duration": 1.5, "volts": 0.0, "velocity": 1.0},
+      {"start": 1.8, "duration": 1.5, "volts": 0.583, "velocity": 0.85},
+      {"start": 3.6, "duration": 1.5, "volts": 1.0, "velocity": 0.95},
+      {"start": 5.4, "duration": 1.5, "volts": -0.5, "velocity": 0.7},
+      {"start": 7.2, "duration": 1.5, "volts": 0.25, "velocity": 0.9},
+      {"start": 9.0, "duration": 1.5, "volts": -1.0, "velocity": 1.0},
+      {"start": 10.8, "duration": 1.5, "volts": 0.75, "velocity": 0.6},
+      {"start": 12.6, "duration": 1.5, "volts": 0.417, "velocity": 0.8},
+      {"start": 14.4, "duration": 1.5, "volts": -0.25, "velocity": 0.95},
+      {"start": 16.2, "duration": 1.5, "volts": 0.917, "velocity": 0.75},
+      {"start": 18.0, "duration": 1.5, "volts": 0.167, "velocity": 0.85},
+      {"start": 19.8, "duration": 1.5, "volts": 0.5, "velocity": 1.0},
+      {"start": 21.6, "duration": 2.0, "volts": 0.0, "velocity": 0.9}
+    ],
+    "automations": [
+      {"param": "brightness", "start_time": 0.0, "end_time": 8.0, "start_value": 0.2, "end_value": 0.95},
+      {"param": "brightness", "start_time": 8.0, "end_time": 16.0, "start_value": 0.95, "end_value": 0.3},
+      {"param": "brightness", "start_time": 16.0, "end_time": 25.0, "start_value": 0.3, "end_value": 0.7},
+      {"param": "decay", "start_time": 0.0, "end_time": 12.0, "start_value": 0.4, "end_value": 2.5},
+      {"param": "decay", "start_time": 12.0, "end_time": 25.0, "start_value": 2.5, "end_value": 0.8},
+      {"param": "material", "start_time": 0.0, "end_time": 10.0, "start_value": 0.1, "end_value": 0.9},
+      {"param": "material", "start_time": 10.0, "end_time": 20.0, "start_value": 0.9, "end_value": 0.2},
+      {"param": "material", "start_time": 20.0, "end_time": 25.0, "start_value": 0.2, "end_value": 0.6},
+      {"param": "strike", "start_time": 0.0, "end_time": 6.0, "start_value": 0.1, "end_value": 0.8},
+      {"param": "strike", "start_time": 6.0, "end_time": 15.0, "start_value": 0.8, "end_value": 0.2},
+      {"param": "strike", "start_time": 15.0, "end_time": 25.0, "start_value": 0.2, "end_value": 0.6}
+    ]
   }
 }

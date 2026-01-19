@@ -28,7 +28,8 @@ growl = hslider("growl", 0, 0, 1, 0.01) : si.smoo;
 mouth = hslider("mouth", 0.35, 0.1, 0.9, 0.01) : si.smoo;
 
 // Pressure: How hard you blow. > 0.8 overblows, > 1.0 screams
-pressure = hslider("pressure", 0.6, 0, 1.5, 0.01) : si.smoo;
+// Min 0.45 ensures flute always produces clear tone (below that it's noisy/weak)
+pressure = hslider("pressure", 0.6, 0.45, 1.5, 0.01) : si.smoo;
 
 // Breath Envelope - Release time
 release = hslider("release", 0.5, 0.01, 5.0, 0.01) : si.smoo;

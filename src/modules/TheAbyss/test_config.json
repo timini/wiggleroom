@@ -25,5 +25,23 @@
   "parameter_sweeps": {
     "exclude": ["gate", "volts"],
     "steps": 10
+  },
+  "showcase": {
+    "duration": 24.0,
+    "notes": [
+      {"start": 0.0, "duration": 3.5, "volts": -1.0, "velocity": 1.0},
+      {"start": 4.0, "duration": 3.5, "volts": -0.5, "velocity": 0.9},
+      {"start": 8.0, "duration": 3.5, "volts": 0.0, "velocity": 0.85},
+      {"start": 12.0, "duration": 3.5, "volts": 0.5, "velocity": 0.9},
+      {"start": 16.0, "duration": 3.5, "volts": -0.25, "velocity": 0.8},
+      {"start": 20.0, "duration": 3.5, "volts": 0.25, "velocity": 0.95}
+    ],
+    "automations": [
+      {"param": "depth", "start_time": 0.0, "end_time": 12.0, "start_value": 0.2, "end_value": 0.98},
+      {"param": "depth", "start_time": 12.0, "end_time": 24.0, "start_value": 0.98, "end_value": 0.3},
+      {"param": "decay", "start_time": 0.0, "end_time": 8.0, "start_value": 0.4, "end_value": 0.95},
+      {"param": "decay", "start_time": 8.0, "end_time": 16.0, "start_value": 0.95, "end_value": 0.3},
+      {"param": "decay", "start_time": 16.0, "end_time": 24.0, "start_value": 0.3, "end_value": 0.7}
+    ]
   }
 }

@@ -15,6 +15,7 @@
  ******************************************************************************/
 
 #include "rack.hpp"
+#include "ImagePanel.hpp"
 #include <cmath>
 #include <vector>
 #include <string>
@@ -384,7 +385,9 @@ struct MiniScopeWidget : Widget {
 struct OctoLFOWidget : ModuleWidget {
     OctoLFOWidget(OctoLFO* module) {
         setModule(module);
-        setPanel(createPanel(asset::plugin(pluginInstance, "res/OctoLFO.svg")));
+        box.size = Vec(7 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        addChild(new WiggleRoom::ImagePanel(
+            asset::plugin(pluginInstance, "res/OctoLFO.png"), box.size));
 
         // Screws
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));

@@ -6,6 +6,7 @@
 
 #include "rack.hpp"
 #include "DSP.hpp"
+#include "ImagePanel.hpp"
 #include <atomic>
 #include <array>
 
@@ -416,7 +417,9 @@ struct IntersectDisplay : LightWidget {
 struct IntersectWidget : ModuleWidget {
     IntersectWidget(Intersect* module) {
         setModule(module);
-        setPanel(createPanel(asset::plugin(pluginInstance, "res/Intersect.svg")));
+        box.size = Vec(8 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        addChild(new WiggleRoom::ImagePanel(
+            asset::plugin(pluginInstance, "res/Intersect.png"), box.size));
 
         // Screws
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));

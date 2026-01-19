@@ -5,6 +5,7 @@
 
 #include "rack.hpp"
 #include "DSP.hpp"
+#include "ImagePanel.hpp"
 
 using namespace rack;
 
@@ -91,7 +92,9 @@ struct SuperOsc : Module {
 struct SuperOscWidget : ModuleWidget {
     SuperOscWidget(SuperOsc* module) {
         setModule(module);
-        setPanel(createPanel(asset::plugin(pluginInstance, "res/SuperOsc.svg")));
+        box.size = Vec(3 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        addChild(new WiggleRoom::ImagePanel(
+            asset::plugin(pluginInstance, "res/SuperOsc.png"), box.size));
 
         // Screws
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));

@@ -26,5 +26,18 @@
   "parameter_sweeps": {
     "exclude": [],
     "steps": 10
+  },
+  "showcase": {
+    "duration": 20.0,
+    "notes": [],
+    "automations": [
+      {"param": "decay", "start_time": 0.0, "end_time": 5.0, "start_value": 0.2, "end_value": 0.95},
+      {"param": "decay", "start_time": 5.0, "end_time": 10.0, "start_value": 0.95, "end_value": 0.4},
+      {"param": "decay", "start_time": 10.0, "end_time": 15.0, "start_value": 0.4, "end_value": 0.85},
+      {"param": "decay", "start_time": 15.0, "end_time": 20.0, "start_value": 0.85, "end_value": 0.5},
+      {"param": "size", "start_time": 0.0, "end_time": 7.0, "start_value": 0.2, "end_value": 0.95},
+      {"param": "size", "start_time": 7.0, "end_time": 14.0, "start_value": 0.95, "end_value": 0.3},
+      {"param": "size", "start_time": 14.0, "end_time": 20.0, "start_value": 0.3, "end_value": 0.7}
+    ]
   }
 }

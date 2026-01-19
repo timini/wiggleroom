@@ -14,6 +14,8 @@
  * Built with Faust DSP
  ******************************************************************************/
 
+#include "ImagePanel.hpp"
+
 #include "rack.hpp"
 #include "FaustModule.hpp"
 #define FAUST_MODULE_NAME TheCauldron
@@ -261,7 +263,9 @@ struct CauldronScopeWidget : Widget {
 struct TheCauldronWidget : ModuleWidget {
     TheCauldronWidget(TheCauldron* module) {
         setModule(module);
-        setPanel(createPanel(asset::plugin(pluginInstance, "res/TheCauldron.svg")));
+        box.size = Vec(3 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        addChild(new WiggleRoom::ImagePanel(
+            asset::plugin(pluginInstance, "res/TheCauldron.png"), box.size));
 
         // Screws
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));

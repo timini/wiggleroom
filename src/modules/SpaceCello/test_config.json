@@ -25,5 +25,25 @@
   "parameter_sweeps": {
     "exclude": ["gate", "volts"],
     "steps": 10
+  },
+  "showcase": {
+    "duration": 24.0,
+    "notes": [
+      {"start": 0.0, "duration": 2.5, "volts": -1.0, "velocity": 1.0},
+      {"start": 3.0, "duration": 2.5, "volts": -0.5, "velocity": 0.9},
+      {"start": 6.0, "duration": 2.5, "volts": 0.0, "velocity": 0.85},
+      {"start": 9.0, "duration": 2.5, "volts": 0.583, "velocity": 0.9},
+      {"start": 12.0, "duration": 2.5, "volts": 0.25, "velocity": 0.8},
+      {"start": 15.0, "duration": 2.5, "volts": -0.25, "velocity": 0.95},
+      {"start": 18.0, "duration": 2.5, "volts": 0.417, "velocity": 0.85},
+      {"start": 21.0, "duration": 2.5, "volts": 0.0, "velocity": 1.0}
+    ],
+    "automations": [
+      {"param": "bow_pressure", "start_time": 0.0, "end_time": 12.0, "start_value": 0.2, "end_value": 0.9},
+      {"param": "bow_pressure", "start_time": 12.0, "end_time": 24.0, "start_value": 0.9, "end_value": 0.3},
+      {"param": "bow_position", "start_time": 0.0, "end_time": 8.0, "start_value": 0.3, "end_value": 0.8},
+      {"param": "bow_position", "start_time": 8.0, "end_time": 16.0, "start_value": 0.8, "end_value": 0.2},
+      {"param": "bow_position", "start_time": 16.0, "end_time": 24.0, "start_value": 0.2, "end_value": 0.5}
+    ]
   }
 }

@@ -35,5 +35,27 @@
   "parameter_sweeps": {
     "exclude": ["attack", "release"],
     "steps": 10
+  },
+  "showcase": {
+    "duration": 20.0,
+    "notes": [
+      {"start": 0.0, "duration": 1.5, "volts": -1.0, "velocity": 1.0},
+      {"start": 2.0, "duration": 1.5, "volts": -0.5, "velocity": 0.9},
+      {"start": 4.0, "duration": 1.5, "volts": 0.0, "velocity": 0.85},
+      {"start": 6.0, "duration": 1.5, "volts": 0.5, "velocity": 0.8},
+      {"start": 8.0, "duration": 1.5, "volts": 1.0, "velocity": 0.9},
+      {"start": 10.0, "duration": 1.5, "volts": 0.583, "velocity": 1.0},
+      {"start": 12.0, "duration": 1.5, "volts": 0.25, "velocity": 0.7},
+      {"start": 14.0, "duration": 1.5, "volts": -0.25, "velocity": 0.95},
+      {"start": 16.0, "duration": 1.5, "volts": 0.75, "velocity": 0.85},
+      {"start": 18.0, "duration": 1.5, "volts": 0.0, "velocity": 1.0}
+    ],
+    "automations": [
+      {"param": "pressure", "start_time": 0.0, "end_time": 10.0, "start_value": 0.3, "end_value": 0.95},
+      {"param": "pressure", "start_time": 10.0, "end_time": 20.0, "start_value": 0.95, "end_value": 0.4},
+      {"param": "growl", "start_time": 0.0, "end_time": 7.0, "start_value": 0.0, "end_value": 0.8},
+      {"param": "growl", "start_time": 7.0, "end_time": 14.0, "start_value": 0.8, "end_value": 0.0},
+      {"param": "growl", "start_time": 14.0, "end_time": 20.0, "start_value": 0.0, "end_value": 0.5}
+    ]
   }
 }

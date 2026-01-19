@@ -28,8 +28,12 @@ Rack-SDK/
 # Test artifacts
 test/baselines/*.json
 *.wav
-*.png
 *.mp3
+test/**/*.png
+
+# Allow faceplate images
+!res/*.png
+!res/faceplate_archive/*.png
 
 # Python
 __pycache__/

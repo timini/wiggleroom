@@ -6,6 +6,7 @@
 
 #include "rack.hpp"
 #include "DSP.hpp"
+#include "ImagePanel.hpp"
 #include <atomic>
 #include <cmath>
 #include <array>
@@ -517,7 +518,9 @@ struct CycloidDisplay : LightWidget {
 struct CycloidWidget : ModuleWidget {
     CycloidWidget(Cycloid* module) {
         setModule(module);
-        setPanel(createPanel(asset::plugin(pluginInstance, "res/Cycloid.svg")));
+        box.size = Vec(12 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        addChild(new WiggleRoom::ImagePanel(
+            asset::plugin(pluginInstance, "res/Cycloid.png"), box.size));
 
         // Screws
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));
