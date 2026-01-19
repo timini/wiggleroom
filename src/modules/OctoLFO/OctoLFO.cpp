@@ -385,7 +385,7 @@ struct MiniScopeWidget : Widget {
 struct OctoLFOWidget : ModuleWidget {
     OctoLFOWidget(OctoLFO* module) {
         setModule(module);
-        box.size = Vec(7 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        box.size = Vec(20 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
         addChild(new WiggleRoom::ImagePanel(
             asset::plugin(pluginInstance, "res/OctoLFO.png"), box.size));
 

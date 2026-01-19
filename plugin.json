@@ -14,15 +14,6 @@
   "changelogUrl": "https://github.com/YOUR_USERNAME/WiggleRoom/releases",
   "modules": [
     {
-      "slug": "SuperOsc",
-      "name": "Super Oscillator",
-      "description": "Simple sine/saw oscillator with V/Oct tracking",
-      "tags": [
-        "Oscillator",
-        "VCO"
-      ]
-    },
-    {
       "slug": "Intersect",
       "name": "Intersect",
       "description": "Rhythmic trigger generator using discrete gradient analysis - generates Euclidean and Euclidean-adjacent rhythms from CV signals",
@@ -168,16 +159,6 @@
         "LFO",
         "Clock modulator",
         "Envelope generator"
-      ]
-    },
-    {
-      "slug": "Linkage",
-      "name": "Linkage",
-      "description": "Chaotic percussion generator - 3-mass spring chain physical model for rattling, metallic, and delayed rhythms",
-      "tags": [
-        "Physical modeling",
-        "Instrument",
-        "Drum"
       ]
     },
     {

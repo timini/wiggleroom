@@ -1,6 +1,0 @@
-{
-  "module_type": "utility",
-  "skip_audio_tests": true,
-  "skip_reason": "Super oscillator/LFO hybrid - requires different test approach",
-  "description": "Multi-waveform oscillator with audio and LFO rate modes"
-}

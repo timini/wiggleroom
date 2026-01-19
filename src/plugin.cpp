@@ -6,7 +6,6 @@ using namespace rack;
 Plugin* pluginInstance;
 
 // Declare models from modules
-extern Model* modelSuperOsc;
 extern Model* modelIntersect;
 extern Model* modelCycloid;
 extern Model* modelGravityClock;
@@ -48,9 +47,6 @@ extern Model* modelTheAbyss;
 #ifdef HAS_MATTER
 extern Model* modelMatter;
 #endif
-#ifdef HAS_LINKAGE
-extern Model* modelLinkage;
-#endif
 #ifdef HAS_THECAULDRON
 extern Model* modelTheCauldron;
 #endif
@@ -59,7 +55,6 @@ void init(Plugin* p) {
     pluginInstance = p;
 
     // Register all modules
-    p->addModel(modelSuperOsc);
     p->addModel(modelIntersect);
     p->addModel(modelCycloid);
     p->addModel(modelGravityClock);
@@ -100,9 +95,6 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_MATTER
     p->addModel(modelMatter);
-#endif
-#ifdef HAS_LINKAGE
-    p->addModel(modelLinkage);
 #endif
 #ifdef HAS_THECAULDRON
     p->addModel(modelTheCauldron);
