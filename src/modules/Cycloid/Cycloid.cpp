@@ -317,10 +317,10 @@ struct CycloidDisplay : LightWidget {
         float cy = box.size.y / 2.0f;
         float radius = std::min(cx, cy) - 8.0f;
 
-        // Background circle
+        // Background circle (translucent)
         nvgBeginPath(args.vg);
         nvgCircle(args.vg, cx, cy, radius + 4.0f);
-        nvgFillColor(args.vg, nvgRGB(15, 15, 25));
+        nvgFillColor(args.vg, nvgRGBA(15, 15, 25, 180));
         nvgFill(args.vg);
 
         if (!module) {
@@ -536,7 +536,7 @@ struct CycloidWidget : ModuleWidget {
         float xRight = box.size.x - 28.f;
 
         // Display - centered at top
-        CycloidDisplay* display = createWidget<CycloidDisplay>(Vec(xCenter - 60.f, 22.f));
+        CycloidDisplay* display = createWidget<CycloidDisplay>(Vec(xCenter - 60.f, 58.f));
         display->module = module;
         addChild(display);
 

@@ -13,7 +13,7 @@
   <text x="91.44" y="18" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#00ddff">CYCLOID</text>
 
   <!-- Display area placeholder -->
-  <rect x="31.44" y="22" width="120" height="120" fill="#0f0f19" stroke="#404060" stroke-width="1" rx="4"/>
+  <rect x="31.44" y="50" width="120" height="120" fill="#0f0f19" stroke="#404060" stroke-width="1" rx="4"/>
 
   <!-- Row 1 labels: Speed, Divisions -->
   <text x="28" y="152" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" fill="#808090">SPEED</text>
