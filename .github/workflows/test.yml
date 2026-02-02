@@ -34,12 +34,7 @@ jobs:
 
       - name: Install Faust
         run: |
-          # Install Faust from GitHub releases
-          FAUST_VERSION="2.72.14"
-          wget -q "https://github.com/grame-cncm/faust/releases/download/${FAUST_VERSION}/faust-${FAUST_VERSION}-linux-x86_64.tar.gz"
-          tar xzf "faust-${FAUST_VERSION}-linux-x86_64.tar.gz"
-          sudo mv faust-*/bin/* /usr/local/bin/
-          sudo mv faust-*/share/faust /usr/local/share/
+          sudo apt-get install -y faust
           faust --version
 
       - name: Install Python dependencies
@@ -106,12 +101,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential libsndfile1-dev python3-pip
-          # Install Faust
-          FAUST_VERSION="2.72.14"
-          wget -q "https://github.com/grame-cncm/faust/releases/download/${FAUST_VERSION}/faust-${FAUST_VERSION}-linux-x86_64.tar.gz"
-          tar xzf "faust-${FAUST_VERSION}-linux-x86_64.tar.gz"
-          sudo mv faust-*/bin/* /usr/local/bin/
-          sudo mv faust-*/share/faust /usr/local/share/
+          sudo apt-get install -y faust
           pip install numpy scipy librosa matplotlib
 
       - name: Build
