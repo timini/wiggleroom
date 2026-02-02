@@ -75,6 +75,7 @@ struct TheArchitect : Module {
     enum OutputId {
         ENUMS(TRACK_OUTPUT, NUM_TRACKS),
         CHORD_OUTPUT,
+        SCALE_BUS_OUTPUT,
         OUTPUTS_LEN
     };
     enum LightId {
@@ -112,6 +113,9 @@ struct TheArchitect : Module {
         configInput(ROOT_CV_INPUT, "Root CV");
         configInput(SCALE_CV_INPUT, "Scale CV");
         configInput(INVERSION_CV_INPUT, "Inversion CV");
+
+        // Scale Bus output (16-channel poly: 0-11 = scale mask, 15 = root V/Oct)
+        configOutput(SCALE_BUS_OUTPUT, "Scale Bus (16ch poly)");
     }
 
     // Quantize a chromatic note (0-11) to the nearest note in the scale
@@ -259,13 +263,32 @@ struct TheArchitect : Module {
         } else {
             outputs[CHORD_OUTPUT].setChannels(0);
         }
+
+        // Output Scale Bus (16-channel polyphonic)
+        // Channels 0-11: Scale mask (10V = note active, 0V = inactive)
+        // Channel 15: Root note as V/Oct (0V = C, 1/12V = C#, etc.)
+        outputs[SCALE_BUS_OUTPUT].setChannels(16);
+
+        // Write scale mask to channels 0-11
+        // The mask is relative to the root, but for the bus we output
+        // the absolute chromatic positions
+        for (int i = 0; i < 12; i++) {
+            int relNote = (i - root + 12) % 12;
+            bool inScale = (scaleMask >> relNote) & 1;
+            outputs[SCALE_BUS_OUTPUT].setVoltage(inScale ? 10.f : 0.f, i);
+        }
+
+        // Write root note to channel 15 (as V/Oct: 0V = C4)
+        // Root is 0-11 where 0=C, so root/12 gives the V/Oct offset
+        float rootVoltage = static_cast<float>(root) / 12.f;
+        outputs[SCALE_BUS_OUTPUT].setVoltage(rootVoltage, 15);
     }
 };
 
 struct TheArchitectWidget : ModuleWidget {
     TheArchitectWidget(TheArchitect* module) {
         setModule(module);
-        box.size = Vec(5 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        box.size = Vec(16 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
         addChild(new WiggleRoom::ImagePanel(
             asset::plugin(pluginInstance, "res/TheArchitect.png"), box.size));
 
@@ -275,66 +298,63 @@ struct TheArchitectWidget : ModuleWidget {
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
         addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 
-        // Layout for 16HP panel (81.28mm)
+        // Layout for 16HP panel (81.28mm), center = 40.64mm
         // Left column: 8 track inputs
         // Center: Root, Scale, Transpose knobs + scale lights
         // Right column: 8 track outputs + chord section
 
-        float trackInX = 8.f;
-        float trackOutX = 73.f;
+        float trackInX = 18.f;      // Moved inward from 8mm
+        float trackOutX = 63.f;     // Moved inward from 73mm
         float centerX = 40.64f;
 
-        // Global controls at top center
+        // Global controls at top center (below title artwork ~35mm)
         addParam(createParamCentered<RoundBigBlackKnob>(
-            mm2px(Vec(30, 22)), module, TheArchitect::ROOT_PARAM));
+            mm2px(Vec(32, 35)), module, TheArchitect::ROOT_PARAM));
         addParam(createParamCentered<RoundBigBlackKnob>(
-            mm2px(Vec(51, 22)), module, TheArchitect::SCALE_PARAM));
+            mm2px(Vec(49, 35)), module, TheArchitect::SCALE_PARAM));
         addParam(createParamCentered<RoundBlackKnob>(
-            mm2px(Vec(40.64, 40)), module, TheArchitect::TRANSPOSE_PARAM));
+            mm2px(Vec(centerX, 50)), module, TheArchitect::TRANSPOSE_PARAM));
 
-        // Scale lights (show which notes are active)
-        float lightStartY = 52.f;
+        // Scale lights (show which notes are active) - centered
+        float lightStartY = 58.f;
         for (int i = 0; i < 12; i++) {
-            float x = 25.f + (i % 6) * 5.5f;
+            float x = 27.f + (i % 6) * 4.5f;
             float y = lightStartY + (i / 6) * 5.f;
             addChild(createLightCentered<SmallLight<GreenLight>>(
                 mm2px(Vec(x, y)), module, TheArchitect::SCALE_LIGHT + i));
         }
 
-        // CV inputs for global controls
-        addInput(createInputCentered<PJ301MPort>(
-            mm2px(Vec(25, 62)), module, TheArchitect::ROOT_CV_INPUT));
-        addInput(createInputCentered<PJ301MPort>(
-            mm2px(Vec(40.64, 62)), module, TheArchitect::SCALE_CV_INPUT));
-
-        // 8 track inputs (left column)
-        float trackStartY = 72.f;
-        float trackSpacing = 7.f;
+        // 8 track inputs (left column) and outputs (right column)
+        // Tighter spacing to fit in usable panel area (62-104mm)
+        float trackStartY = 62.f;
+        float trackSpacing = 6.f;
         for (int i = 0; i < NUM_TRACKS; i++) {
             float y = trackStartY + i * trackSpacing;
             addInput(createInputCentered<PJ301MPort>(
                 mm2px(Vec(trackInX, y)), module, TheArchitect::TRACK_INPUT + i));
-        }
-
-        // 8 track outputs (right column)
-        for (int i = 0; i < NUM_TRACKS; i++) {
-            float y = trackStartY + i * trackSpacing;
             addOutput(createOutputCentered<PJ301MPort>(
                 mm2px(Vec(trackOutX, y)), module, TheArchitect::TRACK_OUTPUT + i));
         }
 
-        // Chord section (center-right)
+        // Center column: CV inputs aligned with track 1
         addInput(createInputCentered<PJ301MPort>(
-            mm2px(Vec(56, 62)), module, TheArchitect::CHORD_INPUT));
+            mm2px(Vec(28, 62)), module, TheArchitect::ROOT_CV_INPUT));
+        addInput(createInputCentered<PJ301MPort>(
+            mm2px(Vec(centerX, 62)), module, TheArchitect::SCALE_CV_INPUT));
+        addInput(createInputCentered<PJ301MPort>(
+            mm2px(Vec(53, 62)), module, TheArchitect::CHORD_INPUT));
 
+        // Center column: Inversion knob and CV
         addParam(createParamCentered<RoundSmallBlackKnob>(
-            mm2px(Vec(40.64, 100)), module, TheArchitect::INVERSION_PARAM));
+            mm2px(Vec(centerX, 77)), module, TheArchitect::INVERSION_PARAM));
         addInput(createInputCentered<PJ301MPort>(
-            mm2px(Vec(56, 100)), module, TheArchitect::INVERSION_CV_INPUT));
+            mm2px(Vec(centerX, 89)), module, TheArchitect::INVERSION_CV_INPUT));
 
-        // Chord poly output
+        // Bottom outputs: Chord and Scale Bus (aligned with track 8)
         addOutput(createOutputCentered<PJ301MPort>(
-            mm2px(Vec(40.64, 118)), module, TheArchitect::CHORD_OUTPUT));
+            mm2px(Vec(33, 104)), module, TheArchitect::CHORD_OUTPUT));
+        addOutput(createOutputCentered<PJ301MPort>(
+            mm2px(Vec(48, 104)), module, TheArchitect::SCALE_BUS_OUTPUT));
     }
 };
 

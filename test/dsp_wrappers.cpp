@@ -143,9 +143,72 @@ std::unique_ptr<AbstractDSP> createMatter() {
 
 #undef __mydsp_H__
 
-// ==== Linkage ====
-#define FAUST_MODULE_NAME Linkage
-#include "linkage.hpp"
-std::unique_ptr<AbstractDSP> createLinkage() {
-    return std::make_unique<DSPWrapper<FaustGenerated::NS_Linkage::VCVRackDSP>>();
+// ==== TheCauldron ====
+#define FAUST_MODULE_NAME TheCauldron
+#include "the_cauldron.hpp"
+std::unique_ptr<AbstractDSP> createTheCauldron() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_TheCauldron::VCVRackDSP>>();
+}
+
+#undef __mydsp_H__
+
+// ==== VektorX ====
+#define FAUST_MODULE_NAME VektorX
+#include "vektorx.hpp"
+std::unique_ptr<AbstractDSP> createVektorX() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_VektorX::VCVRackDSP>>();
+}
+
+#undef __mydsp_H__
+
+// ==== TR808 ====
+#define FAUST_MODULE_NAME TR808
+#include "tr808.hpp"
+std::unique_ptr<AbstractDSP> createTR808() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_TR808::VCVRackDSP>>();
+}
+
+#undef __mydsp_H__
+
+// ==== ACID9Voice ====
+#define FAUST_MODULE_NAME ACID9Voice
+#include "acid9voice.hpp"
+std::unique_ptr<AbstractDSP> createACID9Voice() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_ACID9Voice::VCVRackDSP>>();
+}
+
+#undef __mydsp_H__
+
+// ==== TetanusCoil ====
+#define FAUST_MODULE_NAME TetanusCoil
+#include "tetanus_coil.hpp"
+std::unique_ptr<AbstractDSP> createTetanusCoil() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_TetanusCoil::VCVRackDSP>>();
+}
+
+#undef __mydsp_H__
+
+// ==== NutShaker ====
+#define FAUST_MODULE_NAME NutShaker
+#include "nutshaker.hpp"
+std::unique_ptr<AbstractDSP> createNutShaker() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_NutShaker::VCVRackDSP>>();
+}
+
+#undef __mydsp_H__
+
+// ==== PhysicalChoir ====
+#define FAUST_MODULE_NAME PhysicalChoir
+#include "physical_choir.hpp"
+std::unique_ptr<AbstractDSP> createPhysicalChoir() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_PhysicalChoir::VCVRackDSP>>();
+}
+
+#undef __mydsp_H__
+
+// ==== ChaosPad ====
+#define FAUST_MODULE_NAME ChaosPad
+#include "chaos_pad.hpp"
+std::unique_ptr<AbstractDSP> createChaosPad() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_ChaosPad::VCVRackDSP>>();
 }

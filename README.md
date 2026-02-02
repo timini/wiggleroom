@@ -43,7 +43,7 @@ Search for "Wiggle Room" in the VCV Rack plugin manager.
 
 ### Manual Installation
 
-1. Download the latest release for your platform from the [Releases](https://github.com/yourusername/WiggleRoom/releases) page
+1. Download the latest release for your platform from the [Releases](https://github.com/timini/WiggleRoom/releases) page
 2. Extract to your VCV Rack plugins folder:
    - **macOS**: `~/Library/Application Support/Rack2/plugins-mac-arm64/` (or `plugins-mac-x64/`)
    - **Windows**: `%LOCALAPPDATA%/Rack2/plugins-win-x64/`
@@ -70,7 +70,7 @@ Requires CMake 3.16+ and a C++17 compiler.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/WiggleRoom.git
+git clone https://github.com/timini/WiggleRoom.git
 cd WiggleRoom
 
 # Build

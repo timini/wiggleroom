@@ -19,6 +19,9 @@ Rack-SDK/
 *.a
 *.lib
 *.dylib
+
+# Allow Faust library files (.lib is Faust's library extension)
+!src/modules/**/*.lib
 *.so
 *.dll
 
@@ -27,6 +30,7 @@ Rack-SDK/
 
 # Test artifacts
 test/baselines/*.json
+test/output/
 *.wav
 *.mp3
 test/**/*.png

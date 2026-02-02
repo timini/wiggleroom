@@ -36,8 +36,11 @@ enum WaveType {
     NUM_WAVE_TYPES
 };
 
-// Rate multiplier values - musical divisions and multiplications
-static const std::vector<float> RATE_VALUES = {
+// Master rate multiplier values - extended to /128 for very slow modulation
+static const std::vector<float> MASTER_RATE_VALUES = {
+    1.f/128.f,     // /128
+    1.f/64.f,      // /64
+    1.f/32.f,      // /32
     1.f/16.f,      // /16
     1.f/12.f,      // /12
     1.f/8.f,       // /8
@@ -46,7 +49,7 @@ static const std::vector<float> RATE_VALUES = {
     1.f/3.f,       // /3
     1.f/2.f,       // /2
     2.f/3.f,       // /1.5 (2/3)
-    1.f,           // x1
+    1.f,           // x1 (index 11)
     3.f/2.f,       // x1.5
     2.f,           // x2
     3.f,           // x3
@@ -57,9 +60,41 @@ static const std::vector<float> RATE_VALUES = {
     16.f           // x16
 };
 
-static const std::vector<std::string> RATE_LABELS = {
-    "/16", "/12", "/8", "/6", "/4", "/3", "/2", "/1.5",
+static const std::vector<std::string> MASTER_RATE_LABELS = {
+    "/128", "/64", "/32", "/16", "/12", "/8", "/6", "/4", "/3", "/2", "/1.5",
     "x1", "x1.5", "x2", "x3", "x4", "x6", "x8", "x12", "x16"
+};
+
+// Channel rate multiplier values - with prime and odd divisions for polyrhythms
+static const std::vector<float> CHANNEL_RATE_VALUES = {
+    1.f/16.f,      // /16
+    1.f/12.f,      // /12
+    1.f/9.f,       // /9 (odd)
+    1.f/8.f,       // /8
+    1.f/7.f,       // /7 (prime)
+    1.f/6.f,       // /6
+    1.f/5.f,       // /5 (prime)
+    1.f/4.f,       // /4
+    1.f/3.f,       // /3
+    1.f/2.f,       // /2
+    2.f/3.f,       // /1.5 (2/3)
+    1.f,           // x1 (index 11)
+    3.f/2.f,       // x1.5
+    2.f,           // x2
+    3.f,           // x3
+    4.f,           // x4
+    5.f,           // x5 (prime)
+    6.f,           // x6
+    7.f,           // x7 (prime)
+    8.f,           // x8
+    9.f,           // x9 (odd)
+    12.f,          // x12
+    16.f           // x16
+};
+
+static const std::vector<std::string> CHANNEL_RATE_LABELS = {
+    "/16", "/12", "/9", "/8", "/7", "/6", "/5", "/4", "/3", "/2", "/1.5",
+    "x1", "x1.5", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x12", "x16"
 };
 
 // Fold values - musically interesting fractions
@@ -89,7 +124,7 @@ static const std::vector<std::string> FOLD_LABELS = {
 
 struct OctoLFO : Module {
     static constexpr int NUM_LFOS = 8;
-    static constexpr int SCOPE_BUFFER_SIZE = 64;
+    static constexpr int SCOPE_BUFFER_SIZE = 256;  // 4x zoom out for longer waveform display
 
     enum ParamId {
         MASTER_RATE_PARAM,  // Master mult/div
@@ -129,15 +164,15 @@ struct OctoLFO : Module {
     float scopeBuffer[NUM_LFOS][SCOPE_BUFFER_SIZE] = {};
     int scopeWriteIndex[NUM_LFOS] = {};
     int scopeDownsample = 0;
-    static constexpr int SCOPE_DOWNSAMPLE_RATE = 64;
+    static constexpr int SCOPE_DOWNSAMPLE_RATE = 256;  // 4x zoom out for longer waveform display
 
     OctoLFO() {
         config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
 
         // Master rate: snapped to musical divisions/multiplications
-        // Default to index 8 which is "x1"
-        configSwitch(MASTER_RATE_PARAM, 0.f, RATE_VALUES.size() - 1, 8.f,
-            "Master Rate", RATE_LABELS);
+        // Default to index 11 which is "x1" (extended array includes /128, /64, /32)
+        configSwitch(MASTER_RATE_PARAM, 0.f, MASTER_RATE_VALUES.size() - 1, 11.f,
+            "Master Rate", MASTER_RATE_LABELS);
 
         // Bipolar/Unipolar switch (0 = bipolar ±5V, 1 = unipolar 0-10V)
         configSwitch(BIPOLAR_PARAM, 0.f, 1.f, 0.f, "Output Mode", {"Bipolar (±5V)", "Unipolar (0-10V)"});
@@ -146,9 +181,9 @@ struct OctoLFO : Module {
             std::string label = "LFO " + std::to_string(i + 1);
 
             // Per-LFO rate: snapped to musical divisions/multiplications
-            // Default to index 8 which is "x1"
-            configSwitch(RATE_PARAM + i, 0.f, RATE_VALUES.size() - 1, 8.f,
-                label + " Rate", RATE_LABELS);
+            // Default to index 11 which is "x1" (array includes prime/odd divisions)
+            configSwitch(RATE_PARAM + i, 0.f, CHANNEL_RATE_VALUES.size() - 1, 11.f,
+                label + " Rate", CHANNEL_RATE_LABELS);
 
             // Wave type (0-4)
             configSwitch(WAVE_PARAM + i, 0.f, NUM_WAVE_TYPES - 1, WAVE_SINE,
@@ -245,8 +280,8 @@ struct OctoLFO : Module {
 
         // Master rate multiplier
         int masterRateIndex = static_cast<int>(params[MASTER_RATE_PARAM].getValue());
-        masterRateIndex = clamp(masterRateIndex, 0, (int)RATE_VALUES.size() - 1);
-        float masterRate = RATE_VALUES[masterRateIndex];
+        masterRateIndex = clamp(masterRateIndex, 0, (int)MASTER_RATE_VALUES.size() - 1);
+        float masterRate = MASTER_RATE_VALUES[masterRateIndex];
 
         // Output mode: 0 = bipolar (±5V), 1 = unipolar (0-10V)
         bool unipolar = params[BIPOLAR_PARAM].getValue() > 0.5f;
@@ -259,8 +294,8 @@ struct OctoLFO : Module {
         // Process each LFO
         for (int i = 0; i < NUM_LFOS; i++) {
             int lfoRateIndex = static_cast<int>(params[RATE_PARAM + i].getValue());
-            lfoRateIndex = clamp(lfoRateIndex, 0, (int)RATE_VALUES.size() - 1);
-            float lfoRate = RATE_VALUES[lfoRateIndex];
+            lfoRateIndex = clamp(lfoRateIndex, 0, (int)CHANNEL_RATE_VALUES.size() - 1);
+            float lfoRate = CHANNEL_RATE_VALUES[lfoRateIndex];
             float combinedRate = masterRate * lfoRate;
             float freq = combinedRate / clockPeriod;
 

@@ -1,0 +1,53 @@
+{
+  "module_type": "instrument",
+  "description": "Complex drone synthesizer inspired by Forge TME VHIKK X - cluster oscillators and diffuse reverb",
+  "quality_thresholds": {
+    "thd_max_percent": 25.0,
+    "clipping_max_percent": 5.0,
+    "hnr_min_db": 3.0,
+    "allow_hot_signal": true
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 3.5,
+      "description": "Default drone settings with release tail"
+    },
+    {
+      "name": "cluster_mode",
+      "duration": 4.0,
+      "parameters": {
+        "algorithm": 1,
+        "spread": 0.7,
+        "width": 0.8,
+        "delay_mix": 0.5
+      },
+      "description": "Cluster algorithm with wide stereo"
+    },
+    {
+      "name": "diatonic_mode",
+      "duration": 4.0,
+      "parameters": {
+        "algorithm": 2,
+        "spread": 0.6,
+        "delay_mix": 0.4
+      },
+      "description": "Diatonic chord mode"
+    }
+  ],
+  "showcase": {
+    "duration": 15.0,
+    "notes": [
+      {"start": 0.0, "duration": 3.0, "volts": -1.0, "velocity": 1.0},
+      {"start": 3.5, "duration": 3.0, "volts": -0.5, "velocity": 0.9},
+      {"start": 7.0, "duration": 3.0, "volts": 0.0, "velocity": 0.85},
+      {"start": 10.5, "duration": 3.0, "volts": 0.5, "velocity": 0.9}
+    ],
+    "automations": [
+      {"param": "morph", "start_time": 0.0, "end_time": 15.0, "start_value": 0.0, "end_value": 1.0},
+      {"param": "spread", "start_time": 0.0, "end_time": 7.5, "start_value": 0.2, "end_value": 0.9},
+      {"param": "spread", "start_time": 7.5, "end_time": 15.0, "start_value": 0.9, "end_value": 0.3},
+      {"param": "delay_mix", "start_time": 0.0, "end_time": 15.0, "start_value": 0.3, "end_value": 0.7}
+    ]
+  }
+}

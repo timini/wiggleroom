@@ -1,0 +1,82 @@
+// acid_delay.lib - Stereo delay with clock sync and ghost mode
+// Part of ACID9Voice module for WiggleRoom VCV Rack plugin
+//
+// Features:
+// - Clock-synchronized delay times
+// - Ratio multipliers (/4, /2, x1, x2, x4)
+// - Ghost mode: HP filter + pitch drift on trails
+// - Simple stereo delay (no ping-pong for stability)
+
+import("stdfaust.lib");
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+MAX_DELAY_SAMPLES = 192000;  // 4 seconds at 48kHz
+MIN_DELAY_MS = 10;
+MAX_DELAY_MS = 2000;
+DEFAULT_DELAY_MS = 250;
+
+// ============================================================================
+// GHOST MODE PROCESSING
+// ============================================================================
+
+// Ghost mode: adds ethereal quality to delay trails
+// - High-pass filter removes low frequencies from repeats
+// - Subtle pitch drift creates "ghostly" effect
+// ghost_amt: 0 = normal delay, 1 = full ghost effect
+ghost_process(ghost_amt, sig) = sig : hp_filter
+with {
+    // High-pass filter (removes bass from trails)
+    // Cutoff increases with ghost amount
+    hp_cutoff = 80 + ghost_amt * 400;  // 80Hz to 480Hz
+    hp_filter = fi.highpass(2, hp_cutoff);
+};
+
+// ============================================================================
+// STEREO DELAY
+// ============================================================================
+
+// Simple stereo delay
+// delay_time_ms: base delay time in milliseconds
+// feedback: feedback amount (0-0.95)
+// mix: dry/wet mix (0 = dry, 1 = wet)
+// ghost: ghost mode amount (0-1)
+// l, r: input signals
+stereo_delay(delay_time_ms, feedback, mix, ghost, ping_pong, l, r) =
+    l_out, r_out
+with {
+    // Clamp delay time
+    dt_ms = max(MIN_DELAY_MS, min(delay_time_ms, MAX_DELAY_MS));
+    delay_samples = dt_ms * ma.SR / 1000.0;
+
+    // Feedback clamped for stability
+    fb = min(feedback, 0.95);
+
+    // Mix smoothed
+    mix_smooth = mix : si.smoo;
+
+    // Left delay with feedback
+    wet_l = l : (+ : de.fdelay(MAX_DELAY_SAMPLES, delay_samples) : ghost_process(ghost, _)) ~ (*(fb));
+
+    // Right delay with slight offset for stereo width
+    delay_samples_r = delay_samples * (1.0 + ping_pong * 0.1);
+    wet_r = r : (+ : de.fdelay(MAX_DELAY_SAMPLES, delay_samples_r) : ghost_process(ghost, _)) ~ (*(fb));
+
+    // Dry/wet mix
+    l_out = l * (1 - mix_smooth) + wet_l * mix_smooth;
+    r_out = r * (1 - mix_smooth) + wet_r * mix_smooth;
+};
+
+// ============================================================================
+// INSERT LOOP
+// ============================================================================
+
+// Insert loop with return normalizing to send when unpatched
+// send: signal to send to external processor
+// return_sig: signal from external processor
+// return_connected: 1 if return is patched, 0 if not
+// When return is unpatched, send signal passes through (return normalizes to send)
+insert_loop(send, return_sig, return_connected) =
+    select2(return_connected > 0.5, send, return_sig);

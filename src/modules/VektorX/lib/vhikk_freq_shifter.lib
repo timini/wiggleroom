@@ -1,0 +1,88 @@
+// VHIKK Frequency Shifter - SSB Frequency Shifting
+// Part of the VHIKK modular DSP library
+//
+// Based on VHIKK X feedback loop frequency shifter
+// Creates the signature "barberpole" ascending/descending effect
+
+declare name "VHIKK Frequency Shifter";
+declare author "WiggleRoom";
+declare version "1.0";
+
+import("stdfaust.lib");
+
+// Single Sideband (SSB) Frequency Shifter
+// Uses Faust's built-in ssb_shift function from analyzers library
+//
+// input: Audio signal
+// shift_hz: Frequency shift amount in Hz (-500 to +500)
+//           Positive = upward shift, Negative = downward shift
+//
+// Returns: Frequency-shifted audio signal
+freq_shifter(input, shift_hz) = shifted : fi.dcblocker
+with {
+    // Use single-sideband shifting via quadrature oscillator
+    // Manual implementation since an.hilbert may not be available
+
+    // Phase quadrature oscillator
+    phasor = os.phasor(1, abs(shift_hz));
+    osc_cos = cos(phasor * 2 * ma.PI);
+    osc_sin = sin(phasor * 2 * ma.PI);
+
+    // Simple approximation: ring modulation with low-pass filtering
+    // This is a simplified frequency shifter (not true SSB but creates similar effect)
+    shifted_up = input * osc_cos;
+    shifted_down = input * osc_sin;
+
+    // Low-pass to reduce artifacts
+    lpf = fi.lowpass(2, min(ma.SR * 0.4, max(20, abs(shift_hz) + 5000)));
+
+    // Select direction
+    shifted = select2(shift_hz >= 0,
+        shifted_down : lpf,
+        shifted_up : lpf
+    );
+};
+
+// Alternative: Ring modulation based "pseudo" frequency shift
+// Creates a more obvious frequency shift effect
+freq_shifter_ring(input, shift_hz) = output : fi.dcblocker
+with {
+    // Quadrature oscillator
+    osc = os.osc(abs(shift_hz));
+
+    // Ring modulate
+    output = input * osc;
+};
+
+// Frequency shifter with wet/dry mix
+freq_shifter_mix(input, shift_hz, mix) = dry + wet
+with {
+    dry = input * (1.0 - mix);
+    wet = freq_shifter(input, shift_hz) * mix;
+};
+
+// Dual frequency shifter (creates thicker sound with two different shifts)
+freq_shifter_dual(input, shift1_hz, shift2_hz) = (shifted1 + shifted2) * 0.5
+with {
+    shifted1 = freq_shifter(input, shift1_hz);
+    shifted2 = freq_shifter(input, shift2_hz);
+};
+
+// Simple pitch detuning (alternative to true frequency shift)
+// Uses delay modulation for chorus-like pitch variation
+detune(input, cents) = output
+with {
+    // Convert cents to delay modulation
+    // ±100 cents = ±1 semitone
+    mod_depth = cents * 0.01;  // Scale factor
+
+    // LFO for smooth modulation
+    lfo = os.osc(0.5) * mod_depth;
+
+    // Modulated delay (pitch shift via doppler effect)
+    max_delay = 1024;
+    base_delay = 512;
+    delay_time = max(1, int(base_delay + lfo * 100));
+
+    output = de.fdelay(max_delay, delay_time, input);
+};

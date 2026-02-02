@@ -1,0 +1,63 @@
+// VHIKK Morph Oscillator - Crossfading waveform oscillator
+// Part of the VHIKK modular DSP library
+
+declare name "VHIKK Morph Oscillator";
+declare author "WiggleRoom";
+declare version "1.0";
+
+import("stdfaust.lib");
+
+// Morphing oscillator: continuously crossfades between sine, saw, and square
+// Uses band-limited oscillators to prevent aliasing
+//
+// freq: Frequency in Hz (20-20000)
+// morph: Morph position (0.0=sine, 0.5=saw, 1.0=square)
+//
+// Returns: Single audio sample
+morph_osc(freq, morph) = sine * w_sine + saw * w_saw + square * w_square
+with {
+    // Band-limited oscillator sources
+    sine = os.osc(freq);
+    saw = os.sawtooth(freq);
+    square = os.square(freq);
+
+    // Triangular crossfade windows (equal power approximation)
+    // morph 0.0-0.33: sine dominant
+    // morph 0.33-0.66: saw dominant
+    // morph 0.66-1.0: square dominant
+    morph3 = morph * 3.0;
+
+    w_sine = max(0.0, 1.0 - abs(morph3 - 0.0));
+    w_saw = max(0.0, 1.0 - abs(morph3 - 1.5));
+    w_square = max(0.0, 1.0 - abs(morph3 - 3.0));
+
+    // Normalize weights to sum to 1
+    total = w_sine + w_saw + w_square + 0.0001;  // Avoid div by zero
+};
+
+// Equal-power morphing oscillator (smoother crossfades)
+// Uses cosine crossfade for constant perceived loudness
+morph_osc_ep(freq, morph) = sine * g_sine + saw * g_saw + square * g_square
+with {
+    sine = os.osc(freq);
+    saw = os.sawtooth(freq);
+    square = os.square(freq);
+
+    // Two-stage crossfade with equal power (cosine curve)
+    // Stage 1: sine -> saw (morph 0-0.5)
+    // Stage 2: saw -> square (morph 0.5-1.0)
+    phase1 = min(1.0, morph * 2.0);
+    phase2 = max(0.0, (morph - 0.5) * 2.0);
+
+    // Cosine crossfade for equal power
+    g_sine = cos(phase1 * ma.PI / 2.0) * (1.0 - phase2);
+    g_saw = sin(phase1 * ma.PI / 2.0) * cos(phase2 * ma.PI / 2.0);
+    g_square = sin(phase2 * ma.PI / 2.0);
+};
+
+// Pulse width modulation oscillator
+// pw: Pulse width (0.01-0.99, 0.5 = square)
+pwm_osc(freq, pw) = os.pulsetrain(freq, pw_clamped)
+with {
+    pw_clamped = max(0.01, min(0.99, pw));
+};

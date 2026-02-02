@@ -1,0 +1,29 @@
+// VHIKK Soft Clip - Tanh saturation with drive control
+// Part of the VHIKK modular DSP library
+
+declare name "VHIKK Soft Clip";
+declare author "WiggleRoom";
+declare version "1.0";
+
+import("stdfaust.lib");
+
+// Soft clipping using hyperbolic tangent
+// Normalized output: compensates for gain reduction at high drive
+//
+// input: Audio signal
+// drive: Saturation amount (1.0 = unity, 2.0+ = overdrive)
+//
+// Returns: Saturated audio signal (normalized to preserve peak level)
+soft_clip(input, drive) = ma.tanh(input * drive) * compensation
+with {
+    // Normalize output: tanh(drive)/drive approaches 1 as drive->0
+    // At drive=1, tanh(1)≈0.76, so we compensate
+    compensation = select2(drive > 0.001, 1.0, 1.0 / max(0.001, ma.tanh(drive)));
+};
+
+// Simple soft clip without normalization (preserves tanh compression)
+soft_clip_raw(input, drive) = ma.tanh(input * drive);
+
+// Asymmetric soft clip for even harmonics
+// bias: DC offset before clipping (adds even harmonics)
+soft_clip_asym(input, drive, bias) = ma.tanh((input + bias) * drive);

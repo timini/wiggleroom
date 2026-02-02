@@ -2,33 +2,82 @@ name: Build Plugin
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
     tags: ["v*"]
   pull_request:
 
+env:
+  PLUGIN_NAME: WiggleRoom
+
 jobs:
-  build-and-release:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: lin-x64
+          - os: macos-latest
+            platform: mac-x64+arm64
+          # Windows disabled: requires Rack.exe import library for linking
+          # TODO: Re-enable with rack-plugin-toolchain Docker or import lib
+          # - os: windows-latest
+          #   platform: win-x64
+    runs-on: ${{ matrix.os }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install Just
-        uses: extractions/setup-just@v2
+      - name: Install Faust (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y faust
 
-      - name: Build Cross-Platform
-        run: just package
+      - name: Install Faust (macOS)
+        if: runner.os == 'macOS'
+        run: brew install faust
 
-      - name: Upload Artifacts
+      - name: Configure CMake
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --target dist -j
+
+      - name: Package
+        run: |
+          cd build/dist
+          zip -r ../../${{ env.PLUGIN_NAME }}-${{ matrix.platform }}.vcvplugin ${{ env.PLUGIN_NAME }}
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: plugin-binaries
-          path: dist/*.vcvplugin
+          name: ${{ env.PLUGIN_NAME }}-${{ matrix.platform }}
+          path: ${{ env.PLUGIN_NAME }}-${{ matrix.platform }}.vcvplugin
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect plugin files
+        run: |
+          mkdir -p dist
+          find artifacts -name "*.vcvplugin" -exec cp {} dist/ \;
+          ls -la dist/
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.vcvplugin

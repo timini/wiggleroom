@@ -1,0 +1,84 @@
+{
+  "module_type": "instrument",
+  "description": "Hybrid physical vocal synthesis with glottis modeling and formant filtering",
+  "quality_thresholds": {
+    "thd_max_percent": 160.0,
+    "clipping_max_percent": 3.0,
+    "hnr_min_db": -5.0,
+    "allow_hot_signal": true
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 2.0,
+      "description": "Default choir voice (vowel A, normal tension)"
+    },
+    {
+      "name": "breathy_falsetto",
+      "duration": 2.0,
+      "parameters": {
+        "tension": 0.2,
+        "breath": 0.5
+      },
+      "description": "Soft breathy falsetto voice"
+    },
+    {
+      "name": "chest_voice",
+      "duration": 2.0,
+      "parameters": {
+        "tension": 0.85,
+        "breath": 0.05
+      },
+      "description": "Strong chest voice / belting"
+    },
+    {
+      "name": "giant_voice",
+      "duration": 2.0,
+      "parameters": {
+        "throat": 1.8,
+        "tension": 0.7
+      },
+      "description": "Deep giant/bass voice"
+    },
+    {
+      "name": "child_voice",
+      "duration": 2.0,
+      "parameters": {
+        "throat": 0.6,
+        "tension": 0.5
+      },
+      "description": "Small child/pixie voice"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": ["portamento", "reverb"],
+    "steps": 10
+  },
+  "showcase": {
+    "duration": 25.0,
+    "notes": [
+      {"start": 0.0, "duration": 2.0, "volts": -1.0, "velocity": 1.0},
+      {"start": 2.5, "duration": 2.0, "volts": -0.5, "velocity": 0.9},
+      {"start": 5.0, "duration": 2.0, "volts": 0.0, "velocity": 0.85},
+      {"start": 7.5, "duration": 2.0, "volts": 0.5, "velocity": 0.8},
+      {"start": 10.0, "duration": 2.0, "volts": 0.583, "velocity": 0.9},
+      {"start": 12.5, "duration": 2.0, "volts": 1.0, "velocity": 1.0},
+      {"start": 15.0, "duration": 2.0, "volts": 0.25, "velocity": 0.7},
+      {"start": 17.5, "duration": 2.0, "volts": -0.25, "velocity": 0.85},
+      {"start": 20.0, "duration": 2.0, "volts": 0.75, "velocity": 0.95},
+      {"start": 22.5, "duration": 2.0, "volts": 0.0, "velocity": 1.0}
+    ],
+    "automations": [
+      {"param": "vowel", "start_time": 0.0, "end_time": 12.5, "start_value": 0.0, "end_value": 4.0},
+      {"param": "vowel", "start_time": 12.5, "end_time": 25.0, "start_value": 4.0, "end_value": 0.0},
+      {"param": "tension", "start_time": 0.0, "end_time": 8.0, "start_value": 0.3, "end_value": 0.85},
+      {"param": "tension", "start_time": 8.0, "end_time": 16.0, "start_value": 0.85, "end_value": 0.4},
+      {"param": "tension", "start_time": 16.0, "end_time": 25.0, "start_value": 0.4, "end_value": 0.7},
+      {"param": "throat", "start_time": 0.0, "end_time": 10.0, "start_value": 1.0, "end_value": 0.6},
+      {"param": "throat", "start_time": 10.0, "end_time": 20.0, "start_value": 0.6, "end_value": 1.6},
+      {"param": "throat", "start_time": 20.0, "end_time": 25.0, "start_value": 1.6, "end_value": 1.0},
+      {"param": "breath", "start_time": 5.0, "end_time": 12.0, "start_value": 0.1, "end_value": 0.6},
+      {"param": "breath", "start_time": 12.0, "end_time": 20.0, "start_value": 0.6, "end_value": 0.1}
+    ]
+  }
+}

@@ -46,12 +46,13 @@ set(FAUST_ARCHITECTURE_FILE "${CMAKE_SOURCE_DIR}/faust/vcvrack.cpp"
 #     DSP_FILE <file.dsp>           # Required: Faust DSP source file
 #     [OUTPUT_DIR <dir>]            # Optional: Output directory (default: CMAKE_CURRENT_BINARY_DIR/faust_gen)
 #     [CLASS_NAME <name>]           # Optional: Generated class name (default: filename without extension)
+#     [LIBRARY_PATH <dir>]          # Optional: Additional include path for Faust libraries
 # )
 function(add_faust_dsp)
     cmake_parse_arguments(
         FAUST
         ""
-        "TARGET;DSP_FILE;OUTPUT_DIR;CLASS_NAME"
+        "TARGET;DSP_FILE;OUTPUT_DIR;CLASS_NAME;LIBRARY_PATH"
         ""
         ${ARGN}
     )
@@ -86,16 +87,30 @@ function(add_faust_dsp)
     file(MAKE_DIRECTORY "${FAUST_OUTPUT_DIR}")
 
     if(FAUST_FOUND)
+        # Build Faust compiler arguments
+        set(FAUST_ARGS
+            -i                                      # Inline all code
+            -a "${FAUST_ARCHITECTURE_FILE}"         # Use VCV Rack architecture
+            -o "${OUTPUT_HPP}"                      # Output file
+        )
+
+        # Add library path if provided
+        if(FAUST_LIBRARY_PATH)
+            if(NOT EXISTS "${FAUST_LIBRARY_PATH}")
+                message(FATAL_ERROR "add_faust_dsp: LIBRARY_PATH does not exist: ${FAUST_LIBRARY_PATH}")
+            endif()
+            list(APPEND FAUST_ARGS -I "${FAUST_LIBRARY_PATH}")
+        endif()
+
+        # Add input file last
+        list(APPEND FAUST_ARGS "${DSP_FILE_ABS}")
+
         # Add custom command to generate C++ from Faust DSP
         # Note: We don't use -cn to let Faust use the default 'mydsp' class name
         # which our VCVRackDSP wrapper expects
         add_custom_command(
             OUTPUT "${OUTPUT_HPP}"
-            COMMAND ${FAUST_EXECUTABLE}
-                -i                                      # Inline all code
-                -a "${FAUST_ARCHITECTURE_FILE}"         # Use VCV Rack architecture
-                -o "${OUTPUT_HPP}"                      # Output file
-                "${DSP_FILE_ABS}"                       # Input DSP file
+            COMMAND ${FAUST_EXECUTABLE} ${FAUST_ARGS}
             DEPENDS "${DSP_FILE_ABS}" "${FAUST_ARCHITECTURE_FILE}"
             COMMENT "Faust: Compiling ${DSP_NAME}.dsp -> ${DSP_NAME}.hpp"
             VERBATIM

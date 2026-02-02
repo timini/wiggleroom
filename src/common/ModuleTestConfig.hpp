@@ -50,12 +50,47 @@ struct TestScenario {
     float duration = 2.0f;
     std::map<std::string, float> parameters;
     std::string description;
+    std::string trigger_param;  // Custom trigger parameter (e.g., "bd_trig" for drums)
 };
 
 // Parameter sweep configuration
 struct ParameterSweepConfig {
     std::vector<std::string> exclude;  // Parameters to skip in sweeps
     int steps = 10;                    // Number of steps per parameter
+};
+
+// Showcase note for multi-note rendering
+struct ShowcaseNote {
+    float start = 0.0f;        // Start time in seconds
+    float duration = 2.0f;     // Note duration in seconds
+    float volts = 0.0f;        // V/Oct pitch (0V = C4)
+    float velocity = 1.0f;     // Note velocity (0-1)
+};
+
+// Showcase automation for parameter sweeps
+struct ShowcaseAutomation {
+    std::string param;         // Parameter name
+    float start_time = 0.0f;   // Start time in seconds
+    float end_time = 10.0f;    // End time in seconds
+    float start_value = 0.0f;  // Starting value
+    float end_value = 1.0f;    // Ending value
+};
+
+// Showcase trigger event for drum machines and trigger-based modules
+struct ShowcaseTrigger {
+    float time = 0.0f;         // Trigger time in seconds
+    std::string param;         // Trigger parameter name (e.g., "bd_trig")
+    float value = 10.0f;       // Trigger value (usually 10V for VCV)
+    float duration = 0.01f;    // Trigger pulse duration in seconds
+};
+
+// Showcase configuration for comprehensive audio rendering
+struct ShowcaseConfig {
+    bool enabled = false;              // Whether showcase config exists
+    float duration = 10.0f;            // Total duration in seconds
+    std::vector<ShowcaseNote> notes;   // Notes to play
+    std::vector<ShowcaseAutomation> automations;  // Parameter automations
+    std::vector<ShowcaseTrigger> trigger_sequence;  // Trigger events for drums
 };
 
 // Complete module test configuration
@@ -76,6 +111,9 @@ struct ModuleTestConfig {
 
     // Parameter sweep config
     ParameterSweepConfig param_sweep;
+
+    // Showcase config for comprehensive audio rendering
+    ShowcaseConfig showcase;
 
     // Description (optional)
     std::string description;
@@ -426,6 +464,9 @@ inline ModuleTestConfig config_from_json(const JsonValue& json,
                     scenario.parameters[kv.first] = static_cast<float>(kv.second.get_number());
                 }
             }
+            if (scenario_json.has("trigger_param")) {
+                scenario.trigger_param = scenario_json["trigger_param"].get_string();
+            }
             config.test_scenarios.push_back(scenario);
         }
     }
@@ -448,6 +489,79 @@ inline ModuleTestConfig config_from_json(const JsonValue& json,
         }
         if (ps.has("steps")) {
             config.param_sweep.steps = static_cast<int>(ps["steps"].get_number());
+        }
+    }
+
+    // Showcase config
+    if (json.has("showcase")) {
+        const auto& sc = json["showcase"];
+        config.showcase.enabled = true;
+
+        if (sc.has("duration")) {
+            config.showcase.duration = static_cast<float>(sc["duration"].get_number());
+        }
+
+        // Parse notes array
+        if (sc.has("notes") && sc["notes"].is_array()) {
+            for (const auto& note_json : sc["notes"].array_val) {
+                ShowcaseNote note;
+                if (note_json.has("start")) {
+                    note.start = static_cast<float>(note_json["start"].get_number());
+                }
+                if (note_json.has("duration")) {
+                    note.duration = static_cast<float>(note_json["duration"].get_number());
+                }
+                if (note_json.has("volts")) {
+                    note.volts = static_cast<float>(note_json["volts"].get_number());
+                }
+                if (note_json.has("velocity")) {
+                    note.velocity = static_cast<float>(note_json["velocity"].get_number());
+                }
+                config.showcase.notes.push_back(note);
+            }
+        }
+
+        // Parse automations array
+        if (sc.has("automations") && sc["automations"].is_array()) {
+            for (const auto& auto_json : sc["automations"].array_val) {
+                ShowcaseAutomation automation;
+                if (auto_json.has("param")) {
+                    automation.param = auto_json["param"].get_string();
+                }
+                if (auto_json.has("start_time")) {
+                    automation.start_time = static_cast<float>(auto_json["start_time"].get_number());
+                }
+                if (auto_json.has("end_time")) {
+                    automation.end_time = static_cast<float>(auto_json["end_time"].get_number());
+                }
+                if (auto_json.has("start_value")) {
+                    automation.start_value = static_cast<float>(auto_json["start_value"].get_number());
+                }
+                if (auto_json.has("end_value")) {
+                    automation.end_value = static_cast<float>(auto_json["end_value"].get_number());
+                }
+                config.showcase.automations.push_back(automation);
+            }
+        }
+
+        // Parse trigger_sequence array for drum machines
+        if (sc.has("trigger_sequence") && sc["trigger_sequence"].is_array()) {
+            for (const auto& trig_json : sc["trigger_sequence"].array_val) {
+                ShowcaseTrigger trigger;
+                if (trig_json.has("time")) {
+                    trigger.time = static_cast<float>(trig_json["time"].get_number());
+                }
+                if (trig_json.has("param")) {
+                    trigger.param = trig_json["param"].get_string();
+                }
+                if (trig_json.has("value")) {
+                    trigger.value = static_cast<float>(trig_json["value"].get_number());
+                }
+                if (trig_json.has("duration")) {
+                    trigger.duration = static_cast<float>(trig_json["duration"].get_number());
+                }
+                config.showcase.trigger_sequence.push_back(trigger);
+            }
         }
     }
 

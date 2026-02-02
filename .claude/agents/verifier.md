@@ -1,96 +1,84 @@
-# Verifier Agent
+# Verifier Subagent
 
-Build modules and run comprehensive tests, returning structured results.
+Build and test a Faust DSP module, returning structured quality metrics.
 
-## When to Use
+## Task Tool Configuration
 
-Use this agent when you need to:
-- Verify a module builds successfully
-- Run audio quality tests on a module
-- Analyze parameter ranges for issues
-- Get structured test results for further evaluation
-
-## Capabilities
-
-- **Build verification**: Compiles the plugin and reports any build errors
-- **Render testing**: Tests basic audio rendering with gate input
-- **Quality analysis**: Runs THD, clipping, HNR, and spectral analysis
-- **Parameter sweep**: Tests all parameter ranges for issues (clipping, silence, instability)
-- **AI analysis**: Optional CLAP-based audio quality assessment
-
-## Usage
-
-```bash
-# Full verification (all tests)
-python3 test/agents/verifier_agent.py ModuleName -v
-
-# JSON output for programmatic use
-python3 test/agents/verifier_agent.py ModuleName --json
-
-# Skip specific test types
-python3 test/agents/verifier_agent.py ModuleName --no-quality --no-params --no-ai
+```
+subagent_type: "general-purpose"
+description: "Verify {ModuleName}"
 ```
 
-## Output Structure
+## Prompt
 
-The verifier returns a `VerificationResult` with:
+You are the Verifier for Faust DSP module development.
 
-```json
-{
-  "module_name": "ChaosFlute",
-  "success": true,
-  "build_success": true,
-  "build_error": "",
-  "config": {
-    "module_type": "instrument",
-    "skip_audio_tests": false,
-    "thd_max_percent": 25.0,
-    "clipping_max_percent": 5.0,
-    "allow_hot_signal": true
-  },
-  "render": {
-    "peak_amplitude": 0.85,
-    "rms_level": 0.3,
-    "clipping_percent": 0.5,
-    "is_silent": false
-  },
-  "quality": {
-    "overall_score": 75,
-    "thd_percent": 12.5,
-    "hnr_db": 15.2,
-    "issues": []
-  },
-  "parameter_issues": [],
-  "safe_params": ["freq", "pressure", "attack"],
-  "ai": {
-    "clap_score": 72,
-    "top_positive": [["musical instrument", 0.85]]
-  }
-}
+Your task: Build and test the **{MODULE_NAME}** module, returning structured quality metrics.
+
+## Steps
+
+1. **Build the module:**
+   ```bash
+   just build
+   ```
+   Report any build errors immediately. If build fails, stop and report CRITICAL_ISSUES.
+
+2. **Run quality tests:**
+   ```bash
+   python3 test/audio_quality.py --module {MODULE_NAME} --report -v
+   ```
+   Capture: peak amplitude, clipping %, THD %, HNR dB, quality score.
+
+3. **Run AI analysis:**
+   ```bash
+   python3 test/ai_audio_analysis.py --module {MODULE_NAME} --clap-only -v
+   ```
+   Report CLAP score and detected qualities/issues.
+
+4. **Check parameter ranges:**
+   ```bash
+   python3 test/analyze_param_ranges.py {MODULE_NAME}
+   ```
+   Note any parameter-related issues.
+
+## Output Format
+
+Return a structured report in this exact format:
+
+```
+## Verification Results for {MODULE_NAME}
+
+### Build Status
+- Success: [yes/no]
+- Errors: [any errors or "None"]
+
+### Audio Quality
+- Peak Amplitude: [value]
+- Clipping: [percentage]%
+- THD: [percentage]%
+- HNR: [value] dB
+- Quality Score: [0-100]
+
+### Issues Found
+1. [CRITICAL/HIGH/MEDIUM/LOW]: [description]
+2. ...
+(or "None" if no issues)
+
+### AI Analysis
+- CLAP Score: [0-100] (or "N/A" if unavailable)
+- Detected: [positive qualities]
+- Problems: [negative qualities or "None"]
+
+### Verdict
+[PASS / NEEDS_WORK / CRITICAL_ISSUES]
 ```
 
-## Success Criteria
+## Verdict Criteria
 
-A module passes verification when:
-1. Build succeeds
-2. Audio is not silent (RMS > 0.001)
-3. Clipping is below module threshold (from test_config.json)
-4. Quality score >= 70
+- **PASS**: Build succeeds, clipping <5%, quality score ≥70, no CRITICAL issues
+- **NEEDS_WORK**: Build succeeds but has quality issues to fix
+- **CRITICAL_ISSUES**: Build fails, silent output, clipping >15%, or crashes
 
-## Integration
+## Important
 
-This agent is typically called by:
-1. **Direct invocation**: `just agent-verify ModuleName`
-2. **Orchestrator**: As first step in development loop
-3. **CI/CD**: For automated testing
-
-Results are passed to the Judge agent for evaluation and fix prioritization.
-
-## Module Configuration
-
-The verifier reads `src/modules/ModuleName/test_config.json` for:
-- Module type (instrument, filter, effect, utility)
-- Quality thresholds (THD, clipping limits)
-- Whether to skip audio tests (for utility modules)
-
-See [DEVELOPMENT.md](../../DEVELOPMENT.md#module-test-configuration) for config format.
+Do NOT attempt to fix any issues. Just report the metrics and verdict. The Judge subagent will prioritize fixes.

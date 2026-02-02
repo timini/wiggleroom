@@ -1,0 +1,53 @@
+{
+  "module_type": "effect",
+  "description": "Extreme dispersive spring reverb with non-linear feedback",
+  "quality_thresholds": {
+    "thd_max_percent": 45.0,
+    "clipping_max_percent": 5.0,
+    "hnr_min_db": -5.0,
+    "allow_hot_signal": true,
+    "_note": "THD varies with grit/feedback - extreme settings intentionally produce distortion"
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 3.0,
+      "description": "Default spring settings"
+    },
+    {
+      "name": "extreme_feedback",
+      "duration": 5.0,
+      "parameters": {
+        "feedback": 0.95,
+        "grit": 5.0
+      },
+      "description": "High feedback with distortion"
+    },
+    {
+      "name": "kick_burst",
+      "duration": 3.0,
+      "parameters": {
+        "feedback": 0.9,
+        "kick": 10.0
+      },
+      "description": "Noise burst injection"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": ["kick"],
+    "steps": 10
+  },
+  "showcase": {
+    "duration": 15.0,
+    "notes": [],
+    "automations": [
+      {"param": "feedback", "start_time": 0.0, "end_time": 5.0, "start_value": 0.5, "end_value": 0.95},
+      {"param": "feedback", "start_time": 5.0, "end_time": 10.0, "start_value": 0.95, "end_value": 0.7},
+      {"param": "feedback", "start_time": 10.0, "end_time": 15.0, "start_value": 0.7, "end_value": 0.9},
+      {"param": "grit", "start_time": 0.0, "end_time": 7.0, "start_value": 0.0, "end_value": 8.0},
+      {"param": "grit", "start_time": 7.0, "end_time": 15.0, "start_value": 8.0, "end_value": 2.0},
+      {"param": "tension", "start_time": 0.0, "end_time": 15.0, "start_value": 50.0, "end_value": 300.0},
+      {"param": "wobble", "start_time": 3.0, "end_time": 12.0, "start_value": 0.0, "end_value": 3.0}
+    ]
+  }
+}

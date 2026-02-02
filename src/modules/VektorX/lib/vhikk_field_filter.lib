@@ -1,0 +1,52 @@
+// VHIKK Field Filter - Simple filter with tilt control
+// Part of the VHIKK modular DSP library
+
+declare name "VHIKK Field Filter";
+declare author "WiggleRoom";
+declare version "1.0";
+
+import("stdfaust.lib");
+
+// Simple filter with tilt control (LP/BP/HP morphing)
+//
+// input: Audio signal
+// cutoff: Cutoff frequency in Hz (20-20000)
+// resonance: Resonance 0-1 (mapped to Q internally)
+// tilt: Filter type (-1=LP, 0=BP, +1=HP)
+//
+// Returns: Filtered audio signal
+field_filter(input, cutoff, resonance, tilt) = output
+with {
+    // Clamp cutoff to safe range
+    fc = max(20.0, min(20000.0, cutoff));
+
+    // Map resonance to Q (0.5 to 10)
+    q = 0.5 + resonance * 9.5;
+
+    // Simple filters using fi.resonlp/hp/bp
+    lp_out = input : fi.resonlp(fc, q, 1.0);
+    hp_out = input : fi.resonhp(fc, q, 1.0);
+    bp_out = input : fi.resonbp(fc, q, 1.0);
+
+    // Tilt morphing weights
+    tilt_clamped = max(-1.0, min(1.0, tilt));
+    w_lp = max(0.0, -tilt_clamped);
+    w_hp = max(0.0, tilt_clamped);
+    w_bp = 1.0 - abs(tilt_clamped);
+
+    output = lp_out * w_lp + bp_out * w_bp + hp_out * w_hp;
+};
+
+// Simple lowpass
+lpf(input, cutoff, resonance) = input : fi.resonlp(fc, q, 1.0)
+with {
+    fc = max(20.0, min(20000.0, cutoff));
+    q = 0.5 + resonance * 9.5;
+};
+
+// Simple highpass
+hpf(input, cutoff, resonance) = input : fi.resonhp(fc, q, 1.0)
+with {
+    fc = max(20.0, min(20000.0, cutoff));
+    q = 0.5 + resonance * 9.5;
+};

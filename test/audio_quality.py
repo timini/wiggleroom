@@ -68,14 +68,20 @@ def load_module_config(module_name: str) -> dict:
             thresholds["hnr_min_db"] = qt.get("hnr_min_db", 0.0)
             thresholds["allow_hot_signal"] = qt.get("allow_hot_signal", False)
 
+        # Get first scenario for audio rendering
+        first_scenario = None
+        if "test_scenarios" in data and data["test_scenarios"]:
+            first_scenario = data["test_scenarios"][0].get("name")
+
         return {
             "module_type": data.get("module_type", "instrument"),
             "skip_audio_tests": data.get("skip_audio_tests", False),
             "skip_reason": data.get("skip_reason", ""),
-            "thresholds": thresholds
+            "thresholds": thresholds,
+            "first_scenario": first_scenario
         }
     except (json.JSONDecodeError, IOError):
-        return {"thresholds": DEFAULT_QUALITY_THRESHOLDS.copy()}
+        return {"thresholds": DEFAULT_QUALITY_THRESHOLDS.copy(), "first_scenario": None}
 
 
 # =============================================================================
@@ -197,7 +203,7 @@ def run_faust_render(args: list[str]) -> tuple[bool, str]:
 
 def render_audio(module_name: str, params: dict[str, float],
                  output_path: Path, duration: float = TEST_DURATION,
-                 no_auto_gate: bool = False) -> bool:
+                 no_auto_gate: bool = False, scenario: str | None = None) -> bool:
     args = [
         "--module", module_name,
         "--output", str(output_path),
@@ -206,6 +212,8 @@ def render_audio(module_name: str, params: dict[str, float],
     ]
     if no_auto_gate:
         args.append("--no-auto-gate")
+    if scenario:
+        args.extend(["--scenario", scenario])
     for name, value in params.items():
         args.extend(["--param", f"{name}={value}"])
 
@@ -971,8 +979,11 @@ def test_module_quality(module_name: str, tmp_dir: Path,
 
     wav_path = tmp_dir / f"{module_name}_quality.wav"
 
-    # Render with default parameters
-    if not render_audio(module_name, {}, wav_path, duration=3.0):
+    # Get first scenario if available (for trigger-based modules like drums)
+    first_scenario = config.get("first_scenario")
+
+    # Render with default parameters and scenario if available
+    if not render_audio(module_name, {}, wav_path, duration=3.0, scenario=first_scenario):
         report = AudioQualityReport(module_name=module_name)
         report.issues = ["Failed to render audio"]
         return report
@@ -1109,7 +1120,8 @@ def main():
         tmp_dir = Path(tmp)
 
         for module_name in modules:
-            print(f"Analyzing: {module_name}...")
+            if not args.json:
+                print(f"Analyzing: {module_name}...")
             report = test_module_quality(module_name, tmp_dir)
             all_reports.append(report)
 
@@ -1118,8 +1130,20 @@ def main():
 
     # JSON output
     if args.json or args.output:
+        def numpy_encoder(obj):
+            """Handle numpy types for JSON serialization."""
+            if hasattr(np, 'integer') and isinstance(obj, np.integer):
+                return int(obj)
+            elif hasattr(np, 'floating') and isinstance(obj, np.floating):
+                return float(obj)
+            elif hasattr(np, 'bool_') and isinstance(obj, np.bool_):
+                return bool(obj)
+            elif hasattr(np, 'ndarray') and isinstance(obj, np.ndarray):
+                return obj.tolist()
+            raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
         reports_dict = [r.to_dict() for r in all_reports]
-        json_str = json.dumps(reports_dict, indent=2)
+        json_str = json.dumps(reports_dict, indent=2, default=numpy_encoder)
 
         if args.output:
             with open(args.output, "w") as f:
