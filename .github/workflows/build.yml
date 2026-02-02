@@ -19,10 +19,8 @@ jobs:
             platform: lin-x64
           - os: macos-latest
             platform: mac-x64+arm64
-          # Windows disabled: requires Rack.exe import library for linking
-          # TODO: Re-enable with rack-plugin-toolchain Docker or import lib
-          # - os: windows-latest
-          #   platform: win-x64
+          - os: windows-latest
+            platform: win-x64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -41,13 +39,54 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install faust
 
-      - name: Configure CMake
+      - name: Install MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-make
+            zip
+            unzip
+
+      - name: Install Faust (Windows)
+        if: runner.os == 'Windows'
+        run: choco install faust -y
+
+      - name: Configure CMake (Linux/macOS)
+        if: runner.os != 'Windows'
         run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export PATH="/c/Program Files/Faust/bin:$PATH"
+          cmake -G "MinGW Makefiles" -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build (Linux/macOS)
+        if: runner.os != 'Windows'
         run: cmake --build build --target dist -j
 
-      - name: Package
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export PATH="/c/Program Files/Faust/bin:$PATH"
+          cmake --build build --target dist -j
+
+      - name: Package (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd build/dist
+          zip -r ../../${{ env.PLUGIN_NAME }}-${{ matrix.platform }}.vcvplugin ${{ env.PLUGIN_NAME }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
         run: |
           cd build/dist
           zip -r ../../${{ env.PLUGIN_NAME }}-${{ matrix.platform }}.vcvplugin ${{ env.PLUGIN_NAME }}

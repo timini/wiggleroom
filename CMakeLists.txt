@@ -180,7 +180,10 @@ if(APPLE)
         LINK_FLAGS "-undefined dynamic_lookup"
     )
 elseif(WIN32 OR MINGW)
-    set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".dll")
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        SUFFIX ".dll"
+        LINK_FLAGS "-static-libgcc -static-libstdc++"
+    )
 else()
     set_target_properties(${PROJECT_NAME} PROPERTIES
         SUFFIX ".so"
