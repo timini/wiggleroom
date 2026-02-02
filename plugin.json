@@ -49,7 +49,7 @@
       "description": "Physical model of a struck bar - Vibraphone, Marimba, Bell sounds with Faust DSP",
       "tags": [
         "Physical modeling",
-        "Instrument"
+        "Synth voice"
       ]
     },
     {
@@ -87,7 +87,7 @@
       "description": "Karplus-Strong physical model of a plucked string - creates guitar, harp, and plucked instrument sounds",
       "tags": [
         "Physical modeling",
-        "Instrument",
+        "Synth voice",
         "Oscillator"
       ]
     },
@@ -97,7 +97,7 @@
       "description": "Physical flute model with internal breath envelope and overblow chaos - from soft woodwind to screaming multiphonics",
       "tags": [
         "Physical modeling",
-        "Instrument",
+        "Synth voice",
         "Oscillator"
       ]
     },
@@ -127,7 +127,7 @@
       "description": "Digital Yaybahar - coupled physical model with string, dispersive spring, and resonant tube body for sci-fi acoustic sounds",
       "tags": [
         "Physical modeling",
-        "Instrument",
+        "Synth voice",
         "Oscillator"
       ]
     },
@@ -137,7 +137,7 @@
       "description": "Waterphone - bowed metal rods with hydro-modulation for horror movie soundscapes",
       "tags": [
         "Physical modeling",
-        "Instrument",
+        "Synth voice",
         "Oscillator"
       ]
     },
@@ -147,7 +147,7 @@
       "description": "Physical model of a struck solid inside a resonant tube - morphs from strings to bells with acoustic chamber",
       "tags": [
         "Physical modeling",
-        "Instrument",
+        "Synth voice",
         "Oscillator"
       ]
     },
