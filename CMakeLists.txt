@@ -44,7 +44,13 @@ foreach(child ${children})
     endif()
 endforeach()
 
-# 5. The Plugin Artifact
+# 5. Release module filtering
+# Set RELEASE_MODULE_LIST to a semicolon-separated list of module slugs to build only those.
+# Example: cmake -DRELEASE_MODULE_LIST="Matter;ACID9Voice" ..
+# When empty (default), all modules are built.
+set(RELEASE_MODULE_LIST "" CACHE STRING "Semicolon-separated list of module slugs to include in release build. Empty = all modules.")
+
+# 6. The Plugin Artifact
 add_library(${PROJECT_NAME} MODULE src/plugin.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE RackSDK)
 
@@ -53,11 +59,20 @@ if(TARGET CommonLib)
     target_link_libraries(${PROJECT_NAME} PRIVATE CommonLib)
 endif()
 
-# Link discovered modules (skip modules marked for exclusion)
+# Link discovered modules (skip modules marked for exclusion or not in release list)
 set(ACTIVE_MODULES "")
 foreach(module_target ${MODULE_TARGETS})
     get_target_property(IS_EXCLUDED ${module_target} EXCLUDE_FROM_ALL)
     if(NOT IS_EXCLUDED)
+        # If RELEASE_MODULE_LIST is set, only include modules in the list
+        if(RELEASE_MODULE_LIST)
+            string(REGEX REPLACE "_Module$" "" module_slug "${module_target}")
+            list(FIND RELEASE_MODULE_LIST "${module_slug}" _idx)
+            if(_idx EQUAL -1)
+                message(STATUS "Release filter: skipping ${module_slug}")
+                continue()
+            endif()
+        endif()
         target_link_libraries(${PROJECT_NAME} PRIVATE ${module_target})
         list(APPEND ACTIVE_MODULES ${module_target})
     else()
@@ -65,7 +80,26 @@ foreach(module_target ${MODULE_TARGETS})
     endif()
 endforeach()
 
-# Define HAS_* for Faust modules that are being built
+# Define HAS_* for all modules that are being built
+# Every module uses conditional compilation so the release filter works
+if(Intersect_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_INTERSECT=1)
+endif()
+if(Cycloid_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CYCLOID=1)
+endif()
+if(GravityClock_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_GRAVITYCLOCK=1)
+endif()
+if(OctoLFO_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_OCTOLFO=1)
+endif()
+if(TheArchitect_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_THEARCHITECT=1)
+endif()
+if(Euclogic_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_EUCLOGIC=1)
+endif()
 if(MoogLPF_Module IN_LIST ACTIVE_MODULES)
     target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_MOOGLPF=1)
 endif()
@@ -102,11 +136,38 @@ endif()
 if(Matter_Module IN_LIST ACTIVE_MODULES)
     target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_MATTER=1)
 endif()
-if(Linkage_Module IN_LIST ACTIVE_MODULES)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_LINKAGE=1)
-endif()
 if(TheCauldron_Module IN_LIST ACTIVE_MODULES)
     target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_THECAULDRON=1)
+endif()
+if(VektorX_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_VEKTORX=1)
+endif()
+if(TR808_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_TR808=1)
+endif()
+if(ACID9Voice_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_ACID9VOICE=1)
+endif()
+if(ACID9Seq_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_ACID9SEQ=1)
+endif()
+if(TetanusCoil_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_TETANUSCOIL=1)
+endif()
+if(NutShaker_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_NUTSHAKER=1)
+endif()
+if(Euclogic2_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_EUCLOGIC2=1)
+endif()
+if(PhysicalChoir_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_PHYSICALCHOIR=1)
+endif()
+if(ChaosPad_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CHAOSPAD=1)
+endif()
+if(Linkage_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_LINKAGE=1)
 endif()
 # Set output name without lib prefix
 set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -122,7 +183,10 @@ if(APPLE)
         LINK_FLAGS "-undefined dynamic_lookup"
     )
 elseif(WIN32 OR MINGW)
-    set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".dll")
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        SUFFIX ".dll"
+        LINK_FLAGS "-static-libgcc -static-libstdc++"
+    )
 else()
     set_target_properties(${PROJECT_NAME} PROPERTIES
         SUFFIX ".so"

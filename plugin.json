@@ -7,11 +7,11 @@
   "author": "Tim Richardson",
   "authorEmail": "",
   "authorUrl": "",
-  "pluginUrl": "https://github.com/YOUR_USERNAME/WiggleRoom",
-  "manualUrl": "https://github.com/YOUR_USERNAME/WiggleRoom#documentation",
-  "sourceUrl": "https://github.com/YOUR_USERNAME/WiggleRoom",
+  "pluginUrl": "https://github.com/timini/WiggleRoom",
+  "manualUrl": "https://github.com/timini/WiggleRoom#documentation",
+  "sourceUrl": "https://github.com/timini/WiggleRoom",
   "donateUrl": "",
-  "changelogUrl": "https://github.com/YOUR_USERNAME/WiggleRoom/releases",
+  "changelogUrl": "https://github.com/timini/WiggleRoom/releases",
   "modules": [
     {
       "slug": "Intersect",
