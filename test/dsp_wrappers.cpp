@@ -212,3 +212,12 @@ std::unique_ptr<AbstractDSP> createPhysicalChoir() {
 std::unique_ptr<AbstractDSP> createChaosPad() {
     return std::make_unique<DSPWrapper<FaustGenerated::NS_ChaosPad::VCVRackDSP>>();
 }
+
+#undef __mydsp_H__
+
+// ==== Linkage ====
+#define FAUST_MODULE_NAME Linkage
+#include "linkage.hpp"
+std::unique_ptr<AbstractDSP> createLinkage() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_Linkage::VCVRackDSP>>();
+}

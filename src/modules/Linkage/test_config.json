@@ -1,0 +1,29 @@
+{
+  "module_type": "instrument",
+  "description": "Physical modeling synthesis with linked resonators",
+  "quality_thresholds": {
+    "thd_max_percent": 15.0,
+    "clipping_max_percent": 1.0,
+    "hnr_min_db": 5.0,
+    "allow_hot_signal": false
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 2.0,
+      "description": "Default linkage settings"
+    },
+    {
+      "name": "high_coupling",
+      "duration": 2.0,
+      "parameters": {
+        "coupling": 0.8
+      },
+      "description": "Strong resonator coupling"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": ["gate", "trigger"],
+    "steps": 10
+  }
+}

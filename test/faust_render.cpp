@@ -47,6 +47,7 @@ std::unique_ptr<AbstractDSP> createTetanusCoil();
 std::unique_ptr<AbstractDSP> createNutShaker();
 std::unique_ptr<AbstractDSP> createPhysicalChoir();
 std::unique_ptr<AbstractDSP> createChaosPad();
+std::unique_ptr<AbstractDSP> createLinkage();
 
 // ============================================================================
 // WAV File Writer (no external dependencies)
@@ -125,6 +126,7 @@ std::unique_ptr<AbstractDSP> createDSP(const std::string& moduleName) {
     if (moduleName == "NutShaker") return createNutShaker();
     if (moduleName == "PhysicalChoir") return createPhysicalChoir();
     if (moduleName == "ChaosPad") return createChaosPad();
+    if (moduleName == "Linkage") return createLinkage();
     return nullptr;
 }
 
@@ -133,7 +135,7 @@ std::vector<std::string> getModuleNames() {
             "ModalBell", "PluckedString", "ChaosFlute", "TriPhaseEnsemble",
             "InfiniteFolder", "SpaceCello", "TheAbyss", "Matter",
             "TheCauldron", "VektorX", "TR808", "ACID9Voice", "TetanusCoil",
-            "NutShaker", "PhysicalChoir", "ChaosPad"};
+            "NutShaker", "PhysicalChoir", "ChaosPad", "Linkage"};
 }
 
 // ============================================================================
