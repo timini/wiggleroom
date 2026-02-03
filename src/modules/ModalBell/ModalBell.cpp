@@ -1,6 +1,7 @@
 /******************************************************************************
  * MODAL BELL
- * Physical model of a struck bar - Vibraphone, Marimba, Bell sounds
+ * Morphing Percussion Synthesizer - Wood Block to Glockenspiel
+ * Uses modal synthesis with 5-instrument interpolation
  * Built with Faust DSP
  ******************************************************************************/
 
@@ -17,25 +18,31 @@ extern Plugin* pluginInstance;
 namespace WiggleRoom {
 
 /**
- * ModalBell - Physical Model of a Struck Bar
+ * ModalBell - Morphing Percussion Synthesizer
  *
- * A physically modeled instrument that sounds like a Vibraphone,
- * Marimba, or glassy bell depending on the knob settings.
+ * A physically modeled percussion instrument that morphs between:
+ *   0.00 = Wood Block (inharmonic, hollow, short decay)
+ *   0.25 = Marimba (harmonic 1:4 ratio, warm wood)
+ *   0.50 = Vibraphone (harmonic, singing metal, long decay)
+ *   0.75 = Kalimba (anharmonic, clamped tine buzz)
+ *   1.00 = Glockenspiel (stiff steel bar, piercing)
  *
  * Inputs:
  *   - V/Oct: Pitch control (0V = C4)
- *   - Gate: Trigger input (strikes when > 1V)
+ *   - Gate: Trigger input (strikes when > 0.5V)
  *
  * Parameters:
- *   - Hardness: Mallet softness (0 = soft, 1 = hard)
- *   - Position: Strike position on bar (0 = edge, 1 = center)
- *   - Preset: Instrument type (Marimba, Vibraphone, etc.)
+ *   - Morph: Instrument type (main macro control)
+ *   - Brightness: Harmonic content
+ *   - Damping: Choke the sound (0=ring, 1=muted)
+ *   - Strike: Position on bar (0=edge, 0.5=center)
+ *   - Velocity: Mallet hardness (0=soft wool, 1=hard metal)
  */
 struct ModalBell : FaustModule<VCVRackDSP> {
     enum ParamId {
+        MORPH_PARAM,
         BRIGHTNESS_PARAM,
-        DECAY_PARAM,
-        MATERIAL_PARAM,
+        DAMPING_PARAM,
         STRIKE_PARAM,
         VELOCITY_PARAM,
         PARAMS_LEN
@@ -43,9 +50,9 @@ struct ModalBell : FaustModule<VCVRackDSP> {
     enum InputId {
         VOCT_INPUT,
         GATE_INPUT,
+        MORPH_CV_INPUT,
         BRIGHTNESS_CV_INPUT,
-        DECAY_CV_INPUT,
-        MATERIAL_CV_INPUT,
+        DAMPING_CV_INPUT,
         STRIKE_CV_INPUT,
         VELOCITY_CV_INPUT,
         INPUTS_LEN
@@ -63,18 +70,21 @@ struct ModalBell : FaustModule<VCVRackDSP> {
         config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
 
         // Configure parameters
+        // Morph is the main macro control - labels show instrument positions
+        auto* morphParam = configParam(MORPH_PARAM, 0.0f, 1.0f, 0.25f, "Morph");
+        morphParam->description = "0=Wood Block, 0.25=Marimba, 0.5=Vibraphone, 0.75=Kalimba, 1=Glockenspiel";
+
         configParam(BRIGHTNESS_PARAM, 0.0f, 1.0f, 0.5f, "Brightness", "%", 0.f, 100.f);
-        configParam(DECAY_PARAM, 0.1f, 5.0f, 0.5f, "Decay", " s");
-        configParam(MATERIAL_PARAM, 0.0f, 1.0f, 0.5f, "Material", "%", 0.f, 100.f);
-        configParam(STRIKE_PARAM, 0.0f, 1.0f, 0.3f, "Strike Position", "%", 0.f, 100.f);
+        configParam(DAMPING_PARAM, 0.0f, 1.0f, 0.0f, "Damping", "%", 0.f, 100.f);
+        configParam(STRIKE_PARAM, 0.03f, 0.5f, 0.3f, "Strike Position", "%", 0.f, 200.f);
         configParam(VELOCITY_PARAM, 0.0f, 1.0f, 0.8f, "Velocity", "%", 0.f, 100.f);
 
         // Configure inputs
         configInput(VOCT_INPUT, "V/Oct");
         configInput(GATE_INPUT, "Gate");
+        configInput(MORPH_CV_INPUT, "Morph CV");
         configInput(BRIGHTNESS_CV_INPUT, "Brightness CV");
-        configInput(DECAY_CV_INPUT, "Decay CV");
-        configInput(MATERIAL_CV_INPUT, "Material CV");
+        configInput(DAMPING_CV_INPUT, "Damping CV");
         configInput(STRIKE_CV_INPUT, "Strike CV");
         configInput(VELOCITY_CV_INPUT, "Velocity CV");
 
@@ -83,19 +93,19 @@ struct ModalBell : FaustModule<VCVRackDSP> {
         configOutput(RIGHT_OUTPUT, "Right");
 
         // Map VCV parameters to Faust DSP parameters (alphabetical order)
-        // Faust params: 0=brightness, 1=decay, 2=gate, 3=material, 4=strike, 5=velocity, 6=volts
+        // Faust params: 0=brightness, 1=damping, 2=gate, 3=morph, 4=strike, 5=velocity, 6=volts
         mapParam(BRIGHTNESS_PARAM, 0);
-        mapParam(DECAY_PARAM, 1);
-        mapParam(MATERIAL_PARAM, 3);
+        mapParam(DAMPING_PARAM, 1);
+        mapParam(MORPH_PARAM, 3);
         mapParam(STRIKE_PARAM, 4);
         mapParam(VELOCITY_PARAM, 5);
 
-        // Map CV inputs (±5V = ±100% modulation for 0-1 params, ±5V for decay)
-        mapCVInput(BRIGHTNESS_CV_INPUT, 0, false, 0.1f);  // ±50% at ±5V
-        mapCVInput(DECAY_CV_INPUT, 1, false, 0.2f);       // ±1s at ±5V
-        mapCVInput(MATERIAL_CV_INPUT, 3, false, 0.1f);
-        mapCVInput(STRIKE_CV_INPUT, 4, false, 0.1f);
-        mapCVInput(VELOCITY_CV_INPUT, 5, false, 0.1f);
+        // Map CV inputs (±5V modulation)
+        mapCVInput(BRIGHTNESS_CV_INPUT, 0, false, 0.1f);   // ±50% at ±5V
+        mapCVInput(DAMPING_CV_INPUT, 1, false, 0.1f);      // ±50% at ±5V
+        mapCVInput(MORPH_CV_INPUT, 3, false, 0.1f);        // ±50% at ±5V
+        mapCVInput(STRIKE_CV_INPUT, 4, false, 0.05f);      // ±25% at ±5V (0-0.5 range)
+        mapCVInput(VELOCITY_CV_INPUT, 5, false, 0.1f);     // ±50% at ±5V
     }
 
     void process(const ProcessArgs& args) override {
@@ -110,7 +120,7 @@ struct ModalBell : FaustModule<VCVRackDSP> {
         float gate = inputs[GATE_INPUT].getVoltage();
 
         // Set Faust parameters for inputs
-        // Faust params: 0=brightness, 1=decay, 2=gate, 3=material, 4=strike, 5=velocity, 6=volts
+        // Faust params: 0=brightness, 1=damping, 2=gate, 3=morph, 4=strike, 5=velocity, 6=volts
         faustDsp.setParamValue(6, voct);   // volts
         faustDsp.setParamValue(2, gate);   // gate
 
@@ -151,33 +161,33 @@ struct ModalBellWidget : ModuleWidget {
         float xLeft = 25.0f;
         float xRight = box.size.x - 25.0f;
 
-        // Row 1: Decay (big knob) - moved down to not cover title
+        // Row 1: Morph (big knob) - the main macro control
         addParam(createParamCentered<RoundBigBlackKnob>(
-            Vec(xCenter, 70), module, ModalBell::DECAY_PARAM));
+            Vec(xCenter, 70), module, ModalBell::MORPH_PARAM));
 
-        // Row 2: Brightness + Material (small knobs)
+        // Row 2: Brightness + Velocity (small knobs)
         addParam(createParamCentered<RoundBlackKnob>(
             Vec(xLeft, 120), module, ModalBell::BRIGHTNESS_PARAM));
         addParam(createParamCentered<RoundBlackKnob>(
-            Vec(xRight, 120), module, ModalBell::MATERIAL_PARAM));
+            Vec(xRight, 120), module, ModalBell::VELOCITY_PARAM));
 
-        // Row 3: Strike + Velocity (small knobs)
+        // Row 3: Strike + Damping (small knobs)
         addParam(createParamCentered<RoundBlackKnob>(
             Vec(xLeft, 165), module, ModalBell::STRIKE_PARAM));
         addParam(createParamCentered<RoundBlackKnob>(
-            Vec(xRight, 165), module, ModalBell::VELOCITY_PARAM));
+            Vec(xRight, 165), module, ModalBell::DAMPING_PARAM));
 
-        // Row 4: CV inputs for all params
+        // Row 4: CV inputs for main params
         addInput(createInputCentered<PJ301MPort>(
-            Vec(xCenter, 210), module, ModalBell::DECAY_CV_INPUT));
+            Vec(xCenter, 210), module, ModalBell::MORPH_CV_INPUT));
         addInput(createInputCentered<PJ301MPort>(
             Vec(xLeft, 235), module, ModalBell::BRIGHTNESS_CV_INPUT));
         addInput(createInputCentered<PJ301MPort>(
-            Vec(xRight, 235), module, ModalBell::MATERIAL_CV_INPUT));
+            Vec(xRight, 235), module, ModalBell::VELOCITY_CV_INPUT));
         addInput(createInputCentered<PJ301MPort>(
             Vec(xLeft, 270), module, ModalBell::STRIKE_CV_INPUT));
         addInput(createInputCentered<PJ301MPort>(
-            Vec(xRight, 270), module, ModalBell::VELOCITY_CV_INPUT));
+            Vec(xRight, 270), module, ModalBell::DAMPING_CV_INPUT));
 
         // Row 5: V/Oct and Gate
         addInput(createInputCentered<PJ301MPort>(

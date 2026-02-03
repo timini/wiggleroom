@@ -33,10 +33,11 @@ HP_WIDTH_MM = 15.24  # 1HP in mm
 PANEL_HEIGHT_MM = 380  # Standard 3U height in mm
 DEFAULT_HP = 8
 
-# Module HP widths (from SVG files)
+# Module HP widths (from SVG files or widget code)
 MODULE_HP = {
     "BigReverb": 4,
     "ChaosFlute": 4,
+    "VektorX": 20,
     "Cycloid": 12,
     "GravityClock": 2,
     "InfiniteFolder": 2,
@@ -51,8 +52,17 @@ MODULE_HP = {
     "SpaceCello": 4,
     "SpectralResonator": 4,
     "TheAbyss": 4,
-    "TheArchitect": 5,
+    "TheArchitect": 16,
     "TheCauldron": 3,
+    "TR808": 26,
+    "Euclogic": 40,
+    "Euclogic2": 20,
+    "ACID9Voice": 20,
+    "ACID9Seq": 16,
+    "TetanusCoil": 8,
+    "NutShaker": 8,
+    "PhysicalChoir": 8,
+    "ChaosPad": 16,
 }
 
 

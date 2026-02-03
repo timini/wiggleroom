@@ -1,11 +1,13 @@
 """
-Faust Module Development Agents
+Faust Module Development Automation Tools
 
-A multi-agent system for iterative Faust DSP development:
-- FaustDevAgent: Writes and modifies Faust DSP code
-- VerifierAgent: Builds and runs tests
-- JudgeAgent: Evaluates results and generates fix instructions
-- Orchestrator: Coordinates the development loop
+Python automation for the iterative Faust DSP development feedback loop:
+- VerifierAgent: Runs builds and tests, collects metrics
+- JudgeAgent: Evaluates metrics and suggests fixes
+- Orchestrator: Coordinates the verification/judgment cycle
+
+Note: These are automation tools, not Claude Code subagents.
+The actual development work is done by Claude or a human developer.
 """
 
 from .verifier_agent import VerifierAgent

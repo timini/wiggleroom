@@ -1,0 +1,85 @@
+{
+  "module_type": "effect",
+  "description": "Kaoss Pad-style multi-FX for drum mangling with X/Y/Z control and 8 algorithms",
+  "quality_thresholds": {
+    "thd_max_percent": 25.0,
+    "clipping_max_percent": 5.0,
+    "hnr_min_db": -5.0,
+    "allow_hot_signal": true
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 2.0,
+      "description": "Default LPF effect with mid settings"
+    },
+    {
+      "name": "bitcrush",
+      "duration": 2.0,
+      "parameters": {
+        "fx_select": 1,
+        "x": 0.3,
+        "y": 0.5,
+        "z": 0.2,
+        "gate_env": 1.0,
+        "mix": 1.0
+      },
+      "description": "Bitcrush effect - lo-fi destruction"
+    },
+    {
+      "name": "delay",
+      "duration": 3.0,
+      "parameters": {
+        "fx_select": 2,
+        "x": 0.4,
+        "y": 0.6,
+        "z": 0.3,
+        "gate_env": 1.0,
+        "mix": 0.7
+      },
+      "description": "Tape delay with feedback"
+    },
+    {
+      "name": "reverb",
+      "duration": 3.0,
+      "parameters": {
+        "fx_select": 5,
+        "x": 0.7,
+        "y": 0.5,
+        "z": 0.3,
+        "gate_env": 1.0,
+        "mix": 0.8
+      },
+      "description": "Plate reverb with long decay"
+    },
+    {
+      "name": "ringmod",
+      "duration": 2.0,
+      "parameters": {
+        "fx_select": 7,
+        "x": 0.5,
+        "y": 0.6,
+        "z": 0.0,
+        "gate_env": 1.0,
+        "mix": 1.0
+      },
+      "description": "Ring modulator - metallic tones"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": ["clock_period", "clock_synced", "div_mult", "gate_env", "fx_select"],
+    "steps": 8
+  },
+  "showcase": {
+    "duration": 20.0,
+    "automations": [
+      {"param": "fx_select", "start_time": 0.0, "end_time": 0.0, "start_value": 0.0, "end_value": 0.0},
+      {"param": "gate_env", "start_time": 0.0, "end_time": 20.0, "start_value": 1.0, "end_value": 1.0},
+      {"param": "mix", "start_time": 0.0, "end_time": 20.0, "start_value": 0.5, "end_value": 1.0},
+      {"param": "x", "start_time": 0.0, "end_time": 10.0, "start_value": 0.1, "end_value": 0.9},
+      {"param": "x", "start_time": 10.0, "end_time": 20.0, "start_value": 0.9, "end_value": 0.1},
+      {"param": "y", "start_time": 0.0, "end_time": 20.0, "start_value": 0.2, "end_value": 0.8},
+      {"param": "z", "start_time": 0.0, "end_time": 20.0, "start_value": 0.0, "end_value": 0.7}
+    ]
+  }
+}

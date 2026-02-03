@@ -1,139 +1,101 @@
-# Judge Agent
+# Judge Subagent
 
-Evaluate verification results and generate prioritized fix instructions.
+Evaluate verification results and generate prioritized fix instructions for the dev agent.
 
-## When to Use
+## Task Tool Configuration
 
-Use this agent when you need to:
-- Evaluate test results from the Verifier agent
-- Determine if a module passes quality standards
-- Get prioritized list of issues to fix
-- Generate actionable fix instructions with Faust code hints
-
-## Capabilities
-
-- **Result evaluation**: Analyzes VerificationResult for issues
-- **Severity classification**: Categorizes issues as CRITICAL, HIGH, MEDIUM, LOW
-- **Fix prioritization**: Orders issues by severity and impact
-- **Code hints**: Provides Faust DSP code snippets to fix common issues
-- **Verdict generation**: PASS, NEEDS_WORK, or FAIL
-
-## Usage
-
-```bash
-# Evaluate a module and get judgment
-python3 test/agents/judge_agent.py ModuleName
-
-# JSON output
-python3 test/agents/judge_agent.py ModuleName --json
-
-# Generate fix instructions (markdown format)
-just agent-fix ModuleName
+```
+subagent_type: "general-purpose"
+description: "Judge {ModuleName}"
 ```
 
-## Severity Levels
+## Prompt
 
-| Severity | Action | Examples |
-|----------|--------|----------|
-| **CRITICAL** | Fix immediately | Build failure, silent output, severe clipping (>15%) |
-| **HIGH** | Fix before release | Major clipping (5-15%), very low quality score (<60) |
-| **MEDIUM** | Should fix | Parameter issues, AI-detected problems, low HNR |
-| **LOW** | Optional | Minor suggestions, optimization opportunities |
+You are the Judge for Faust DSP module development.
 
-## Output Structure
+Your task: Evaluate the verification results for **{MODULE_NAME}** and generate prioritized fix instructions.
 
-The judge returns a `JudgmentResult` with:
+## Verification Results
 
-```json
-{
-  "module_name": "ChaosFlute",
-  "verdict": "needs_work",
-  "overall_score": 68,
-  "issues": [
-    {
-      "severity": "high",
-      "category": "clipping",
-      "description": "Clipping at 8.5% exceeds threshold of 5.0%",
-      "fix_hint": "Add soft limiter or reduce output gain"
-    }
-  ],
-  "fix_instructions": "..."
-}
+{PASTE_VERIFIER_OUTPUT_HERE}
+
+## Severity Classification
+
+| Severity | Criteria |
+|----------|----------|
+| CRITICAL | Build failure, silent output, clipping >15%, crashes |
+| HIGH | Clipping 5-15%, quality score <60, severe distortion |
+| MEDIUM | THD >15%, HNR <10dB, AI-detected harshness, parameter issues |
+| LOW | Minor suggestions, optimization opportunities |
+
+## Pass Thresholds
+
+- Build: Must succeed
+- Clipping: <5% (or module-specific threshold in test_config.json)
+- Quality Score: ≥70
+- THD: <15% (higher OK for distortion effects)
+- HNR: >0 dB
+
+## Output Format
+
+Return a structured judgment in this exact format:
+
 ```
+## Judgment for {MODULE_NAME}
 
-## Fix Instructions Format
+### Verdict: [PASS / NEEDS_WORK / CRITICAL_ISSUES]
+### Score: [0-100]
 
-When verdict is not PASS, the judge generates fix instructions:
+### Priority Issues to Fix
 
-```markdown
-# Fix Instructions for ChaosFlute
-
-DSP File: `src/modules/ChaosFlute/chaos_flute.dsp`
-
-## Priority Issues to Fix
-
-### 1. [CRITICAL] clipping
-**Issue:** Severe clipping: 32.0% of samples
-**Fix:** Add frequency-dependent gain compensation
-**Faust hint:**
+#### #1 [CRITICAL/HIGH/MEDIUM/LOW] {Category}
+- **Issue:** {description of the problem}
+- **Root cause:** {why this is happening in the DSP code}
+- **Fix:** {specific instruction for the dev agent}
+- **Faust hint:**
 ```faust
-freq_compensation = min(1.0, freq / 261.62);
-signal = raw_signal * freq_compensation;
-```
+{code snippet showing the fix}
 ```
 
-## Common Fix Patterns
+#### #2 [SEVERITY] {Category}
+- **Issue:** ...
+- **Fix:** ...
 
-The judge provides these common fixes:
+### Next Action
+{Clear instruction for what to do next - e.g., "Fix the CRITICAL clipping issue by adding ma.tanh output limiting"}
+```
+
+## Common Fix Recommendations
 
 **Clipping:**
 ```faust
-output_gain = 0.5;
-output = signal : ma.tanh : *(output_gain);
+// Add soft limiting before output
+output = signal : ma.tanh : *(0.7);
 ```
 
-**Transient clicks:**
+**Clicks/Pops:**
 ```faust
+// Smooth gate signal
 gate_smooth = gate : si.smooth(0.995);
 ```
 
-**DC offset:**
+**DC Offset:**
 ```faust
+// Add DC blocker
 output = signal : fi.dcblocker;
 ```
 
-**Silent output:**
+**Noise:**
 ```faust
-min_excitation = 0.05;
-excitation = min_excitation + param * (max_excitation - min_excitation);
+// Add lowpass filter
+output = signal : fi.lowpass(2, 12000);
 ```
 
-## Integration
+**High THD:**
+- Reduce saturation amount
+- Check parameter ranges in test_config.json
+- Consider if high THD is intentional for this effect type
 
-This agent is typically called after the Verifier agent:
+## Important
 
-```
-Verifier → Judge → Faust Dev Agent
-```
-
-The development loop:
-1. Verifier runs tests → VerificationResult
-2. Judge evaluates → JudgmentResult with fix instructions
-3. Faust Dev Agent applies fixes
-4. Loop until verdict is PASS
-
-## Programmatic Usage
-
-```python
-from test.agents.judge_agent import JudgeAgent
-from test.agents.verifier_agent import VerifierAgent
-
-verifier = VerifierAgent()
-judge = JudgeAgent()
-
-result = verifier.verify("ChaosFlute")
-judgment = judge.evaluate(result)
-
-if judgment.verdict != "pass":
-    print(judgment.fix_instructions)
-```
+Do NOT apply fixes yourself. Generate clear, prioritized instructions for the Dev agent. Only the #1 priority fix should be applied per iteration.

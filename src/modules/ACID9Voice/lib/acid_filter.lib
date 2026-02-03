@@ -1,0 +1,142 @@
+// acid_filter.lib - Dual filter architecture (ACID / LEAD)
+// Part of ACID9Voice module for WiggleRoom VCV Rack plugin
+//
+// ACID mode: 18dB diode ladder (TB-303 style, bass loss at high resonance)
+// LEAD mode: 24dB OTA ladder (self-oscillating, cleaner)
+// Crossfade: Equal-power blend between filter modes
+
+import("stdfaust.lib");
+
+// ============================================================================
+// DIODE LADDER FILTER (18dB/octave) - ACID MODE
+// ============================================================================
+
+// TB-303 style diode ladder filter
+// Characteristics:
+// - 18dB/octave slope (3-pole)
+// - Bass loss at high resonance (authentic 303 behavior)
+// - Soft saturation in feedback path
+diode_ladder(fc, res, sig) = output
+with {
+    // Frequency coefficient (cutoff normalized to sample rate)
+    g = tan(ma.PI * min(fc, ma.SR * 0.45) / ma.SR);
+
+    // Resonance with bass compensation factor
+    // Higher resonance = more bass loss (303 characteristic)
+    k = res * 4.0;  // Resonance scaling (0-4)
+    bass_comp = 1.0 - (res * 0.3);  // Reduce bass as res increases
+
+    // Diode saturation function (soft clip)
+    diode_sat(x) = ma.tanh(x * 1.5) / 1.5;
+
+    // 3-pole cascade with feedback
+    // Each stage is a one-pole lowpass with diode saturation
+    stage1(x) = fi.pole(g, diode_sat(x * bass_comp));
+    stage2(x) = fi.pole(g, diode_sat(x));
+    stage3(x) = fi.pole(g, diode_sat(x));
+
+    // Feedback from output
+    fb = _ : stage1 : stage2 : stage3;
+    output = sig - (fb ~ _) * k : stage1 : stage2 : stage3;
+};
+
+// Simplified diode ladder using basic resonant lowpass
+// Provides 303-like sound without complex diode modeling
+diode_ladder_simple(fc, res) = fi.resonlp(fc_safe, q, 1.0)
+with {
+    fc_safe = max(20, min(fc, ma.SR * 0.45));
+    q = 0.5 + res * 10;  // Q from 0.5 to 10.5
+};
+
+// ============================================================================
+// OTA LADDER FILTER (24dB/octave) - LEAD MODE
+// ============================================================================
+
+// Moog-style OTA ladder filter using resonant lowpass cascade
+// Provides 24dB/oct slope with self-oscillation capability
+ota_ladder(fc, res) = fi.resonlp(fc_safe, q, 1.0) : fi.resonlp(fc_safe, q * 0.7, 1.0)
+with {
+    fc_safe = max(20, min(fc, ma.SR * 0.45));
+    q = 0.5 + res * 15;  // Higher Q for self-oscillation
+};
+
+// Alternative using resonant lowpass
+ota_ladder_alt(fc, res, sig) = sig : fi.resonlp(fc, res * 10, 1.0);
+
+// ============================================================================
+// DUAL FILTER WITH CROSSFADE
+// ============================================================================
+
+// Dual filter with equal-power crossfade
+// mode: 0 = ACID (diode ladder), 1 = LEAD (OTA ladder)
+// fc: cutoff frequency in Hz
+// res: resonance (0-1)
+dual_filter(fc, res, mode, sig) = output
+with {
+    // Clamp parameters
+    fc_clamped = max(20, min(fc, ma.SR * 0.45));
+    res_clamped = max(0, min(res, 0.99));
+
+    // Filter outputs
+    acid_out = sig : diode_ladder_simple(fc_clamped, res_clamped);
+    lead_out = sig : ota_ladder(fc_clamped, res_clamped);
+
+    // Equal-power crossfade coefficients
+    mode_smooth = mode : si.smoo;  // Smooth mode changes
+    acid_gain = cos(mode_smooth * ma.PI * 0.5);
+    lead_gain = sin(mode_smooth * ma.PI * 0.5);
+
+    // Mix
+    output = acid_out * acid_gain + lead_out * lead_gain;
+};
+
+// Stereo version
+dual_filter_stereo(fc, res, mode) = dual_filter(fc, res, mode), dual_filter(fc, res, mode);
+
+// ============================================================================
+// GRIT SATURATION
+// ============================================================================
+
+// Pre-filter saturation (grit control)
+// Creates even-order harmonics for that "dirty" sound
+// amount: 0 = clean, 1 = heavily saturated
+grit_sat(amount, sig) = output
+with {
+    // Blend between clean and saturated
+    amount_smooth = amount : si.smoo;
+
+    // Even-order harmonic saturation using asymmetric soft clip
+    // This creates the characteristic "gritty" 303 sound
+    saturated = sig : asymmetric_sat;
+
+    // Asymmetric saturation (more even harmonics)
+    asymmetric_sat(x) = ma.tanh(x * (1 + amount_smooth * 3)) *
+                        (1 + 0.3 * amount_smooth * x * x);
+
+    // Drive compensation
+    drive_comp = 1.0 / (1 + amount_smooth * 0.5);
+
+    // Mix clean and saturated
+    output = (sig * (1 - amount_smooth) + saturated * amount_smooth) * drive_comp;
+};
+
+// Stereo grit
+grit_sat_stereo(amount) = grit_sat(amount), grit_sat(amount);
+
+// ============================================================================
+// FILTER ENVELOPE
+// ============================================================================
+
+// AD envelope for filter modulation
+// gate: trigger signal
+// attack: attack time in seconds
+// decay: decay time in seconds
+filter_env(gate, attack, decay) = en.adsr(attack, decay, 0, 0.01, gate);
+
+// Filter envelope with accent boost
+// When accent is active, envelope depth is multiplied
+filter_env_accent(gate, attack, decay, accent, accent_boost) = env * boost
+with {
+    env = filter_env(gate, attack, decay);
+    boost = 1.0 + accent * (accent_boost - 1.0);
+};

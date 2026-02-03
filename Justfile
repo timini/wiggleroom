@@ -299,6 +299,111 @@ validate module="": build
 # Run all tests (Faust compilation + module tests)
 test: test-faust test-modules
 
+# --- Showcase Reports ---
+# Note: For Gemini AI analysis, create .env file with: GEMINI_API_KEY=your_key
+# The scripts automatically load .env from project root
+
+# Generate showcase report for all modules (includes AI analysis if .env has GEMINI_API_KEY)
+showcase: build
+    python3 test/generate_showcase_report.py -v
+    @echo "Open test/output/showcase_report.html to view results"
+
+# Generate showcase report for specific module
+showcase-module module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/generate_showcase_report.py --module "{{module}}" -v
+        echo "Open test/output/showcase_report.html to view results"
+    else
+        echo "Usage: just showcase-module ModuleName"
+        exit 1
+    fi
+
+# Generate showcase report without AI analysis (faster)
+showcase-fast: build
+    python3 test/generate_showcase_report.py --skip-ai -v
+    @echo "Open test/output/showcase_report.html to view results"
+
+# Generate showcase with systematic parameter sweeps (auto-generated comprehensive coverage)
+showcase-systematic: build
+    python3 test/generate_showcase_report.py --systematic -v
+    @echo "Open test/output/showcase_report.html to view results"
+
+# Render showcase audio only (no report)
+render-showcase module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        ./build/test/faust_render --module "{{module}}" --showcase --output "test/output/{{module}}_showcase.wav"
+        echo "Rendered test/output/{{module}}_showcase.wav"
+    else
+        echo "Usage: just render-showcase ModuleName"
+        exit 1
+    fi
+
+# --- Parameter Grid Analysis ---
+
+# Generate parameter grid analysis for a module (all permutations)
+param-grid module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/generate_param_grid.py --module "{{module}}" -v
+        echo "Open test/output/param_grids/{{module}}.html to view results"
+    else
+        echo "Usage: just param-grid ModuleName"
+        exit 1
+    fi
+
+# Generate parameter grid for all modules
+param-grid-all: build
+    python3 test/generate_param_grid.py --all -v
+    @echo "Open test/output/param_grids/ to view results"
+
+# Generate parameter grid without AI analysis (faster)
+param-grid-fast module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/generate_param_grid.py --module "{{module}}" --no-ai -v
+        echo "Open test/output/param_grids/{{module}}.html to view results"
+    else
+        python3 test/generate_param_grid.py --all --no-ai -v
+        echo "Open test/output/param_grids/ to view results"
+    fi
+
+# Generate parameter grid with CLAP only (no Gemini)
+param-grid-clap module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/generate_param_grid.py --module "{{module}}" --no-gemini -v
+        echo "Open test/output/param_grids/{{module}}.html to view results"
+    else
+        python3 test/generate_param_grid.py --all --no-gemini -v
+        echo "Open test/output/param_grids/ to view results"
+    fi
+
+# Full analysis: showcase + parameter grid
+full-analysis module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        echo "=== Showcase Report ==="
+        python3 test/generate_showcase_report.py --module "{{module}}" -v
+        echo ""
+        echo "=== Parameter Grid Analysis ==="
+        python3 test/generate_param_grid.py --module "{{module}}" -v
+        echo ""
+        echo "Reports:"
+        echo "  - test/output/showcase_report.html"
+        echo "  - test/output/param_grids/{{module}}.html"
+    else
+        echo "Usage: just full-analysis ModuleName"
+        exit 1
+    fi
+
 # --- Agent System ---
 
 # Run single verification + judgment iteration
@@ -344,6 +449,37 @@ agent-json module="": build
         echo "Usage: just agent-json ModuleName"
         exit 1
     fi
+
+# --- Faceplate Generation ---
+
+# Generate AI-powered faceplate PNG for a module (uses Gemini image generation)
+# Requires GEMINI_API_KEY in .env file
+# PNG files are loaded via NanoVG ImagePanel widget at runtime
+faceplate module="":
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 scripts/generate_faceplate.py "{{module}}"
+    else
+        echo "Usage: just faceplate ModuleName"
+        echo "       just faceplate --all"
+        python3 scripts/generate_faceplate.py --list
+    fi
+
+# Preview faceplate prompt (no generation)
+faceplate-prompt module="":
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 scripts/generate_faceplate.py "{{module}}" --prompt-only
+    else
+        echo "Usage: just faceplate-prompt ModuleName"
+        exit 1
+    fi
+
+# Generate faceplates for all Faust DSP modules
+faceplate-all:
+    python3 scripts/generate_faceplate.py --all
 
 # --- Development Helpers ---
 

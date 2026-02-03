@@ -22,6 +22,9 @@ Rack-SDK/
 # Allow Faust library files (.lib is Faust's library extension)
 !src/modules/**/*.lib
 *.dylib
+
+# Allow Faust library files (.lib is Faust's library extension)
+!src/modules/**/*.lib
 *.so
 *.dll
 

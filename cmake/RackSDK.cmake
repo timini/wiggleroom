@@ -73,6 +73,7 @@ elseif(WIN32 OR MINGW)
     target_compile_definitions(RackSDK INTERFACE ARCH_WIN)
     target_link_directories(RackSDK INTERFACE "${RACK_SDK_DIR}/dep/lib")
     # Windows requires explicit linking against the Rack import library
+    # The SDK ships libRack.dll.a (MinGW import library for Rack.dll)
     file(GLOB RACK_IMPORT_LIBS "${RACK_SDK_DIR}/libRack*" "${RACK_SDK_DIR}/Rack*")
     message(STATUS "Windows Rack SDK root files: ${RACK_IMPORT_LIBS}")
     if(EXISTS "${RACK_SDK_DIR}/libRack.dll.a")

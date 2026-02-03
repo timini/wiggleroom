@@ -1,0 +1,79 @@
+{
+  "module_type": "instrument",
+  "description": "Stochastic percussion synthesizer using PhISM (Physically Informed Stochastic Modeling) for particle collision sounds",
+  "quality_thresholds": {
+    "thd_max_percent": 20.0,
+    "clipping_max_percent": 2.0,
+    "hnr_min_db": 3.0
+  },
+  "test_scenarios": [
+    {
+      "name": "single_nut",
+      "duration": 2.0,
+      "trigger_param": "gate",
+      "parameters": {
+        "gate": 10,
+        "density": 3,
+        "pitch": 800,
+        "resonance": 12
+      },
+      "description": "Single nut clicks - woodblock character"
+    },
+    {
+      "name": "nut_cluster",
+      "duration": 2.0,
+      "trigger_param": "gate",
+      "parameters": {
+        "gate": 10,
+        "density": 60,
+        "pitch": 1000,
+        "resonance": 8
+      },
+      "description": "Classic shaker rattle"
+    },
+    {
+      "name": "maraca",
+      "duration": 2.0,
+      "trigger_param": "gate",
+      "parameters": {
+        "gate": 10,
+        "density": 350,
+        "pitch": 3500,
+        "resonance": 4
+      },
+      "description": "High density maraca/egg shaker"
+    },
+    {
+      "name": "goat_hooves",
+      "duration": 2.0,
+      "trigger_param": "gate",
+      "parameters": {
+        "gate": 10,
+        "density": 50,
+        "pitch": 600,
+        "resonance": 15,
+        "chaos": 0.9
+      },
+      "description": "Low pitch rattling - goat hooves character"
+    }
+  ],
+  "showcase": {
+    "duration": 12.0,
+    "trigger_sequence": [
+      {"time": 0.0, "param": "gate", "value": 10.0, "duration": 0.8},
+      {"time": 1.5, "param": "gate", "value": 10.0, "duration": 0.5},
+      {"time": 2.5, "param": "gate", "value": 10.0, "duration": 1.2},
+      {"time": 4.0, "param": "gate", "value": 10.0, "duration": 0.3},
+      {"time": 4.5, "param": "gate", "value": 10.0, "duration": 0.3},
+      {"time": 5.0, "param": "gate", "value": 10.0, "duration": 0.3},
+      {"time": 6.0, "param": "gate", "value": 10.0, "duration": 2.0},
+      {"time": 9.0, "param": "gate", "value": 10.0, "duration": 0.6},
+      {"time": 10.0, "param": "gate", "value": 10.0, "duration": 1.5}
+    ],
+    "automations": [
+      {"param": "density", "start_time": 0.0, "end_time": 6.0, "start_value": 5, "end_value": 300},
+      {"param": "density", "start_time": 6.0, "end_time": 12.0, "start_value": 300, "end_value": 30},
+      {"param": "pitch", "start_time": 0.0, "end_time": 12.0, "start_value": 600, "end_value": 3000}
+    ]
+  }
+}

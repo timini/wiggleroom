@@ -1,0 +1,88 @@
+// tri_core_osc.lib - 3-oscillator engine with ISOTOPE control
+// Part of ACID9Voice module for WiggleRoom VCV Rack plugin
+//
+// ISOTOPE control affects:
+// - Detune: Side oscillators detune from center (0-30 cents)
+// - Volume: Side oscillators fade in as ISOTOPE increases
+// - Spread: Side oscillators pan left/right for stereo width
+
+import("stdfaust.lib");
+import("morph_osc.lib");
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+MAX_DETUNE_CENTS = 30;  // Maximum detune in cents
+MIN_DETUNE_CENTS = 0;   // Minimum detune when ISOTOPE = 0
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+// Convert cents to frequency ratio
+cents_to_ratio(cents) = 2 ^ (cents / 1200);
+
+// ============================================================================
+// TRI-CORE OSCILLATOR
+// ============================================================================
+
+// Main tri-core oscillator with stereo output
+// freq: base frequency in Hz
+// shape: waveform shape (0=saw, 0.5=sharktooth, 1=square)
+// pwm: pulse width for square mode
+// isotope: detune/spread amount (0-1)
+// sub_level: sub oscillator mix level
+// sub_mode: sub oscillator mode (0=sine, 1=square)
+tri_core_osc(freq, shape, pwm, isotope, sub_level, sub_mode) = left, right
+with {
+    // Smoothed isotope to prevent zipper noise
+    iso = isotope : si.smoo;
+
+    // Detune amount in cents (scaled by isotope)
+    detune = iso * MAX_DETUNE_CENTS;
+
+    // Frequency for each oscillator
+    freq_center = freq;
+    freq_left = freq * cents_to_ratio(-detune);  // Detune down
+    freq_right = freq * cents_to_ratio(detune);  // Detune up
+
+    // Generate oscillators
+    osc_center = morph_osc(freq_center, shape, pwm);
+    osc_left = morph_osc(freq_left, shape, pwm);
+    osc_right = morph_osc(freq_right, shape, pwm);
+
+    // Sub oscillator (mono, added to both channels)
+    sub = sub_osc(freq, sub_mode) * sub_level;
+
+    // Side oscillator amplitude (fade in with isotope)
+    // Using squared curve for smoother fade-in
+    side_amp = iso * iso;
+
+    // Center amplitude (reduced slightly as sides come in to maintain level)
+    center_amp = 1.0 - (side_amp * 0.3);
+
+    // Stereo spread: sides pan outward as isotope increases
+    // At isotope=0: all mono center
+    // At isotope=1: left osc full left, right osc full right
+    pan_spread = iso;
+
+    // Left channel: center + left_osc (panned left) + bit of right_osc
+    left_from_center = osc_center * center_amp * 0.5;
+    left_from_left = osc_left * side_amp * (0.5 + pan_spread * 0.5);
+    left_from_right = osc_right * side_amp * (0.5 - pan_spread * 0.5);
+
+    // Right channel: center + right_osc (panned right) + bit of left_osc
+    right_from_center = osc_center * center_amp * 0.5;
+    right_from_right = osc_right * side_amp * (0.5 + pan_spread * 0.5);
+    right_from_left = osc_left * side_amp * (0.5 - pan_spread * 0.5);
+
+    // Mix and add sub
+    left = (left_from_center + left_from_left + left_from_right) + sub * 0.5;
+    right = (right_from_center + right_from_right + right_from_left) + sub * 0.5;
+};
+
+// Mono version for simpler use cases
+// Takes the stereo output and sums to mono
+tri_core_osc_mono(freq, shape, pwm, isotope, sub_level, sub_mode) =
+    tri_core_osc(freq, shape, pwm, isotope, sub_level, sub_mode) : +(_,_) : *(0.5);

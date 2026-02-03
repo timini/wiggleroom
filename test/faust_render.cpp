@@ -39,7 +39,14 @@ std::unique_ptr<AbstractDSP> createInfiniteFolder();
 std::unique_ptr<AbstractDSP> createSpaceCello();
 std::unique_ptr<AbstractDSP> createTheAbyss();
 std::unique_ptr<AbstractDSP> createMatter();
-std::unique_ptr<AbstractDSP> createLinkage();
+std::unique_ptr<AbstractDSP> createTheCauldron();
+std::unique_ptr<AbstractDSP> createVektorX();
+std::unique_ptr<AbstractDSP> createTR808();
+std::unique_ptr<AbstractDSP> createACID9Voice();
+std::unique_ptr<AbstractDSP> createTetanusCoil();
+std::unique_ptr<AbstractDSP> createNutShaker();
+std::unique_ptr<AbstractDSP> createPhysicalChoir();
+std::unique_ptr<AbstractDSP> createChaosPad();
 
 // ============================================================================
 // WAV File Writer (no external dependencies)
@@ -110,14 +117,23 @@ std::unique_ptr<AbstractDSP> createDSP(const std::string& moduleName) {
     if (moduleName == "SpaceCello") return createSpaceCello();
     if (moduleName == "TheAbyss") return createTheAbyss();
     if (moduleName == "Matter") return createMatter();
-    if (moduleName == "Linkage") return createLinkage();
+    if (moduleName == "TheCauldron") return createTheCauldron();
+    if (moduleName == "VektorX") return createVektorX();
+    if (moduleName == "TR808") return createTR808();
+    if (moduleName == "ACID9Voice") return createACID9Voice();
+    if (moduleName == "TetanusCoil") return createTetanusCoil();
+    if (moduleName == "NutShaker") return createNutShaker();
+    if (moduleName == "PhysicalChoir") return createPhysicalChoir();
+    if (moduleName == "ChaosPad") return createChaosPad();
     return nullptr;
 }
 
 std::vector<std::string> getModuleNames() {
     return {"LadderLPF", "BigReverb", "SaturationEcho", "SpectralResonator",
             "ModalBell", "PluckedString", "ChaosFlute", "TriPhaseEnsemble",
-            "InfiniteFolder", "SpaceCello", "TheAbyss", "Matter", "Linkage"};
+            "InfiniteFolder", "SpaceCello", "TheAbyss", "Matter",
+            "TheCauldron", "VektorX", "TR808", "ACID9Voice", "TetanusCoil",
+            "NutShaker", "PhysicalChoir", "ChaosPad"};
 }
 
 // ============================================================================
@@ -230,15 +246,41 @@ std::vector<float> renderAudio(AbstractDSP& dsp, int sampleRate, float duration,
     float sawFreq = 440.0f / sampleRate;
 
     // Find gate/trigger parameter if exists
+    // Check for custom trigger_param in scenario first
     int gateParamIdx = dsp.getParamIndex("gate");
     int triggerParamIdx = dsp.getParamIndex("trigger");
     int velocityParamIdx = dsp.getParamIndex("velocity");
+    int customTriggerIdx = -1;
+
+    // If scenario specifies a custom trigger_param, use that instead
+    if (scenario && !scenario->trigger_param.empty()) {
+        customTriggerIdx = dsp.getParamIndex(scenario->trigger_param.c_str());
+        if (customTriggerIdx >= 0) {
+            // Use custom trigger, disable generic gate/trigger
+            gateParamIdx = -1;
+            triggerParamIdx = -1;
+        }
+    }
+
+    // Trigger pulse duration in samples (10ms)
+    int triggerPulseSamples = static_cast<int>(0.01f * sampleRate);
 
     for (int i = 0; i < numSamples; i++) {
         bool gateOn = (i < gateOnSamples);
 
         // Set gate/trigger parameters (unless disabled for testing)
         if (!noAutoGate) {
+            // Custom trigger parameter (for drums, etc.)
+            if (customTriggerIdx >= 0) {
+                // Send trigger pulse at sample 0
+                if (i < triggerPulseSamples) {
+                    dsp.setParamValue(customTriggerIdx, 10.0f);  // VCV standard trigger level
+                } else {
+                    dsp.setParamValue(customTriggerIdx, 0.0f);
+                }
+            }
+
+            // Generic gate/trigger (for standard instruments)
             if (gateParamIdx >= 0) {
                 dsp.setParamValue(gateParamIdx, gateOn ? 1.0f : 0.0f);
             }
@@ -279,10 +321,21 @@ std::vector<float> renderAudio(AbstractDSP& dsp, int sampleRate, float duration,
 
                 case ModuleType::Effect:
                     // Short burst for effects (first 100ms)
+                    // For multi-input effects, provide different signals to each input
                     if (i < sampleRate / 10) {
-                        inputBuffer[0] = noiseDist(rng) * 0.5f;
+                        float noise = noiseDist(rng) * 0.5f;
+                        for (int ch = 0; ch < numInputs; ch++) {
+                            // Different frequencies/phases per input
+                            float phase = (sawPhase + ch * 0.25f);
+                            if (phase >= 1.0f) phase -= 1.0f;
+                            inputBuffer[ch] = phase * 2.0f - 1.0f + noise * 0.1f;
+                        }
+                        sawPhase += sawFreq;
+                        if (sawPhase >= 1.0f) sawPhase -= 1.0f;
                     } else {
-                        inputBuffer[0] = 0.0f;
+                        for (int ch = 0; ch < numInputs; ch++) {
+                            inputBuffer[ch] = 0.0f;
+                        }
                     }
                     break;
 
@@ -307,6 +360,260 @@ std::vector<float> renderAudio(AbstractDSP& dsp, int sampleRate, float duration,
 }
 
 // ============================================================================
+// Showcase Audio Rendering
+// ============================================================================
+
+// Generate default showcase config based on module type
+ShowcaseConfig getDefaultShowcaseConfig(ModuleType type) {
+    ShowcaseConfig config;
+    config.enabled = true;
+
+    switch (type) {
+        case ModuleType::Instrument:
+            // 10s with 4 notes at different octaves + parameter sweep
+            config.duration = 10.0f;
+            config.notes = {
+                {0.0f, 2.0f, -1.0f, 1.0f},   // C3 at 0s
+                {2.5f, 2.0f, 0.0f, 0.9f},    // C4 at 2.5s
+                {5.0f, 2.0f, 1.0f, 0.8f},    // C5 at 5s
+                {7.5f, 2.0f, 0.583f, 0.85f}  // G4 at 7.5s (7 semitones = 7/12 volts)
+            };
+            break;
+
+        case ModuleType::Filter:
+            // 8s with continuous saw input and cutoff sweep
+            config.duration = 8.0f;
+            // Filters don't use notes, but we'll add an automation for cutoff
+            config.automations = {
+                {"cutoff", 0.0f, 4.0f, 0.1f, 0.9f},   // Sweep up
+                {"cutoff", 4.0f, 8.0f, 0.9f, 0.1f},   // Sweep down
+            };
+            break;
+
+        case ModuleType::Effect:
+            // 10s with repeated bursts
+            config.duration = 10.0f;
+            // Effects will get bursts + wet/dry sweep if available
+            config.automations = {
+                {"mix", 0.0f, 10.0f, 0.3f, 1.0f},
+            };
+            break;
+
+        case ModuleType::Resonator:
+            // 10s with varied excitation
+            config.duration = 10.0f;
+            config.automations = {
+                {"decay", 0.0f, 5.0f, 0.3f, 0.9f},
+                {"decay", 5.0f, 10.0f, 0.9f, 0.3f},
+            };
+            break;
+
+        case ModuleType::Utility:
+            // 5s basic render
+            config.duration = 5.0f;
+            break;
+    }
+
+    return config;
+}
+
+// Render showcase audio with multiple notes and parameter automations
+std::vector<float> renderShowcaseAudio(AbstractDSP& dsp, int sampleRate,
+                                        const ShowcaseConfig& showcase,
+                                        ModuleType type) {
+    int numSamples = static_cast<int>(showcase.duration * sampleRate);
+    int numInputs = dsp.getNumInputs();
+    int numOutputs = dsp.getNumOutputs();
+
+    // Allocate buffers
+    std::vector<float> inputBuffer(numInputs, 0.0f);
+    std::vector<float> outputBuffer(numOutputs, 0.0f);
+    std::vector<float*> inputPtrs(numInputs);
+    std::vector<float*> outputPtrs(numOutputs);
+    for (int i = 0; i < numInputs; i++) inputPtrs[i] = &inputBuffer[i];
+    for (int i = 0; i < numOutputs; i++) outputPtrs[i] = &outputBuffer[i];
+
+    // Output samples
+    std::vector<float> output;
+    output.reserve(numSamples * numOutputs);
+
+    // Random generator for noise
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<float> noiseDist(-1.0f, 1.0f);
+
+    // Find common parameter indices
+    int gateParamIdx = dsp.getParamIndex("gate");
+    int triggerParamIdx = dsp.getParamIndex("trigger");
+    int velocityParamIdx = dsp.getParamIndex("velocity");
+    int voltsParamIdx = dsp.getParamIndex("volts");
+
+    // Precompute automation parameter indices
+    std::vector<std::pair<int, const ShowcaseAutomation*>> automationIndices;
+    for (const auto& automation : showcase.automations) {
+        int idx = dsp.getParamIndex(automation.param.c_str());
+        if (idx >= 0) {
+            automationIndices.push_back({idx, &automation});
+        }
+    }
+
+    // Precompute trigger event information (param index, start sample, end sample)
+    struct TriggerEvent {
+        int paramIdx;
+        int startSample;
+        int endSample;
+        float value;
+    };
+    std::vector<TriggerEvent> triggerEvents;
+    for (const auto& trigger : showcase.trigger_sequence) {
+        int idx = dsp.getParamIndex(trigger.param.c_str());
+        if (idx >= 0) {
+            TriggerEvent event;
+            event.paramIdx = idx;
+            event.startSample = static_cast<int>(trigger.time * sampleRate);
+            event.endSample = event.startSample + static_cast<int>(trigger.duration * sampleRate);
+            event.value = trigger.value;
+            triggerEvents.push_back(event);
+        }
+    }
+
+    // Track which trigger params need to be reset to 0 when not active
+    std::map<int, bool> triggerParamActive;
+    for (const auto& event : triggerEvents) {
+        triggerParamActive[event.paramIdx] = false;
+    }
+
+    float sawPhase = 0.0f;
+    float sawFreq = 440.0f / sampleRate;
+    int burstPeriod = static_cast<int>(0.5f * sampleRate);  // Burst every 0.5s for effects
+    int burstLength = static_cast<int>(0.05f * sampleRate); // 50ms burst
+
+    for (int i = 0; i < numSamples; i++) {
+        float currentTime = static_cast<float>(i) / sampleRate;
+
+        // Determine current note state (for instruments)
+        bool gateOn = false;
+        float currentVolts = 0.0f;
+        float currentVelocity = 1.0f;
+
+        for (const auto& note : showcase.notes) {
+            if (currentTime >= note.start && currentTime < (note.start + note.duration)) {
+                gateOn = true;
+                currentVolts = note.volts;
+                currentVelocity = note.velocity;
+                break;
+            }
+        }
+
+        // Set gate/trigger/velocity for instruments
+        if (gateParamIdx >= 0) {
+            dsp.setParamValue(gateParamIdx, gateOn ? 1.0f : 0.0f);
+        }
+        if (velocityParamIdx >= 0) {
+            dsp.setParamValue(velocityParamIdx, gateOn ? currentVelocity : 0.0f);
+        }
+        if (voltsParamIdx >= 0 && gateOn) {
+            dsp.setParamValue(voltsParamIdx, currentVolts);
+        }
+
+        // Handle trigger at note start
+        if (triggerParamIdx >= 0) {
+            bool shouldTrigger = false;
+            for (const auto& note : showcase.notes) {
+                int noteStartSample = static_cast<int>(note.start * sampleRate);
+                if (i == noteStartSample) {
+                    shouldTrigger = true;
+                    break;
+                }
+            }
+            dsp.setParamValue(triggerParamIdx, shouldTrigger ? 1.0f : 0.0f);
+        }
+
+        // Handle trigger_sequence events (for drums and other trigger-based modules)
+        // First, mark all trigger params as inactive for this sample
+        for (auto& [paramIdx, active] : triggerParamActive) {
+            active = false;
+        }
+        // Check which triggers should be active at this sample
+        for (const auto& event : triggerEvents) {
+            if (i >= event.startSample && i < event.endSample) {
+                dsp.setParamValue(event.paramIdx, event.value);
+                triggerParamActive[event.paramIdx] = true;
+            }
+        }
+        // Set inactive trigger params to 0
+        for (const auto& [paramIdx, active] : triggerParamActive) {
+            if (!active) {
+                dsp.setParamValue(paramIdx, 0.0f);
+            }
+        }
+
+        // Apply automations (linear interpolation)
+        for (const auto& [idx, automation] : automationIndices) {
+            if (currentTime >= automation->start_time && currentTime <= automation->end_time) {
+                float t = (currentTime - automation->start_time) /
+                          (automation->end_time - automation->start_time);
+                float value = automation->start_value + t * (automation->end_value - automation->start_value);
+                dsp.setParamValue(idx, value);
+            }
+        }
+
+        // Generate input based on module type
+        if (numInputs > 0) {
+            switch (type) {
+                case ModuleType::Filter:
+                    // Continuous saw wave
+                    inputBuffer[0] = sawPhase * 2.0f - 1.0f;
+                    sawPhase += sawFreq;
+                    if (sawPhase >= 1.0f) sawPhase -= 1.0f;
+                    break;
+
+                case ModuleType::Resonator:
+                    // Repeated noise bursts
+                    {
+                        int burstPeriodRes = static_cast<int>(0.3f * sampleRate);
+                        int burstLengthRes = static_cast<int>(0.02f * sampleRate);
+                        int posInCycle = i % burstPeriodRes;
+                        if (posInCycle < burstLengthRes) {
+                            inputBuffer[0] = noiseDist(rng) * 0.8f;
+                        } else {
+                            inputBuffer[0] = 0.0f;
+                        }
+                    }
+                    break;
+
+                case ModuleType::Effect:
+                    // Repeated bursts for effects
+                    {
+                        int posInCycle = i % burstPeriod;
+                        if (posInCycle < burstLength) {
+                            inputBuffer[0] = noiseDist(rng) * 0.5f;
+                        } else {
+                            inputBuffer[0] = 0.0f;
+                        }
+                    }
+                    break;
+
+                case ModuleType::Instrument:
+                case ModuleType::Utility:
+                default:
+                    inputBuffer[0] = 0.0f;
+                    break;
+            }
+        }
+
+        // Process one sample
+        dsp.compute(1, inputPtrs.data(), outputPtrs.data());
+
+        // Collect output
+        for (int ch = 0; ch < numOutputs; ch++) {
+            output.push_back(outputBuffer[ch]);
+        }
+    }
+
+    return output;
+}
+
+// ============================================================================
 // Command Line Parsing
 // ============================================================================
 
@@ -319,6 +626,8 @@ void printUsage(const char* programName) {
               << "  --sample-rate RATE  Sample rate (default: 48000)\n"
               << "  --param NAME=VALUE  Set parameter value (can repeat)\n"
               << "  --scenario NAME     Use a pre-defined test scenario\n"
+              << "  --showcase          Render showcase audio with multiple notes and automations\n"
+              << "  --showcase-config   Custom config file for showcase (overrides test_config.json)\n"
               << "  --list-modules      List available modules\n"
               << "  --list-params       List parameters for module\n"
               << "  --list-scenarios    List test scenarios for module\n"
@@ -329,6 +638,7 @@ void printUsage(const char* programName) {
               << "  " << programName << " --module LadderLPF --list-params\n"
               << "  " << programName << " --module ChaosFlute --list-scenarios\n"
               << "  " << programName << " --module ChaosFlute --scenario high_chaos\n"
+              << "  " << programName << " --module ChaosFlute --showcase --output showcase.wav\n"
               << "  " << programName << " --module TheAbyss --output test.wav --param decay=0.8\n";
 }
 
@@ -336,6 +646,7 @@ struct Options {
     std::string moduleName;
     std::string outputFile = "output.wav";
     std::string scenario;  // Named scenario from test_config.json
+    std::string showcaseConfigFile;  // Override config file for showcase
     float duration = 2.0f;
     int sampleRate = 48000;
     std::map<std::string, float> params;
@@ -344,6 +655,7 @@ struct Options {
     bool listScenarios = false;
     bool showConfig = false;
     bool noAutoGate = false;  // Disable automatic gate/trigger handling
+    bool showcase = false;    // Render showcase audio with multiple notes/automations
 };
 
 bool parseArgs(int argc, char** argv, Options& opts) {
@@ -372,6 +684,14 @@ bool parseArgs(int argc, char** argv, Options& opts) {
         }
         if (arg == "--no-auto-gate") {
             opts.noAutoGate = true;
+            continue;
+        }
+        if (arg == "--showcase") {
+            opts.showcase = true;
+            continue;
+        }
+        if (arg == "--showcase-config" && i + 1 < argc) {
+            opts.showcaseConfigFile = argv[++i];
             continue;
         }
         if (arg == "--scenario" && i + 1 < argc) {
@@ -549,12 +869,46 @@ int main(int argc, char** argv) {
         std::cout << "\n";
     }
 
-    // Render
-    std::cout << "Rendering " << opts.moduleName << " for " << opts.duration
-              << "s at " << opts.sampleRate << "Hz...\n";
-
     ModuleType type = config.module_type;
-    auto samples = renderAudio(*dsp, opts.sampleRate, opts.duration, type, opts.noAutoGate, scenario);
+    std::vector<float> samples;
+
+    // Render using showcase mode or standard mode
+    if (opts.showcase) {
+        // Get showcase config (from custom file, test_config.json, or generate default)
+        ShowcaseConfig showcase;
+        if (!opts.showcaseConfigFile.empty()) {
+            // Load from custom config file
+            ModuleTestConfig customConfig = load_module_config(opts.showcaseConfigFile, opts.moduleName);
+            if (customConfig.showcase.enabled) {
+                showcase = customConfig.showcase;
+                type = customConfig.module_type;  // Also use the type from custom config
+                std::cout << "Using showcase config from " << opts.showcaseConfigFile << "\n";
+            } else {
+                showcase = getDefaultShowcaseConfig(type);
+                std::cout << "Custom config has no showcase, using default\n";
+            }
+        } else if (config.showcase.enabled) {
+            showcase = config.showcase;
+            std::cout << "Using showcase config from test_config.json\n";
+        } else {
+            showcase = getDefaultShowcaseConfig(type);
+            std::cout << "Using default showcase config for " << module_type_to_string(type) << "\n";
+        }
+
+        std::cout << "Rendering showcase for " << opts.moduleName << " ("
+                  << showcase.duration << "s at " << opts.sampleRate << "Hz)...\n";
+        std::cout << "  Notes: " << showcase.notes.size() << "\n";
+        std::cout << "  Automations: " << showcase.automations.size() << "\n";
+        std::cout << "  Triggers: " << showcase.trigger_sequence.size() << "\n";
+
+        samples = renderShowcaseAudio(*dsp, opts.sampleRate, showcase, type);
+    } else {
+        // Standard render
+        std::cout << "Rendering " << opts.moduleName << " for " << opts.duration
+                  << "s at " << opts.sampleRate << "Hz...\n";
+
+        samples = renderAudio(*dsp, opts.sampleRate, opts.duration, type, opts.noAutoGate, scenario);
+    }
 
     // Analyze audio for distortion/clipping
     float peakAbs = 0.0f;

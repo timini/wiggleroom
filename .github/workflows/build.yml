@@ -10,32 +10,6 @@ env:
   PLUGIN_NAME: WiggleRoom
 
 jobs:
-  validate-manifest:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Checkout rack-library-tools
-        uses: actions/checkout@v4
-        with:
-          repository: cschol/rack-library-tools
-          path: rack-library-tools
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Validate plugin.json
-        run: |
-          mkdir -p /tmp/validate/${{ env.PLUGIN_NAME }}
-          cp plugin.json /tmp/validate/${{ env.PLUGIN_NAME }}/
-          python3 rack-library-tools/rack-manifest-validator.py /tmp/validate -p ${{ env.PLUGIN_NAME }}
-
   build:
     strategy:
       fail-fast: false

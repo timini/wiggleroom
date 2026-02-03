@@ -1,0 +1,150 @@
+{
+  "module_type": "instrument",
+  "description": "Virtual analog TR-808 drum machine with circuit bending modifications",
+  "quality_thresholds": {
+    "thd_max_percent": 25.0,
+    "clipping_max_percent": 3.0,
+    "hnr_min_db": 5.0,
+    "allow_hot_signal": true
+  },
+  "test_scenarios": [
+    {
+      "name": "bass_drum_default",
+      "duration": 1.0,
+      "trigger_param": "bd_trig",
+      "description": "Standard bass drum settings"
+    },
+    {
+      "name": "bass_drum_long_decay",
+      "duration": 3.0,
+      "trigger_param": "bd_trig",
+      "parameters": {
+        "bd_long_decay": 0.8,
+        "bd_decay": 0.7
+      },
+      "description": "Circuit bend self-oscillation mode"
+    },
+    {
+      "name": "snare_full_snappy",
+      "duration": 1.0,
+      "trigger_param": "sd_trig",
+      "parameters": {
+        "sd_snappy": 1.0
+      },
+      "description": "Maximum noise content snare"
+    },
+    {
+      "name": "closed_hat",
+      "duration": 0.5,
+      "trigger_param": "ch_trig",
+      "description": "Standard closed hi-hat"
+    },
+    {
+      "name": "open_hat",
+      "duration": 1.0,
+      "trigger_param": "oh_trig",
+      "description": "Standard open hi-hat"
+    },
+    {
+      "name": "choke_group",
+      "duration": 1.0,
+      "trigger_param": "oh_trig",
+      "trigger_sequence": [
+        {"time": 0.0, "param": "oh_trig", "value": 10.0},
+        {"time": 0.3, "param": "ch_trig", "value": 10.0}
+      ],
+      "description": "Verify CH chokes OH"
+    },
+    {
+      "name": "clap",
+      "duration": 1.0,
+      "trigger_param": "cp_trig",
+      "description": "Standard clap"
+    },
+    {
+      "name": "cowbell",
+      "duration": 1.0,
+      "trigger_param": "cb_trig",
+      "description": "Standard cowbell"
+    },
+    {
+      "name": "cymbal",
+      "duration": 2.0,
+      "trigger_param": "cy_trig",
+      "description": "Standard cymbal"
+    },
+    {
+      "name": "toms",
+      "duration": 2.0,
+      "trigger_sequence": [
+        {"time": 0.0, "param": "lt_trig", "value": 10.0},
+        {"time": 0.5, "param": "mt_trig", "value": 10.0},
+        {"time": 1.0, "param": "ht_trig", "value": 10.0}
+      ],
+      "description": "Low, mid, high tom sequence"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": ["bd_trig", "sd_trig", "lt_trig", "mt_trig", "ht_trig", "cb_trig", "ch_trig", "oh_trig", "cy_trig", "cp_trig", "ma_trig", "rs_trig"],
+    "steps": 5
+  },
+  "showcase": {
+    "duration": 16.0,
+    "notes": [],
+    "trigger_sequence": [
+      {"time": 0.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 0.5, "param": "ch_trig", "value": 10.0, "duration": 0.01},
+      {"time": 1.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 1.0, "param": "sd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 1.5, "param": "ch_trig", "value": 10.0, "duration": 0.01},
+      {"time": 2.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 2.5, "param": "oh_trig", "value": 10.0, "duration": 0.01},
+      {"time": 3.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 3.0, "param": "sd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 3.5, "param": "ch_trig", "value": 10.0, "duration": 0.01},
+      {"time": 4.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 4.25, "param": "cb_trig", "value": 10.0, "duration": 0.01},
+      {"time": 4.5, "param": "ch_trig", "value": 10.0, "duration": 0.01},
+      {"time": 5.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 5.0, "param": "sd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 5.5, "param": "ch_trig", "value": 10.0, "duration": 0.01},
+      {"time": 6.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 6.0, "param": "cp_trig", "value": 10.0, "duration": 0.01},
+      {"time": 6.5, "param": "oh_trig", "value": 10.0, "duration": 0.01},
+      {"time": 7.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 7.0, "param": "sd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 7.25, "param": "lt_trig", "value": 10.0, "duration": 0.01},
+      {"time": 7.5, "param": "mt_trig", "value": 10.0, "duration": 0.01},
+      {"time": 7.75, "param": "ht_trig", "value": 10.0, "duration": 0.01},
+      {"time": 8.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 8.0, "param": "cy_trig", "value": 10.0, "duration": 0.01},
+      {"time": 8.5, "param": "ch_trig", "value": 10.0, "duration": 0.01},
+      {"time": 9.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 9.0, "param": "sd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 9.5, "param": "ch_trig", "value": 10.0, "duration": 0.01},
+      {"time": 10.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 10.5, "param": "oh_trig", "value": 10.0, "duration": 0.01},
+      {"time": 10.75, "param": "rs_trig", "value": 10.0, "duration": 0.01},
+      {"time": 11.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 11.0, "param": "sd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 11.5, "param": "ch_trig", "value": 10.0, "duration": 0.01},
+      {"time": 12.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 12.0, "param": "ma_trig", "value": 10.0, "duration": 0.01},
+      {"time": 12.25, "param": "ma_trig", "value": 10.0, "duration": 0.01},
+      {"time": 12.5, "param": "ch_trig", "value": 10.0, "duration": 0.01},
+      {"time": 13.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 13.0, "param": "sd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 13.5, "param": "ch_trig", "value": 10.0, "duration": 0.01},
+      {"time": 14.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 14.5, "param": "oh_trig", "value": 10.0, "duration": 0.01},
+      {"time": 15.0, "param": "bd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 15.0, "param": "sd_trig", "value": 10.0, "duration": 0.01},
+      {"time": 15.0, "param": "cy_trig", "value": 10.0, "duration": 0.01}
+    ],
+    "automations": [
+      {"param": "bd_decay", "start_time": 0.0, "end_time": 8.0, "start_value": 0.3, "end_value": 0.8},
+      {"param": "bd_decay", "start_time": 8.0, "end_time": 16.0, "start_value": 0.8, "end_value": 0.4},
+      {"param": "sd_snappy", "start_time": 0.0, "end_time": 16.0, "start_value": 0.3, "end_value": 0.9}
+    ]
+  }
+}

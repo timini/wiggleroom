@@ -1,0 +1,188 @@
+// TR-808 Circuit Component Library
+// Virtual analog building blocks for drum synthesis
+
+import("stdfaust.lib");
+
+//=====================================================================
+// CORE CIRCUIT PRIMITIVES
+//=====================================================================
+
+// Soft diode clipper (tanh saturation)
+soft_clip(x) = ma.tanh(x);
+
+// Hard clip with variable drive
+hard_clip(drive, x) = soft_clip(x * drive) / max(1, drive * 0.7);
+
+// DC blocker to remove offset
+dc_block = fi.dcblocker;
+
+//=====================================================================
+// BRIDGED-T RESONATOR
+// The heart of TR-808 tonal drums (BD, SD, Toms)
+// Uses SVF bandpass with Q controlling decay time
+//=====================================================================
+
+// Basic bridged-T resonator
+// f = center frequency, decay = 0-1 (controls Q)
+bridged_t(f, decay) = fi.resonbp(f_clamped, q, 1)
+with {
+    f_clamped = max(20, min(20000, f));
+    // Q range: 5 (short) to 200 (long/self-osc)
+    q = 5 + decay * 195;
+};
+
+// Bridged-T with pitch envelope (for bass drum)
+// Returns (audio, pitch_env) where pitch_env decays from sweep to 1
+bridged_t_pitched(base_freq, decay, sweep_amount, trig) = output
+with {
+    // Pitch envelope: fast exponential decay
+    pitch_env = en.ar(0.001, 0.05, trig);
+    // Sweep from higher pitch down to base
+    freq = base_freq * (1 + pitch_env * sweep_amount);
+    output = bridged_t(freq, decay);
+};
+
+//=====================================================================
+// NOISE GENERATORS
+//=====================================================================
+
+// White noise (standard)
+white_noise = no.noise;
+
+// Filtered noise for snare (HPF)
+snare_noise(cutoff) = no.noise : fi.highpass(2, cutoff);
+
+// Metallic noise for hats/cymbals (filtered noise burst)
+metallic_noise = no.noise : fi.bandpass(2, 6000, 12000);
+
+//=====================================================================
+// OSCILLATORS (PolyBLEP anti-aliased)
+//=====================================================================
+
+// Square wave oscillator
+square_osc(freq) = os.square(freq);
+
+// Triangle wave oscillator
+triangle_osc(freq) = os.triangle(freq);
+
+// Pulse wave with variable width
+pulse_osc(freq, width) = os.pulsetrain(freq, width);
+
+//=====================================================================
+// METALLIC OSCILLATOR BANK
+// 6 square oscillators at enharmonic ratios (Schmitt trigger simulation)
+// Used for hi-hats, cymbals, cowbell
+// Base frequencies: 205, 306, 367, 428, 540, 800 Hz
+//=====================================================================
+
+metallic_bank(base_freq, spread) = sum(i, 6, osc(i)) / 6.0
+with {
+    // Frequency ratios relative to 205 Hz base
+    ratios = (1.0, 1.493, 1.790, 2.088, 2.634, 3.902);
+    ratio(i) = ba.take(i + 1, ratios);
+    // Spread detunes oscillators for thicker sound
+    detune(i) = 1 + (i - 2.5) * spread * 0.02;
+    freq(i) = (base_freq / 205) * 205 * ratio(i) * detune(i);
+    osc(i) = square_osc(freq(i));
+};
+
+// Cowbell bank (only 2 oscillators: ~540 Hz and ~800 Hz)
+cowbell_bank(base_freq, detune_amt) = (osc1 + osc2) / 2.0
+with {
+    // Base cowbell frequencies
+    freq1 = base_freq * (1 - detune_amt * 0.02);
+    freq2 = base_freq * 1.481 * (1 + detune_amt * 0.02);  // 800/540 ratio
+    osc1 = square_osc(freq1);
+    osc2 = square_osc(freq2);
+};
+
+//=====================================================================
+// ENVELOPE GENERATORS
+//=====================================================================
+
+// Simple AR envelope
+ar_env(attack, release, trig) = en.ar(attack, release, trig);
+
+// Exponential decay envelope
+exp_decay(time, trig) = en.ar(0.001, time, trig);
+
+// ASR envelope (attack, sustain while gate high, release)
+asr_env(attack, release, gate) = en.asr(attack, 1, release, gate);
+
+// Multi-stage clap envelope (3 bursts)
+clap_env(spread, reverb, trig) = env
+with {
+    // 3 rapid bursts followed by longer tail
+    burst_time = 0.015 + spread * 0.01;
+    // Create 3 triggers with slight delays
+    t1 = trig;
+    t2 = trig & (trig' == 0);  // Delayed via sample
+    t3 = t2 & (t2' == 0);
+    // Each burst envelope
+    burst_env = en.ar(0.001, burst_time, trig);
+    // Final reverb tail
+    tail_env = en.ar(0.001, 0.1 + reverb * 0.3, trig);
+    // Combined with burst emphasis
+    env = burst_env * 3 : max(tail_env);
+};
+
+//=====================================================================
+// FILTERS
+//=====================================================================
+
+// Lowpass filter (for tone control)
+tone_lpf(cutoff) = fi.lowpass(2, cutoff);
+
+// Highpass filter (for snare snap)
+snap_hpf(cutoff) = fi.highpass(2, cutoff);
+
+// Bandpass filter (for cowbell/cymbal resonance)
+resonant_bpf(freq, q) = fi.resonbp(freq, q, 1);
+
+//=====================================================================
+// MIXING UTILITIES
+//=====================================================================
+
+// Soft saturation with headroom control
+saturate(amount, x) = soft_clip(x * (1 + amount * 2)) * (1 / (1 + amount));
+
+// Level scaling with soft limiting
+level_limit(x) = soft_clip(x * 0.8) * 1.2;
+
+//=====================================================================
+// DRUM COMPRESSOR
+// Fast attack/release for punchy drums with consistent levels
+// Brings up quiet parts while taming peaks
+//=====================================================================
+
+// Simple envelope follower for compression
+// Uses peak detection with attack/release smoothing
+env_follow(attack, release) = abs : an.amp_follower_ar(attack, release);
+
+// Gain computer for compression
+// threshold in linear (0-1), ratio as compression ratio (e.g., 4 = 4:1)
+gain_computer(threshold, ratio, env) = select2(env > threshold,
+    1.0,
+    (threshold + (env - threshold) / ratio) / max(0.001, env)
+);
+
+// Simple drum compressor with makeup gain
+// attack = attack time in seconds (0.001 for drums)
+// release = release time in seconds (0.05-0.2 for drums)
+// threshold = compression threshold (0.3-0.5 for drums)
+// ratio = compression ratio (4-8 for drums)
+// makeup = makeup gain multiplier
+drum_comp(attack, release, threshold, ratio, makeup) = _ <: (_, envelope) : (_ * gain_from_env) * makeup
+with {
+    envelope = env_follow(attack, release);
+    gain_from_env = envelope : gain_computer(threshold, ratio);
+};
+
+// Preset: punchy drum compressor (fast attack, medium release, 4:1 ratio)
+drum_punch(makeup) = drum_comp(0.001, 0.08, 0.3, 4, makeup);
+
+// Preset: hard limiter for transients
+drum_limit(ceiling) = min(ceiling) : max(-ceiling);
+
+// Complete drum channel strip: compressor + soft limit + DC block
+drum_channel(level) = drum_punch(level) : soft_clip : dc_block;

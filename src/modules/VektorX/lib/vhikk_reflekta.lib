@@ -1,0 +1,103 @@
+// VHIKK Reflekta - Diffuse Delay Processor
+// Part of the VHIKK modular DSP library
+//
+// Based on VHIKK X "Reflekta" mode - creates smeared, diffuse echoes
+// Uses allpass filters to increase echo density without changing spectrum
+
+declare name "VHIKK Reflekta";
+declare author "WiggleRoom";
+declare version "1.0";
+
+import("stdfaust.lib");
+vh_sc = library("vhikk_soft_clip.lib");
+vh_fs = library("vhikk_freq_shifter.lib");
+
+// Diffuse delay processor with allpass smearing
+// Creates a wash of sound where discrete echoes blur into continuous texture
+//
+// input: Mono audio signal
+// time: Delay time 0-1 (maps to 10ms - 2000ms)
+// feedback: Feedback amount 0-1 (internally limited to 0.95)
+// diffusion: Echo smearing amount 0-1
+//
+// Returns: Stereo pair (left, right)
+reflekta(input, time, feedback, diffusion) = left, right
+with {
+    // Map time parameter to delay in samples (10ms to 2s)
+    min_delay_ms = 10.0;
+    max_delay_ms = 2000.0;
+    delay_ms = min_delay_ms + time * (max_delay_ms - min_delay_ms);
+    delay_samples = int(delay_ms * ma.SR / 1000.0);
+    max_delay_samples = int(max_delay_ms * ma.SR / 1000.0);
+
+    // Feedback limited for stability
+    fb = min(0.95, max(0.0, feedback));
+
+    // Diffusion amount scales allpass feedback
+    diff = diffusion * 0.7;  // Max 0.7 for stability
+
+    // Allpass diffuser chain (increases echo density)
+    // Prime-number-based delay times for maximum diffusion
+    allpass1(x) = fi.allpass_fcomb(1051, 1051, diff, x);
+    allpass2(x) = fi.allpass_fcomb(337, 337, diff, x);
+    allpass3(x) = fi.allpass_fcomb(113, 113, diff, x);
+    allpass4(x) = fi.allpass_fcomb(571, 571, diff, x);
+
+    diffuser = allpass1 : allpass2 : allpass3 : allpass4;
+
+    // Main delay line with soft clipping in feedback to prevent runaway
+    // Stereo output with slightly different delay times
+    delay_l = de.delay(max_delay_samples, delay_samples);
+    delay_r = de.delay(max_delay_samples, int(delay_samples * 1.08));  // 8% longer for stereo spread
+
+    // Feedback signal with diffusion and soft limiting
+    fb_signal = (left + right) * 0.5 : diffuser : vh_sc.soft_clip_raw(_, 1.2);
+
+    // Feedback delay network
+    left = input + (fb_signal : delay_l) * fb;
+    right = input + (fb_signal : delay_r) * fb;
+};
+
+// Reflekta with frequency shifting in feedback loop (barberpole effect)
+// shift_hz: Frequency shift per repeat (creates ascending/descending tails)
+reflekta_shifted(input, time, feedback, diffusion, shift_hz) = left, right
+with {
+    // Delay time mapping
+    delay_ms = 10.0 + time * 1990.0;
+    delay_samples = int(delay_ms * ma.SR / 1000.0);
+    max_delay_samples = int(2000.0 * ma.SR / 1000.0);
+
+    fb = min(0.95, max(0.0, feedback));
+    diff = diffusion * 0.7;
+
+    // Diffuser chain
+    allpass1(x) = fi.allpass_fcomb(1051, 1051, diff, x);
+    allpass2(x) = fi.allpass_fcomb(337, 337, diff, x);
+    allpass3(x) = fi.allpass_fcomb(113, 113, diff, x);
+
+    diffuser = allpass1 : allpass2 : allpass3;
+
+    delay_l = de.delay(max_delay_samples, delay_samples);
+    delay_r = de.delay(max_delay_samples, int(delay_samples * 1.08));
+
+    // Feedback with frequency shifting
+    fb_mono = (left + right) * 0.5;
+    fb_shifted = fb_mono : vh_fs.freq_shifter(_, shift_hz) : diffuser : vh_sc.soft_clip_raw(_, 1.2);
+
+    left = input + (fb_shifted : delay_l) * fb;
+    right = input + (fb_shifted : delay_r) * fb;
+};
+
+// Simple stereo delay (without diffusion, for cleaner echoes)
+stereo_delay(input, time, feedback, spread) = left, right
+with {
+    delay_ms = 10.0 + time * 1990.0;
+    delay_samples_l = int(delay_ms * ma.SR / 1000.0);
+    delay_samples_r = int(delay_ms * (1.0 + spread * 0.3) * ma.SR / 1000.0);
+    max_delay = int(2500.0 * ma.SR / 1000.0);
+
+    fb = min(0.95, feedback);
+
+    left = input + left' : de.delay(max_delay, delay_samples_l) * fb;
+    right = input + right' : de.delay(max_delay, delay_samples_r) * fb;
+};

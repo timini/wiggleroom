@@ -1,7 +1,7 @@
 {
   "slug": "WiggleRoom",
   "name": "Wiggle Room",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "license": "GPL-3.0-or-later",
   "brand": "Wiggle Room",
   "author": "Tim Richardson",
@@ -17,190 +17,175 @@
       "slug": "Intersect",
       "name": "Intersect",
       "description": "Rhythmic trigger generator using discrete gradient analysis - generates Euclidean and Euclidean-adjacent rhythms from CV signals",
-      "tags": [
-        "Clock modulator",
-        "Sequencer",
-        "Sample and hold"
-      ]
+      "tags": ["Clock modulator", "Sequencer", "Sample and hold"]
     },
     {
       "slug": "Cycloid",
       "name": "Cycloid",
       "description": "Polar Euclidean Sequencer - rotating clock hand triggers when crossing polygon vertices",
-      "tags": [
-        "Clock modulator",
-        "Sequencer",
-        "Low-frequency oscillator",
-        "Visual"
-      ]
+      "tags": ["Clock modulator", "Sequencer", "Low-frequency oscillator", "Visual"]
     },
     {
       "slug": "LadderLPF",
       "name": "Ladder LPF",
       "description": "Classic ladder lowpass filter with resonance, built with Faust DSP",
-      "tags": [
-        "Filter",
-        "Low-pass gate"
-      ]
+      "tags": ["Filter", "Low-pass gate"]
     },
     {
       "slug": "ModalBell",
       "name": "Modal Bell",
       "description": "Physical model of a struck bar - Vibraphone, Marimba, Bell sounds with Faust DSP",
-      "tags": [
-        "Physical modeling",
-        "Synth voice"
-      ]
+      "tags": ["Physical modeling", "Synth voice"]
     },
     {
       "slug": "BigReverb",
       "name": "Big Reverb",
       "description": "Lush stereo reverb with Zita Rev1 algorithm - high-quality FDN reverb with independent bass/treble decay, predelay, and damping",
-      "tags": [
-        "Reverb",
-        "Effect"
-      ]
+      "tags": ["Reverb", "Effect"]
     },
     {
       "slug": "SaturationEcho",
       "name": "Saturation Echo",
       "description": "Vintage tape delay with saturation and wobble in the feedback loop, built with Faust DSP",
-      "tags": [
-        "Delay",
-        "Effect",
-        "Distortion"
-      ]
+      "tags": ["Delay", "Effect", "Distortion"]
     },
     {
       "slug": "SpectralResonator",
       "name": "Spectral Resonator",
       "description": "6-band resonant filter bank for spectral chord processing - transforms noise and simple waves into lush melodic chords",
-      "tags": [
-        "Filter",
-        "Effect",
-        "Physical modeling"
-      ]
+      "tags": ["Filter", "Effect", "Physical modeling"]
     },
     {
       "slug": "PluckedString",
       "name": "Plucked String",
       "description": "Karplus-Strong physical model of a plucked string - creates guitar, harp, and plucked instrument sounds",
-      "tags": [
-        "Physical modeling",
-        "Synth voice",
-        "Oscillator"
-      ]
+      "tags": ["Physical modeling", "Synth voice", "Oscillator"]
     },
     {
       "slug": "ChaosFlute",
       "name": "Chaos Flute",
       "description": "Physical flute model with internal breath envelope and overblow chaos - from soft woodwind to screaming multiphonics",
-      "tags": [
-        "Physical modeling",
-        "Synth voice",
-        "Oscillator"
-      ]
+      "tags": ["Physical modeling", "Synth voice", "Oscillator"]
     },
     {
       "slug": "TriPhaseEnsemble",
       "name": "Tri-Phase Ensemble",
       "description": "Classic 3-voice BBD string ensemble effect - vintage tri-phase chorus for massive orchestral strings",
-      "tags": [
-        "Effect",
-        "Chorus",
-        "Flanger"
-      ]
+      "tags": ["Effect", "Chorus", "Flanger"]
     },
     {
       "slug": "InfiniteFolder",
       "name": "Infinite Folder",
       "description": "West Coast wavefolder - creates complex metallic harmonics by folding waveforms using sine function",
-      "tags": [
-        "Waveshaper",
-        "Distortion",
-        "Effect"
-      ]
+      "tags": ["Waveshaper", "Distortion", "Effect"]
     },
     {
       "slug": "SpaceCello",
       "name": "Space Cello",
       "description": "Digital Yaybahar - coupled physical model with string, dispersive spring, and resonant tube body for sci-fi acoustic sounds",
-      "tags": [
-        "Physical modeling",
-        "Synth voice",
-        "Oscillator"
-      ]
+      "tags": ["Physical modeling", "Synth voice", "Oscillator"]
     },
     {
       "slug": "TheAbyss",
       "name": "The Abyss",
       "description": "Waterphone - bowed metal rods with hydro-modulation for horror movie soundscapes",
-      "tags": [
-        "Physical modeling",
-        "Synth voice",
-        "Oscillator"
-      ]
+      "tags": ["Physical modeling", "Synth voice", "Oscillator"]
     },
     {
       "slug": "Matter",
       "name": "Matter",
       "description": "Physical model of a struck solid inside a resonant tube - morphs from strings to bells with acoustic chamber",
-      "tags": [
-        "Physical modeling",
-        "Synth voice",
-        "Oscillator"
-      ]
+      "tags": ["Physical modeling", "Synth voice", "Oscillator"]
     },
     {
       "slug": "GravityClock",
       "name": "Gravity Clock",
       "description": "Clock-synced bouncing ball physics - generates LFO and triggers locked to musical divisions with optional ratcheting decay",
-      "tags": [
-        "Low-frequency oscillator",
-        "Clock modulator",
-        "Envelope generator"
-      ]
+      "tags": ["Low-frequency oscillator", "Clock modulator", "Envelope generator"]
     },
     {
       "slug": "OctoLFO",
       "name": "Octo LFO",
       "description": "Clock-synced 8-channel LFO with wave shaping - Skew, Curve, and Fold modifiers with mini scope per channel",
-      "tags": [
-        "Low-frequency oscillator",
-        "Clock modulator",
-        "Polyphonic"
-      ]
+      "tags": ["Low-frequency oscillator", "Clock modulator", "Polyphonic"]
     },
     {
       "slug": "TheCauldron",
       "name": "The Cauldron",
       "description": "Fluid wave math processor - 4 inputs combined through 7 analog algorithms: Mix, Ring, Peaks, Valleys, Diff, Fold, Morph",
-      "tags": [
-        "Mixer",
-        "Ring modulator",
-        "Waveshaper",
-        "Effect"
-      ]
+      "tags": ["Mixer", "Ring modulator", "Waveshaper", "Effect"]
     },
     {
       "slug": "TheArchitect",
       "name": "The Architect",
       "description": "Poly-Quantizer & Chord Machine - 8 independent quantizer tracks with shared Key/Scale and chord generator",
-      "tags": [
-        "Quantizer",
-        "Polyphonic",
-        "Tuner"
-      ]
+      "tags": ["Quantizer", "Polyphonic", "Tuner"]
     },
     {
       "slug": "Linkage",
       "name": "Linkage",
       "description": "Chaotic percussion generator using coupled physical spring model",
-      "tags": [
-        "Physical modeling",
-        "Synth voice",
-        "Drum"
-      ]
+      "tags": ["Physical modeling", "Synth voice", "Drum"]
+    },
+    {
+      "slug": "ACID9Voice",
+      "name": "ACID9 Voice",
+      "description": "Acid synthesizer voice with tri-core morphing oscillator, dual filters, stereo delay with ghost mode, and accent/slide control",
+      "tags": ["Synth voice", "Oscillator", "Filter"]
+    },
+    {
+      "slug": "ACID9Seq",
+      "name": "ACID9 Seq",
+      "description": "Pattern sequencer for ACID9 Voice with accent, slide, and gate controls",
+      "tags": ["Sequencer", "Controller"]
+    },
+    {
+      "slug": "TR808",
+      "name": "TR808",
+      "description": "Drum machine voice emulation with classic analog drum sounds",
+      "tags": ["Drum", "Synth voice", "Sampler"]
+    },
+    {
+      "slug": "VektorX",
+      "name": "Vektor X",
+      "description": "Vector synthesis module with joystick-style morphing between waveforms",
+      "tags": ["Oscillator", "Synth voice"]
+    },
+    {
+      "slug": "Euclogic",
+      "name": "Euclogic",
+      "description": "Euclidean rhythm generator with logic operations",
+      "tags": ["Clock modulator", "Sequencer"]
+    },
+    {
+      "slug": "Euclogic2",
+      "name": "Euclogic 2",
+      "description": "Advanced Euclidean rhythm generator with expanded logic operations",
+      "tags": ["Clock modulator", "Sequencer"]
+    },
+    {
+      "slug": "TetanusCoil",
+      "name": "Tetanus Coil",
+      "description": "Chaotic oscillator based on coupled nonlinear systems",
+      "tags": ["Oscillator", "Noise", "Effect"]
+    },
+    {
+      "slug": "NutShaker",
+      "name": "Nut Shaker",
+      "description": "Physical model of a shaker percussion instrument",
+      "tags": ["Physical modeling", "Drum", "Synth voice"]
+    },
+    {
+      "slug": "PhysicalChoir",
+      "name": "Physical Choir",
+      "description": "Physical model of vocal choir synthesis",
+      "tags": ["Physical modeling", "Synth voice", "Oscillator"]
+    },
+    {
+      "slug": "ChaosPad",
+      "name": "Chaos Pad",
+      "description": "XY pad controller with chaotic modulation sources",
+      "tags": ["Controller", "Low-frequency oscillator", "Noise"]
     }
   ]
 }

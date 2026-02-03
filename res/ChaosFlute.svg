@@ -1,48 +1,53 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="60.96" height="380" viewBox="0 0 60.96 380">
-  <!-- 4HP Panel (1HP = 15.24mm) -->
-  <rect width="60.96" height="380" fill="#1a1a2e"/>
+  <!-- 4HP Panel - Chaos Flute: airy, breathy, chaotic wind -->
+  <defs>
+    <!-- Deep atmosphere gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1b2a"/>
+      <stop offset="40%" style="stop-color:#1b263b"/>
+      <stop offset="100%" style="stop-color:#0d1b2a"/>
+    </linearGradient>
+    <!-- Breath/wind glow -->
+    <radialGradient id="breathGlow" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" style="stop-color:#48cae4;stop-opacity:0.12"/>
+      <stop offset="100%" style="stop-color:#48cae4;stop-opacity:0"/>
+    </radialGradient>
+    <!-- Chaos swirl accent -->
+    <radialGradient id="chaosGlow" cx="30%" cy="70%" r="50%">
+      <stop offset="0%" style="stop-color:#f72585;stop-opacity:0.08"/>
+      <stop offset="100%" style="stop-color:#f72585;stop-opacity:0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="60.96" height="380" fill="url(#bgGrad)"/>
+
+  <!-- Breath glow -->
+  <ellipse cx="30.48" cy="140" rx="55" ry="100" fill="url(#breathGlow)"/>
+
+  <!-- Chaos accent -->
+  <ellipse cx="20" cy="260" rx="40" ry="60" fill="url(#chaosGlow)"/>
+
+  <!-- Wind/breath flow lines -->
+  <path d="M10 100 Q30 95 50 105" fill="none" stroke="#48cae4" stroke-width="0.4" stroke-opacity="0.2"/>
+  <path d="M5 150 Q35 140 55 155" fill="none" stroke="#48cae4" stroke-width="0.3" stroke-opacity="0.15"/>
+  <path d="M8 200 Q25 210 52 195" fill="none" stroke="#48cae4" stroke-width="0.35" stroke-opacity="0.18"/>
+
+  <!-- Chaos turbulence hints -->
+  <path d="M15 280 Q25 270 20 290 Q30 285 25 300" fill="none" stroke="#f72585" stroke-width="0.3" stroke-opacity="0.15"/>
+  <path d="M40 260 Q50 255 45 275 Q55 270 48 285" fill="none" stroke="#f72585" stroke-width="0.25" stroke-opacity="0.12"/>
 
   <!-- Panel border -->
   <rect x="0.5" y="0.5" width="59.96" height="379" fill="none" stroke="#3d3d5c" stroke-width="1"/>
 
   <!-- Title -->
-  <text x="30.48" y="20" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#e0e0e0">CHAOS</text>
-  <text x="30.48" y="30" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#e0e0e0">FLUTE</text>
-
-  <!-- LUNG section label -->
-  <text x="30.48" y="42" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">LUNG</text>
-
-  <!-- ATK and REL labels -->
-  <text x="12.48" y="65" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">ATK</text>
-  <text x="48.48" y="65" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">REL</text>
-
-  <!-- PRESSURE label -->
-  <text x="30.48" y="82" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#c06060">PRESSURE</text>
-
-  <!-- MOUTH and GROWL labels -->
-  <text x="12.48" y="133" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">MOUTH</text>
-  <text x="48.48" y="133" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#808080">GROWL</text>
-
-  <!-- REVERB label -->
-  <text x="30.48" y="168" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">REVERB</text>
-
-  <!-- CV labels (3 columns) -->
-  <text x="12.48" y="206" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">PRESS</text>
-  <text x="30.48" y="206" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">MOUTH</text>
-  <text x="48.48" y="206" text-anchor="middle" font-family="Arial, sans-serif" font-size="4" fill="#606080">VERB</text>
-
-  <!-- V/OCT and GATE labels -->
-  <text x="12.48" y="255" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">V/OCT</text>
-  <text x="48.48" y="255" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">GATE</text>
-
-  <!-- OUT labels -->
-  <text x="12.48" y="310" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">L</text>
-  <text x="48.48" y="310" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">R</text>
+  <text x="30.48" y="22" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#e0e0e0">CHAOS</text>
+  <text x="30.48" y="32" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#e0e0e0">FLUTE</text>
 
   <!-- Faust indicator -->
-  <text x="30.48" y="350" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">FAUST DSP</text>
+  <text x="30.48" y="350" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#415a77">FAUST DSP</text>
 
   <!-- Brand -->
-  <text x="30.48" y="365" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">WiggleRoom</text>
+  <text x="30.48" y="365" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#415a77">WiggleRoom</text>
 </svg>

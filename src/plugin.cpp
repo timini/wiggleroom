@@ -24,6 +24,9 @@ extern Model* modelTheArchitect;
 #ifdef HAS_EUCLOGIC
 extern Model* modelEuclogic;
 #endif
+#ifdef HAS_EUCLOGIC2
+extern Model* modelEuclogic2;
+#endif
 #ifdef HAS_LADDERLPF
 extern Model* modelLadderLPF;
 #endif
@@ -81,9 +84,6 @@ extern Model* modelTetanusCoil;
 #ifdef HAS_NUTSHAKER
 extern Model* modelNutShaker;
 #endif
-#ifdef HAS_EUCLOGIC2
-extern Model* modelEuclogic2;
-#endif
 #ifdef HAS_PHYSICALCHOIR
 extern Model* modelPhysicalChoir;
 #endif
@@ -114,6 +114,9 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_EUCLOGIC
     p->addModel(modelEuclogic);
+#endif
+#ifdef HAS_EUCLOGIC2
+    p->addModel(modelEuclogic2);
 #endif
 #ifdef HAS_LADDERLPF
     p->addModel(modelLadderLPF);
@@ -171,9 +174,6 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_NUTSHAKER
     p->addModel(modelNutShaker);
-#endif
-#ifdef HAS_EUCLOGIC2
-    p->addModel(modelEuclogic2);
 #endif
 #ifdef HAS_PHYSICALCHOIR
     p->addModel(modelPhysicalChoir);

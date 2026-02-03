@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(WiggleRoom VERSION 2.0.0)
+project(WiggleRoom VERSION 2.1.0)
 
 # 1. Setup VCV Rack SDK and Faust
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -48,7 +48,7 @@ endforeach()
 # Set RELEASE_MODULE_LIST to a semicolon-separated list of module slugs to build only those.
 # Example: cmake -DRELEASE_MODULE_LIST="Matter;ACID9Voice" ..
 # When empty (default), all modules are built.
-set(RELEASE_MODULE_LIST "" CACHE STRING "Semicolon-separated list of module slugs to include in release build. Empty = all modules.")
+set(RELEASE_MODULE_LIST "Matter;ACID9Voice" CACHE STRING "Semicolon-separated list of module slugs to include in release build. Empty = all modules.")
 
 # 6. The Plugin Artifact
 add_library(${PROJECT_NAME} MODULE src/plugin.cpp)
@@ -66,6 +66,7 @@ foreach(module_target ${MODULE_TARGETS})
     if(NOT IS_EXCLUDED)
         # If RELEASE_MODULE_LIST is set, only include modules in the list
         if(RELEASE_MODULE_LIST)
+            # Extract slug from target name (e.g., "Matter_Module" -> "Matter")
             string(REGEX REPLACE "_Module$" "" module_slug "${module_target}")
             list(FIND RELEASE_MODULE_LIST "${module_slug}" _idx)
             if(_idx EQUAL -1)
@@ -81,7 +82,6 @@ foreach(module_target ${MODULE_TARGETS})
 endforeach()
 
 # Define HAS_* for all modules that are being built
-# Every module uses conditional compilation so the release filter works
 if(Intersect_Module IN_LIST ACTIVE_MODULES)
     target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_INTERSECT=1)
 endif()
@@ -166,9 +166,6 @@ endif()
 if(ChaosPad_Module IN_LIST ACTIVE_MODULES)
     target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CHAOSPAD=1)
 endif()
-if(Linkage_Module IN_LIST ACTIVE_MODULES)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_LINKAGE=1)
-endif()
 # Set output name without lib prefix
 set_target_properties(${PROJECT_NAME} PROPERTIES
     PREFIX ""
@@ -194,10 +191,10 @@ else()
     )
 endif()
 
-# 6. Packaging Custom Target
+# 7. Packaging Custom Target
 rack_package_target(${PROJECT_NAME})
 
-# 7. Test Harness (optional)
+# 8. Test Harness (optional)
 option(BUILD_TESTS "Build audio test harness" ON)
 if(BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/CMakeLists.txt")
     add_subdirectory(test)
@@ -209,5 +206,9 @@ message(STATUS "=== WiggleRoom Plugin Configuration ===")
 message(STATUS "Version: ${PROJECT_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "Modules found: ${MODULE_TARGETS}")
+message(STATUS "Active modules: ${ACTIVE_MODULES}")
+if(RELEASE_MODULE_LIST)
+    message(STATUS "Release filter: ${RELEASE_MODULE_LIST}")
+endif()
 message(STATUS "========================================")
 message(STATUS "")

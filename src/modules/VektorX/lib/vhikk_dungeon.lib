@@ -1,0 +1,81 @@
+// VHIKK Dungeon - Metallic Reverb
+// Part of the VHIKK modular DSP library
+//
+// Based on VHIKK X "Dungeon" mode - creates metallic, resonant reverb
+
+declare name "VHIKK Dungeon";
+declare author "WiggleRoom";
+declare version "1.0";
+
+import("stdfaust.lib");
+vh_sc = library("vhikk_soft_clip.lib");
+
+// Metallic reverb using allpass and comb filters
+// Creates the dense, resonant character of the VHIKK X Dungeon mode
+//
+// input: Mono audio signal
+// decay: Reverb time 0-1 (short metallic to long ambient)
+// damping: High frequency damping 0-1
+// size: Room size 0-1 (scales all delay times)
+//
+// Returns: Stereo pair (left, right)
+dungeon(input, decay, damping, size) = left, right
+with {
+    // Feedback amount based on decay (0.3 to 0.95)
+    fb = 0.3 + decay * 0.65;
+
+    // Size scaling (0.3 to 1.0)
+    size_scale = 0.3 + size * 0.7;
+
+    // Damping lowpass cutoff
+    damp_freq = 2000 + (1.0 - damping) * 18000;  // 2kHz to 20kHz
+    damper = fi.lowpass(1, damp_freq);
+
+    // Allpass diffusers (prime-number delays for metallic character)
+    ap1 = fi.allpass_comb(2048, int(142 * size_scale), fb * 0.7);
+    ap2 = fi.allpass_comb(2048, int(379 * size_scale), fb * 0.7);
+    ap3 = fi.allpass_comb(2048, int(107 * size_scale), fb * 0.65);
+    ap4 = fi.allpass_comb(2048, int(277 * size_scale), fb * 0.65);
+
+    // Comb filters for resonance
+    comb1 = fi.fb_fcomb(4096, int(1557 * size_scale), fb * 0.8, damping);
+    comb2 = fi.fb_fcomb(4096, int(1617 * size_scale), fb * 0.8, damping);
+    comb3 = fi.fb_fcomb(4096, int(1491 * size_scale), fb * 0.78, damping);
+    comb4 = fi.fb_fcomb(4096, int(1422 * size_scale), fb * 0.78, damping);
+
+    // Process through diffusers
+    diffused = input : ap1 : ap2 : ap3 : ap4 : damper;
+
+    // Parallel comb filters for density
+    combs_l = diffused <: comb1, comb3 :> _;
+    combs_r = diffused <: comb2, comb4 :> _;
+
+    // Final diffusion and limiting
+    left = combs_l : ap1 : vh_sc.soft_clip_raw(_, 1.1);
+    right = combs_r : ap2 : vh_sc.soft_clip_raw(_, 1.1);
+};
+
+// Simpler metallic reverb using Faust's built-in
+dungeon_simple(input, decay, damping, size) = reverbed
+with {
+    // Use mono freeverb for basic metallic reverb
+    room = 0.3 + size * 0.6;
+    damp = damping;
+    reverbed = input : re.mono_freeverb(room, 0.3, damp, decay * 2) <: _, _;
+};
+
+// Plate reverb (smoother, less metallic)
+plate(input, decay, damping) = re.mono_freeverb(0.8, 0.3, damping, decay) <: _, _;
+
+// Small room (tight, short reflections)
+small_room(input, decay) = left, right
+with {
+    // Very short delays for small room character
+    d1 = fi.allpass_comb(512, 53, 0.5);
+    d2 = fi.allpass_comb(512, 79, 0.5);
+    d3 = fi.allpass_comb(512, 97, 0.5);
+
+    processed = input : d1 : d2 : d3;
+    left = processed * decay;
+    right = processed * decay * 0.95;  // Slight difference for stereo
+};

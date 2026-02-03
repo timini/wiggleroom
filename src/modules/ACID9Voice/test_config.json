@@ -1,0 +1,106 @@
+{
+  "module_type": "instrument",
+  "description": "TB-303 inspired acid synthesizer voice with tri-core oscillator, dual filters, and stereo delay",
+  "quality_thresholds": {
+    "thd_max_percent": 30.0,
+    "clipping_max_percent": 5.0,
+    "hnr_min_db": 5.0,
+    "allow_hot_signal": true
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 2.0,
+      "description": "Default acid bass settings"
+    },
+    {
+      "name": "acid_squelch",
+      "duration": 2.0,
+      "parameters": {
+        "cutoff": 800,
+        "resonance": 0.8,
+        "env_mod": 0.9,
+        "decay": 0.15,
+        "filter_mode": 0,
+        "grit": 0.3
+      },
+      "description": "Classic acid squelch with diode ladder"
+    },
+    {
+      "name": "lead_mode",
+      "duration": 2.0,
+      "parameters": {
+        "shape": 1.0,
+        "cutoff": 2000,
+        "resonance": 0.5,
+        "filter_mode": 1,
+        "isotope": 0.5
+      },
+      "description": "Lead synth mode with OTA filter and detuned oscillators"
+    },
+    {
+      "name": "sub_bass",
+      "duration": 2.0,
+      "parameters": {
+        "shape": 0.0,
+        "sub_level": 0.8,
+        "sub_mode": 0,
+        "cutoff": 400,
+        "resonance": 0.2,
+        "env_mod": 0.3
+      },
+      "description": "Deep sub bass with sine sub oscillator"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": ["delay_time", "delay_ratio", "delay_fb", "delay_mix", "delay_ghost", "sub_mode", "filter_mode"],
+    "steps": 10
+  },
+  "showcase": {
+    "duration": 20.0,
+    "notes": [
+      {"start": 0.0, "duration": 0.3, "volts": -1.0, "velocity": 1.0},
+      {"start": 0.5, "duration": 0.3, "volts": -1.0, "velocity": 0.8},
+      {"start": 1.0, "duration": 0.3, "volts": -0.5, "velocity": 1.0},
+      {"start": 1.5, "duration": 0.3, "volts": -1.0, "velocity": 0.9},
+      {"start": 2.0, "duration": 0.5, "volts": 0.0, "velocity": 1.0},
+      {"start": 3.0, "duration": 0.3, "volts": -1.0, "velocity": 0.8},
+      {"start": 3.5, "duration": 0.3, "volts": -0.5, "velocity": 1.0},
+      {"start": 4.0, "duration": 0.3, "volts": -1.0, "velocity": 0.9},
+      {"start": 4.5, "duration": 0.5, "volts": 0.5, "velocity": 1.0},
+      {"start": 5.5, "duration": 0.3, "volts": -1.0, "velocity": 0.8},
+      {"start": 6.0, "duration": 0.3, "volts": -0.5, "velocity": 1.0},
+      {"start": 6.5, "duration": 0.3, "volts": 0.0, "velocity": 0.9},
+      {"start": 7.0, "duration": 0.5, "volts": -0.5, "velocity": 1.0},
+      {"start": 8.0, "duration": 0.3, "volts": -1.0, "velocity": 1.0},
+      {"start": 8.5, "duration": 0.3, "volts": -0.5, "velocity": 0.8},
+      {"start": 9.0, "duration": 0.3, "volts": 0.0, "velocity": 1.0},
+      {"start": 9.5, "duration": 0.5, "volts": 0.25, "velocity": 0.9},
+      {"start": 10.5, "duration": 0.3, "volts": -1.0, "velocity": 1.0},
+      {"start": 11.0, "duration": 0.3, "volts": -0.5, "velocity": 0.9},
+      {"start": 11.5, "duration": 0.3, "volts": 0.0, "velocity": 1.0},
+      {"start": 12.0, "duration": 0.5, "volts": 0.5, "velocity": 0.8},
+      {"start": 13.0, "duration": 0.3, "volts": -1.0, "velocity": 1.0},
+      {"start": 13.5, "duration": 0.3, "volts": -0.75, "velocity": 0.9},
+      {"start": 14.0, "duration": 0.3, "volts": -0.5, "velocity": 1.0},
+      {"start": 14.5, "duration": 0.5, "volts": 0.0, "velocity": 0.8},
+      {"start": 15.5, "duration": 0.3, "volts": -1.0, "velocity": 1.0},
+      {"start": 16.0, "duration": 0.3, "volts": -0.5, "velocity": 0.9},
+      {"start": 16.5, "duration": 0.3, "volts": 0.0, "velocity": 1.0},
+      {"start": 17.0, "duration": 0.5, "volts": -0.25, "velocity": 0.8},
+      {"start": 18.0, "duration": 1.5, "volts": -1.0, "velocity": 1.0}
+    ],
+    "automations": [
+      {"param": "cutoff", "start_time": 0.0, "end_time": 5.0, "start_value": 500, "end_value": 3000},
+      {"param": "cutoff", "start_time": 5.0, "end_time": 10.0, "start_value": 3000, "end_value": 800},
+      {"param": "cutoff", "start_time": 10.0, "end_time": 15.0, "start_value": 800, "end_value": 5000},
+      {"param": "cutoff", "start_time": 15.0, "end_time": 20.0, "start_value": 5000, "end_value": 1000},
+      {"param": "resonance", "start_time": 0.0, "end_time": 10.0, "start_value": 0.3, "end_value": 0.85},
+      {"param": "resonance", "start_time": 10.0, "end_time": 20.0, "start_value": 0.85, "end_value": 0.4},
+      {"param": "env_mod", "start_time": 0.0, "end_time": 20.0, "start_value": 0.3, "end_value": 0.9},
+      {"param": "grit", "start_time": 0.0, "end_time": 10.0, "start_value": 0.0, "end_value": 0.6},
+      {"param": "grit", "start_time": 10.0, "end_time": 20.0, "start_value": 0.6, "end_value": 0.2},
+      {"param": "shape", "start_time": 0.0, "end_time": 20.0, "start_value": 0.0, "end_value": 0.8}
+    ]
+  }
+}

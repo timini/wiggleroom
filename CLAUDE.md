@@ -2,25 +2,50 @@
 
 ## Development Workflow
 
-Always use feature-dev agents for feature development tasks. When implementing new features or making significant changes to the codebase, invoke the `/feature-dev` skill to ensure guided feature development with proper codebase understanding and architecture focus.
+**IMPORTANT:** Always use the feature-dev skill for feature development tasks. When implementing new features or making significant changes to the codebase, invoke the `feature-dev:feature-dev` skill to ensure guided feature development with proper codebase understanding and architecture focus.
+
+```
+/feature-dev <task description>
+```
 
 **For comprehensive development documentation, see [DEVELOPMENT.md](DEVELOPMENT.md).**
+
+**For release strategy and plugin packs, see [docs/RELEASE_STRATEGY.md](docs/RELEASE_STRATEGY.md).**
+
+## Plugin Packs
+
+WiggleRoom is organized into **thematic packs** with **Free** and **Pro** tiers:
+
+| Pack | Free Modules | Pro Modules |
+|------|--------------|-------------|
+| **Voices** | PluckedString, ModalBell | ChaosFlute, SpaceCello, TheAbyss, Matter, VektorX |
+| **Effects** | MoogLPF, BigReverb, InfiniteFolder | SaturationEcho, SolinaEnsemble, SpectralResonator, TheCauldron |
+| **Modulators** | GravityClock, OctoLFO, Intersect | Cycloid, TheArchitect |
+
+See [docs/RELEASE_STRATEGY.md](docs/RELEASE_STRATEGY.md) for full details on naming, pricing, and release phases.
 
 ## Project Structure
 
 ```
 WiggleRoom/
 ├── .claude/                  # Claude Code configuration
-│   └── agents/               # Agent definitions (for Claude Code)
-│       ├── verifier.md       # Build & test verification agent
-│       ├── judge.md          # Quality evaluation agent
-│       └── faust-dev.md      # Faust DSP development agent
+│   ├── agents/               # Subagent prompt templates
+│   │   ├── verifier.md       # Build + test + collect metrics
+│   │   ├── judge.md          # Evaluate + prioritize fixes
+│   │   └── dev-agent.md      # Apply targeted DSP fixes
+│   └── skills/               # Custom slash commands
+│       └── dsp-fix/          # /dsp-fix workflow
+│           └── SKILL.md      # Automated verify → judge → fix loop
 ├── cmake/                    # CMake helpers & toolchains
 │   ├── RackSDK.cmake         # SDK finder/downloader
 │   └── Toolchain-*.cmake     # Cross-compilation toolchains
+├── docs/                     # Documentation
+│   └── RELEASE_STRATEGY.md   # Plugin packs, pricing, release phases
 ├── faust/                    # Faust architecture file
 │   └── vcvrack.cpp           # VCVRackDSP wrapper template
-├── res/                      # SVG panel graphics
+├── res/                      # Panel graphics (PNG for AI-gen, SVG for hand-drawn)
+├── scripts/                  # Development scripts
+│   └── generate_faceplate.py # AI faceplate generation (Gemini)
 ├── src/
 │   ├── common/               # Shared utilities
 │   │   ├── DSP.hpp           # DSP utilities (V/Oct, smoothing)
@@ -33,10 +58,10 @@ WiggleRoom/
 │   │       └── module_name.dsp   # (Faust modules only)
 │   └── plugin.cpp            # Plugin entry point
 ├── test/                     # Testing framework
-│   ├── agents/               # Agent implementation scripts
-│   │   ├── verifier_agent.py # Build and test runner
-│   │   ├── judge_agent.py    # Quality evaluator
-│   │   └── orchestrator.py   # Development loop coordinator
+│   ├── agents/               # Automation tools (NOT Claude subagents)
+│   │   ├── verifier_agent.py # Build and test automation
+│   │   ├── judge_agent.py    # Quality evaluation automation
+│   │   └── orchestrator.py   # Feedback loop coordinator
 │   ├── faust_render.cpp      # Audio rendering tool
 │   ├── test_framework.py     # Main test runner
 │   ├── audio_quality.py      # Audio quality analysis (THD, aliasing, etc.)
@@ -82,6 +107,150 @@ just test-quality-report ModuleName
 
 See [DEVELOPMENT.md](DEVELOPMENT.md#testing-framework) for full testing documentation.
 
+## Showcase Audio & Reports
+
+Generate comprehensive showcase audio for modules with multiple notes and parameter sweeps:
+
+```bash
+# Generate showcase report for all modules
+just showcase
+
+# Generate for specific module
+just showcase-module ChaosFlute
+
+# Skip AI analysis (faster)
+just showcase-fast
+
+# Render showcase audio only (no report)
+just render-showcase ChaosFlute
+```
+
+The showcase report (`test/output/showcase_report.html`) provides:
+- Module SVG panel display
+- Audio player with full showcase clip
+- Spectrogram visualization
+- Note sequence visualization (piano roll)
+- Parameter automation graph
+- Quality metrics (THD, HNR, peak, clipping)
+- AI analysis (CLAP scores, sound character, Gemini analysis)
+- Pass/fail status based on thresholds
+
+### Environment Setup for AI Analysis
+
+Create a `.env` file in the project root (copy from `.env.example`):
+```bash
+# .env
+GEMINI_API_KEY=your_api_key_here
+
+# Gemini model - MUST use full path with models/ prefix
+GEMINI_MODEL=models/gemini-3-pro-preview
+```
+
+Get your API key at: https://aistudio.google.com/apikey
+
+The scripts automatically load this file. Without it, only CLAP analysis runs (no API key needed).
+
+### Gemini Audio Analysis Notes
+
+**Model Configuration:**
+- Always use the full model path with `models/` prefix (e.g., `models/gemini-3-pro-preview`)
+- Recommended model: `models/gemini-3-pro-preview` for best audio analysis quality
+- Alternative models: `models/gemini-2.5-flash`, `models/gemini-2.5-pro`
+
+**Multi-Channel Audio:**
+- The analysis script automatically converts multi-channel WAV files to stereo
+- This is required because Gemini API does not support >2 channel audio
+- Modules like TR808 output 13 channels (individual drums + stereo mix)
+
+**Troubleshooting:**
+| Error | Solution |
+|-------|----------|
+| `404 model not found` | Use full path: `models/gemini-3-pro-preview` not `gemini-3-pro-preview` |
+| `500 Internal error` | Often means unsupported audio format; script now auto-converts to stereo |
+| `400 Invalid argument` | Check audio file format (must be WAV, ≤20MB) |
+
+**Running Analysis:**
+```bash
+# Full analysis with CLAP + Gemini
+python3 test/ai_audio_analysis.py --module ModuleName -v
+
+# CLAP only (no API key needed)
+python3 test/ai_audio_analysis.py --module ModuleName --clap-only -v
+```
+
+### Showcase Configuration
+
+Each module can define custom showcase settings in `test_config.json`:
+
+```json
+{
+  "showcase": {
+    "duration": 10.0,
+    "notes": [
+      {"start": 0.0, "duration": 2.0, "volts": -1.0, "velocity": 1.0},
+      {"start": 2.5, "duration": 2.0, "volts": 0.0, "velocity": 0.9}
+    ],
+    "automations": [
+      {"param": "brightness", "start_time": 0.0, "end_time": 10.0, "start_value": 0.2, "end_value": 0.8}
+    ]
+  }
+}
+```
+
+| Module Type | Default Showcase |
+|-------------|------------------|
+| **Instrument** | 10s, 4 notes at C3/C4/C5/G4 |
+| **Filter** | 8s, cutoff sweep up/down |
+| **Effect** | 10s, repeated bursts with mix sweep |
+| **Resonator** | 10s, varied excitation with decay sweep |
+
+## Faceplate Generation
+
+Generate AI-powered PNG faceplates using Gemini Imagen 4.0:
+
+```bash
+# Generate faceplate for a specific module
+just faceplate ModuleName
+
+# Preview the AI prompt without generating
+just faceplate-prompt ModuleName
+
+# Generate faceplates for all modules
+just faceplate-all
+
+# List available modules and their HP widths
+python3 scripts/generate_faceplate.py --list
+```
+
+### Panel Dimensions
+
+VCV Rack panels use specific dimensions based on HP (horizontal pitch):
+- **Width**: `HP × 15.24 × 3` pixels (e.g., 8HP = 366px, 20HP = 914px)
+- **Height**: `380 × 3 = 1140` pixels (standard 3U height)
+- **Aspect ratio**: ~9:16 requested from Imagen API
+
+### Adding New Modules
+
+When adding a new module, update `scripts/generate_faceplate.py`:
+
+```python
+MODULE_HP = {
+    # ... existing modules ...
+    "MyNewModule": 8,  # Add your module's HP width
+}
+```
+
+### Style Guide
+
+The script generates Grateful Dead-inspired psychedelic artwork:
+- Dark backgrounds (deep purple, navy, black)
+- Flowing organic shapes and sacred geometry
+- Bioluminescent accents (cyan, magenta, orange, gold)
+- Module name at top, "WIGGLE ROOM" brand at bottom
+- Clear middle area for hardware controls
+
+Requires `GEMINI_API_KEY` in `.env` file (same key used for AI audio analysis).
+
 ## Iterative Module Development
 
 When debugging or improving Faust DSP modules, use this systematic approach:
@@ -91,7 +260,8 @@ When debugging or improving Faust DSP modules, use this systematic approach:
 python3 test/audio_quality.py --module ModuleName --report -v
 
 # 2. Get AI assessment (includes DSP context for artistic intent)
-GEMINI_API_KEY=key python3 test/ai_audio_analysis.py --module ModuleName -v
+# Note: Requires GEMINI_API_KEY in .env file for Gemini analysis
+python3 test/ai_audio_analysis.py --module ModuleName -v
 
 # 3. Make ONE targeted DSP change based on feedback
 # 4. Rebuild and re-test
@@ -129,150 +299,205 @@ just validate ModuleName
 
 See [DEVELOPMENT.md#iterative-module-development-technique](DEVELOPMENT.md#iterative-module-development-technique) for detailed workflow.
 
-## Agent-Based Development System
+## DSP Module Fix Workflow
 
-The project includes a multi-agent system for structured Faust module development. This provides automated verification, quality judgment, and actionable fix instructions.
+For Faust DSP module development, use the **`/dsp-fix` slash command** to automate the verify → judge → fix cycle until the module passes quality thresholds.
 
-### Agent Architecture
+### Quick Start
+
+```bash
+# Run the automated fix workflow for a module
+/dsp-fix ModuleName
+```
+
+This slash command orchestrates the complete feedback loop:
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Verifier Agent │────▶│   Judge Agent   │────▶│ Faust Dev Agent │
-│                 │     │                 │     │    (Claude)     │
-│ - Build         │     │ - Evaluate      │     │                 │
-│ - Render tests  │     │ - Prioritize    │     │ - Read DSP      │
-│ - Quality tests │     │ - Score         │     │ - Apply fixes   │
-│ - Param sweep   │     │ - Generate fix  │     │ - Rebuild       │
-│ - AI analysis   │     │   instructions  │     │                 │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-         │                                               │
+│    Verifier     │────▶│      Judge      │────▶│    Dev Agent    │
+│                 │     │                 │     │                 │
+│ - Build         │     │ - Evaluate      │     │ - Read DSP      │
+│ - Quality tests │     │ - Prioritize    │     │ - Apply fix     │
+│ - AI analysis   │     │ - Generate fix  │     │ - Rebuild       │
+│                 │     │   instructions  │     │                 │
+└─────────────────┘     └─────────────────┘     └────────┬────────┘
+         ▲                                               │
          └───────────────────────────────────────────────┘
-                        (iterate until pass)
+                        (iterate until PASS)
 ```
 
-### Agent Commands
+### Pass Thresholds
 
-```bash
-# Single verification + judgment iteration
-just agent-verify ModuleName
+| Metric | Default Threshold | Notes |
+|--------|-------------------|-------|
+| Build | Must succeed | No errors |
+| Clipping | <5% | Or module-specific in test_config.json |
+| Quality Score | ≥70 | Combined metric |
+| THD | <15% | Higher OK for distortion effects |
+| HNR | >0 dB | Harmonic-to-noise ratio |
 
-# Get fix instructions (for Claude to execute)
-just agent-fix ModuleName
+### Subagent Reference
 
-# Run full development loop (iterates until pass or max iterations)
-just agent-loop ModuleName [iterations]
+The `/dsp-fix` command uses three subagent roles (prompts in `.claude/agents/`):
 
-# Get JSON output for programmatic use
-just agent-json ModuleName
+| Agent | File | Purpose |
+|-------|------|---------|
+| **Verifier** | `.claude/agents/verifier.md` | Build, run quality tests, collect metrics |
+| **Judge** | `.claude/agents/judge.md` | Evaluate results, prioritize fixes |
+| **Dev** | `.claude/agents/dev-agent.md` | Apply targeted fixes to DSP code |
+
+### Manual Subagent Spawning
+
+You can also spawn subagents manually using the Task tool:
+
+#### Verifier Subagent
+
+```
+Task tool:
+  subagent_type: "general-purpose"
+  description: "Verify {ModuleName}"
+  prompt: |
+    You are the Verifier for Faust DSP module development.
+
+    Your task: Build and test the {MODULE_NAME} module, returning structured quality metrics.
+
+    ## Steps
+    1. Build: `just build`
+    2. Quality tests: `python3 test/audio_quality.py --module {MODULE_NAME} --report -v`
+    3. AI analysis: `python3 test/ai_audio_analysis.py --module {MODULE_NAME} --clap-only -v`
+    4. Parameter ranges: `python3 test/analyze_param_ranges.py {MODULE_NAME}`
+
+    ## Output Format
+    Return: Build Status, Audio Quality (Peak, Clipping, THD, HNR, Score), Issues Found, AI Analysis, Verdict (PASS/NEEDS_WORK/CRITICAL_ISSUES)
+
+    Do NOT fix issues - just report them.
 ```
 
-### Development Loop Workflow
+#### 2. Judge Subagent
 
-**For Claude Code (acting as Faust Dev Agent):**
+Spawns a subagent to evaluate Verifier results and generate prioritized fix instructions.
 
-1. **Run verification**: `just agent-fix ModuleName`
-2. **Receive fix instructions** with priority issues and Faust code hints
-3. **Read the DSP file** specified in the instructions
-4. **Apply targeted fixes** one issue at a time (CRITICAL first, then HIGH)
-5. **Rebuild**: `just build`
-6. **Re-verify**: `just agent-verify ModuleName`
-7. **Repeat** until verdict is PASS
+```
+Task tool:
+  subagent_type: "general-purpose"
+  description: "Judge {ModuleName}"
+  prompt: |
+    You are the Judge for Faust DSP module development.
 
-**Example fix instructions output:**
-```markdown
-# Fix Instructions for ChaosFlute
+    Your task: Evaluate verification results and generate prioritized fix instructions.
 
-DSP File: `src/modules/ChaosFlute/chaos_flute.dsp`
+    ## Verification Results
+    {PASTE_VERIFIER_OUTPUT_HERE}
 
-## Priority Issues to Fix
+    ## Severity Classification
+    - CRITICAL: Build failure, silent output, clipping >15%
+    - HIGH: Clipping 5-15%, quality score <60
+    - MEDIUM: THD >15%, HNR <10dB, AI-detected harshness
+    - LOW: Minor suggestions, optimizations
 
-### 1. [CRITICAL] clipping
-**Issue:** Severe clipping: 32.0% of samples
-**Fix:** Add frequency-dependent gain compensation
-**Faust hint:**
-freq_compensation = min(1.0, freq / 261.62);
-signal = raw_signal * freq_compensation;
+    ## Output Format
+    Return: Verdict, Score, Priority Issues (with specific Faust code fixes), Next Action
+
+    Do NOT apply fixes - generate instructions for Dev agent.
+```
+
+#### 3. Dev Agent (Optional)
+
+Can apply fixes in main conversation, or spawn a dedicated subagent:
+
+```
+Task tool:
+  subagent_type: "general-purpose"
+  description: "Fix {ModuleName}"
+  prompt: |
+    You are the Dev Agent for Faust DSP module development.
+
+    Your task: Apply the #1 priority fix to {MODULE_NAME}.
+
+    ## Judge Instructions
+    {PASTE_JUDGE_OUTPUT_HERE}
+
+    ## Workflow
+    1. Read DSP: src/modules/{MODULE_NAME}/{module_name}.dsp
+    2. Apply ONLY the #1 priority fix
+    3. Rebuild: `just build`
+
+    ## Common Fixes
+    - Clipping: `output : ma.tanh : *(0.7)`
+    - Clicks: `gate : si.smooth(0.995)`
+    - DC Offset: `signal : fi.dcblocker`
+
+    Report what you changed and build status.
 ```
 
 ### Severity Levels
 
-| Severity | Action | Description |
-|----------|--------|-------------|
-| CRITICAL | Fix immediately | Clipping, silent output, build failures |
-| HIGH | Fix before release | Major quality issues, parameter problems |
-| MEDIUM | Should fix | AI-detected issues, minor quality problems |
-| LOW | Optional | Suggestions, minor improvements |
+| Severity | Action | Examples |
+|----------|--------|----------|
+| **CRITICAL** | Fix immediately | Build failure, silent output, clipping >15% |
+| **HIGH** | Fix before release | Clipping 5-15%, quality score <60 |
+| **MEDIUM** | Should fix | AI-detected issues, parameter problems, low HNR |
+| **LOW** | Optional | Minor suggestions, optimizations |
 
-### Common Fix Patterns (Reference)
+### Pass Thresholds
 
-**Clipping:**
-```faust
-// Reduce output gain
-output_gain = 0.5;
+| Metric | Default Threshold | Notes |
+|--------|-------------------|-------|
+| Build | Must succeed | No errors |
+| Clipping | <5% | Or module-specific in test_config.json |
+| Quality Score | ≥70 | Combined metric |
+| THD | <15% | Higher OK for distortion effects |
+| HNR | >0 dB | Harmonic-to-noise ratio |
 
-// Add soft limiter
-output = signal : ma.tanh : *(output_gain);
+### Quick Commands
 
-// Frequency-dependent compensation (waveguide models)
-freq_compensation = min(1.0, freq / 261.62);
+```bash
+# Manual validation (without subagents)
+just validate ModuleName
+
+# Quality tests only
+python3 test/audio_quality.py --module ModuleName --report -v
+
+# AI analysis (CLAP embeddings)
+python3 test/ai_audio_analysis.py --module ModuleName --clap-only -v
+
+# Parameter range analysis
+python3 test/analyze_param_ranges.py ModuleName
 ```
 
-**Transient Clicks:**
-```faust
-// Smooth gate transitions
-gate_smooth = gate : si.smooth(0.995);
+### Python Automation Tools
 
-// Smooth envelope output
-envelope = en.asr(a, s, r, gate) : si.smooth(0.99);
+The `test/agents/` directory has Python tools the subagents can use:
+
+| Tool | Command | Purpose |
+|------|---------|---------|
+| `verifier_agent.py` | `python3 test/agents/verifier_agent.py ModuleName -v` | Run all tests |
+| `judge_agent.py` | `python3 test/agents/judge_agent.py ModuleName` | Evaluate results |
+| `orchestrator.py` | `python3 -m test.agents.orchestrator ModuleName --single` | Single iteration |
+
+### Example Loop Execution
+
 ```
+1. User: "Fix the TetanusCoil module"
 
-**DC Offset:**
-```faust
-// Add DC blocker
-output = signal : fi.dcblocker;
+2. Claude spawns Verifier:
+   → Builds module
+   → Runs quality tests
+   → Returns: "THD 28%, HNR -0.1dB, Verdict: NEEDS_WORK"
+
+3. Claude spawns Judge:
+   → Evaluates results
+   → Returns: "#1 Priority: Adjust test_config.json thresholds for extreme effect"
+
+4. Claude (or Dev agent) applies fix:
+   → Updates test_config.json
+   → Rebuilds
+
+5. Claude spawns Verifier again:
+   → Returns: "Verdict: PASS"
+
+6. Done!
 ```
-
-**Silent Output:**
-```faust
-// Ensure minimum excitation
-min_excitation = 0.05;
-excitation = min_excitation + param * (max_excitation - min_excitation);
-```
-
-### Programmatic Usage
-
-```python
-from test.agents import Orchestrator, run_development_loop
-
-# Quick development loop
-session = run_development_loop("ChaosFlute")
-
-# Or with more control
-orchestrator = Orchestrator(max_iterations=10)
-judgment, verification = orchestrator.run_iteration("ChaosFlute", verbose=True)
-
-if judgment.verdict != "pass":
-    fix_instructions = orchestrator.generate_fix_instructions("ChaosFlute", judgment)
-    print(fix_instructions.to_prompt())
-```
-
-### Agent Definitions
-
-Claude Code agents are defined in `.claude/agents/`:
-
-| Agent | Definition | Description |
-|-------|------------|-------------|
-| **Verifier** | [`.claude/agents/verifier.md`](.claude/agents/verifier.md) | Builds modules and runs comprehensive tests |
-| **Judge** | [`.claude/agents/judge.md`](.claude/agents/judge.md) | Evaluates results and generates fix instructions |
-| **Faust Dev** | [`.claude/agents/faust-dev.md`](.claude/agents/faust-dev.md) | Claude's role for applying DSP fixes |
-
-### Implementation Files
-
-| File | Description |
-|------|-------------|
-| `test/agents/verifier_agent.py` | Python implementation for verification |
-| `test/agents/judge_agent.py` | Python implementation for judging |
-| `test/agents/orchestrator.py` | Coordinates the development loop |
 
 ## Module Architecture
 
@@ -339,7 +564,7 @@ soft_limit = ma.tanh;
    - `src/modules/MyModule/MyModule.cpp` (VCV wrapper)
    - `src/modules/MyModule/CMakeLists.txt`
    - `src/modules/MyModule/test_config.json` (test configuration)
-   - `res/MyModule.svg` (panel)
+   - `res/MyModule.png` or `res/MyModule.svg` (panel - see [Faceplate Generation](#faceplate-generation))
 
 2. **Register module:**
    - `src/plugin.cpp`: Add `extern Model* modelMyModule;` (with `#ifdef HAS_MYMODULE` guard) and `p->addModel(modelMyModule);`
@@ -375,7 +600,13 @@ soft_limit = ma.tanh;
    - `test/dsp_wrappers.cpp`: DSP wrapper
    - `test/CMakeLists.txt`: Module mapping
 
-6. **Build and test:**
+6. **Generate faceplate** (if using AI-generated PNG):
+   ```bash
+   # Add module HP to scripts/generate_faceplate.py MODULE_HP dict first
+   just faceplate MyModule
+   ```
+
+7. **Build and test:**
    ```bash
    just build
    python3 test/test_framework.py --module MyModule -v

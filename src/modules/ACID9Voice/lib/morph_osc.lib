@@ -1,0 +1,74 @@
+// morph_osc.lib - Saw/Sharktooth/Square morphing oscillator
+// Part of ACID9Voice module for WiggleRoom VCV Rack plugin
+//
+// SHAPE control morphs through waveforms:
+// - 0.0: Pure sawtooth
+// - 0.5: Sharktooth (folded saw, similar to TB-303 character)
+// - 1.0: Square wave with PWM capability
+
+import("stdfaust.lib");
+
+// ============================================================================
+// CORE WAVEFORM GENERATORS
+// ============================================================================
+
+// Basic sawtooth oscillator with anti-aliasing (polyBLEP)
+saw_osc(freq) = os.sawtooth(freq);
+
+// Sharktooth: folded sawtooth with adjustable fold point
+// Creates the characteristic "squelchy" 303 sound
+sharktooth_osc(freq, fold_amount) = saw_osc(freq) : folder
+with {
+    // Asymmetric folding that creates even harmonics
+    folder(x) = select2(x > fold_thresh,
+                        x,
+                        fold_thresh - (x - fold_thresh) * fold_gain);
+    fold_thresh = 0.3 + fold_amount * 0.4; // 0.3 to 0.7
+    fold_gain = 1.0 + fold_amount * 2.0;   // Stronger fold at higher amounts
+};
+
+// Square wave with pulse width modulation
+square_osc(freq, pwm) = os.pulsetrain(freq, pwm);
+
+// ============================================================================
+// MORPHING OSCILLATOR
+// ============================================================================
+
+// Main morphing oscillator
+// shape: 0=saw, 0.5=sharktooth, 1=square
+// pwm: pulse width for square (0.1 to 0.9, centered at 0.5)
+morph_osc(freq, shape, pwm) = output
+with {
+    // Crossfade regions
+    saw_to_shark = min(1, shape * 2);      // 0-0.5 -> 0-1
+    shark_to_sq = max(0, (shape - 0.5) * 2); // 0.5-1 -> 0-1
+
+    // Generate waveforms
+    saw = saw_osc(freq);
+    shark = sharktooth_osc(freq, saw_to_shark);
+    sq = square_osc(freq, pwm);
+
+    // Equal-power crossfade coefficients
+    saw_gain = cos(saw_to_shark * ma.PI * 0.5);
+    shark_gain_a = sin(saw_to_shark * ma.PI * 0.5);
+    shark_gain_b = cos(shark_to_sq * ma.PI * 0.5);
+    sq_gain = sin(shark_to_sq * ma.PI * 0.5);
+
+    // Mix based on shape position
+    // First half: saw -> sharktooth
+    // Second half: sharktooth -> square
+    mix1 = saw * saw_gain + shark * shark_gain_a;
+    mix2 = shark * shark_gain_b + sq * sq_gain;
+
+    output = select2(shape > 0.5, mix1, mix2);
+};
+
+// ============================================================================
+// SUB OSCILLATOR
+// ============================================================================
+
+// Sub oscillator at -1 octave
+// mode: 0=sine, 1=square
+sub_osc(freq, mode) = select2(mode > 0.5,
+                              os.osc(freq * 0.5),
+                              os.square(freq * 0.5));

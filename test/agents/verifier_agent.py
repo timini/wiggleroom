@@ -32,7 +32,8 @@ def load_module_config(module_name: str, project_root: Path) -> dict:
         return {
             "module_type": "instrument",
             "skip_audio_tests": False,
-            "thresholds": default_thresholds
+            "thresholds": default_thresholds,
+            "first_scenario": None
         }
 
     try:
@@ -47,18 +48,25 @@ def load_module_config(module_name: str, project_root: Path) -> dict:
             thresholds["hnr_min_db"] = qt.get("hnr_min_db", 0.0)
             thresholds["allow_hot_signal"] = qt.get("allow_hot_signal", False)
 
+        # Get first test scenario for basic render test
+        first_scenario = None
+        if "test_scenarios" in data and data["test_scenarios"]:
+            first_scenario = data["test_scenarios"][0].get("name")
+
         return {
             "module_type": data.get("module_type", "instrument"),
             "skip_audio_tests": data.get("skip_audio_tests", False),
             "skip_reason": data.get("skip_reason", ""),
             "description": data.get("description", ""),
-            "thresholds": thresholds
+            "thresholds": thresholds,
+            "first_scenario": first_scenario
         }
     except (json.JSONDecodeError, IOError):
         return {
             "module_type": "instrument",
             "skip_audio_tests": False,
-            "thresholds": default_thresholds
+            "thresholds": default_thresholds,
+            "first_scenario": None
         }
 
 
@@ -201,6 +209,9 @@ class VerifierAgent:
             allow_hot_signal=thresholds.get("allow_hot_signal", False)
         )
 
+        # Store first scenario for render test
+        self._first_scenario = config_data.get("first_scenario")
+
         if verbose:
             print(f"[Verifier] Module config: type={result.config.module_type}, "
                   f"skip_audio={result.config.skip_audio_tests}")
@@ -284,10 +295,17 @@ class VerifierAgent:
         metrics = RenderMetrics()
 
         try:
+            # Build command - use scenario if available, otherwise fall back to gate=5
+            cmd = [str(self.faust_render), "--module", module_name,
+                   "--output", "/dev/null", "--duration", "2.0"]
+
+            if hasattr(self, '_first_scenario') and self._first_scenario:
+                cmd.extend(["--scenario", self._first_scenario])
+            else:
+                cmd.extend(["--param", "gate=5"])
+
             result = subprocess.run(
-                [str(self.faust_render), "--module", module_name,
-                 "--output", "/dev/null", "--duration", "2.0",
-                 "--param", "gate=5"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30
@@ -335,7 +353,7 @@ class VerifierAgent:
                     data = json.loads(result.stdout)
                     if data:
                         q = data[0] if isinstance(data, list) else data
-                        metrics.overall_score = q.get("overall_score", 0)
+                        metrics.overall_score = int(q.get("overall_quality_score", q.get("overall_score", 0)))
 
                         if "thd" in q:
                             metrics.thd_percent = q["thd"].get("thd_percent", 0)

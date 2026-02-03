@@ -1,0 +1,137 @@
+// VHIKK Cluster Oscillator - 4-oscillator cluster with frequency spreading
+// Part of the VHIKK modular DSP library
+//
+// Based on VHIKK X "Cluster Scanning" synthesis concept:
+// Multiple oscillators with frequency offsets that create swarming textures
+
+declare name "VHIKK Cluster Oscillator";
+declare author "WiggleRoom";
+declare version "1.0";
+
+import("stdfaust.lib");
+vh_mo = library("vhikk_morph_osc.lib");
+
+// 4-oscillator cluster with frequency spreading and stereo width
+//
+// freq: Base frequency in Hz
+// morph: Waveform morph 0-1 (shared across all 4 oscillators)
+// spread: Frequency spread amount 0-1 (maps to ±25 cents max)
+// width: Stereo width 0-1 (0=mono, 1=max stereo spread)
+//
+// Returns: Stereo pair (left, right)
+cluster_osc(freq, morph, spread, width) = left, right
+with {
+    // Convert spread amount to cents deviation (max ±50 cents for thick drone)
+    max_spread_cents = 50.0;
+    spread_cents = spread * max_spread_cents;
+
+    // Convert cents to frequency ratio: 2^(cents/1200)
+    cents_to_ratio(c) = 2.0 ^ (c / 1200.0);
+
+    // Frequency offsets (symmetric around base frequency)
+    f1 = freq * cents_to_ratio(-spread_cents);
+    f2 = freq * cents_to_ratio(-spread_cents * 0.33);
+    f3 = freq * cents_to_ratio(spread_cents * 0.33);
+    f4 = freq * cents_to_ratio(spread_cents);
+
+    // 4 morphing oscillators
+    osc1 = vh_mo.morph_osc(f1, morph);
+    osc2 = vh_mo.morph_osc(f2, morph);
+    osc3 = vh_mo.morph_osc(f3, morph);
+    osc4 = vh_mo.morph_osc(f4, morph);
+
+    // Pan positions based on width amount
+    // width=0: all centered (mono), width=1: full stereo spread
+    pan1 = 0.5 - width * 0.45;    // Left
+    pan2 = 0.5 - width * 0.15;    // Left-center
+    pan3 = 0.5 + width * 0.15;    // Right-center
+    pan4 = 0.5 + width * 0.45;    // Right
+
+    // Equal-power panning
+    pan_left(sig, p) = sig * sqrt(1.0 - p);
+    pan_right(sig, p) = sig * sqrt(p);
+
+    // Mix to stereo with 0.5 gain to prevent clipping
+    left = (pan_left(osc1, pan1) + pan_left(osc2, pan2) +
+            pan_left(osc3, pan3) + pan_left(osc4, pan4)) * 0.5;
+    right = (pan_right(osc1, pan1) + pan_right(osc2, pan2) +
+             pan_right(osc3, pan3) + pan_right(osc4, pan4)) * 0.5;
+};
+
+// Diatonic cluster - oscillators quantized to musical intervals
+// Spread controls which intervals are active (root, 3rd, 5th, 7th)
+//
+// freq: Root frequency in Hz
+// morph: Waveform morph 0-1
+// spread: Interval spread 0-1 (0=unison, 1=full chord)
+// width: Stereo width 0-1
+//
+// Returns: Stereo pair (left, right)
+cluster_osc_diatonic(freq, morph, spread, width) = left, right
+with {
+    // Diatonic intervals (major scale ratios)
+    // Root=1, Major 3rd=5/4, Perfect 5th=3/2, Major 7th=15/8
+    ratio_root = 1.0;
+    ratio_3rd = 1.25;    // 5/4
+    ratio_5th = 1.5;     // 3/2
+    ratio_7th = 1.875;   // 15/8
+
+    // Interpolate from unison to full chord based on spread
+    f1 = freq * (1.0 + (ratio_root - 1.0) * spread);
+    f2 = freq * (1.0 + (ratio_3rd - 1.0) * spread);
+    f3 = freq * (1.0 + (ratio_5th - 1.0) * spread);
+    f4 = freq * (1.0 + (ratio_7th - 1.0) * spread);
+
+    // 4 morphing oscillators
+    osc1 = vh_mo.morph_osc(f1, morph);
+    osc2 = vh_mo.morph_osc(f2, morph);
+    osc3 = vh_mo.morph_osc(f3, morph);
+    osc4 = vh_mo.morph_osc(f4, morph);
+
+    // Stereo placement
+    pan1 = 0.5 - width * 0.4;
+    pan2 = 0.5 - width * 0.13;
+    pan3 = 0.5 + width * 0.13;
+    pan4 = 0.5 + width * 0.4;
+
+    pan_left(sig, p) = sig * sqrt(1.0 - p);
+    pan_right(sig, p) = sig * sqrt(p);
+
+    left = (pan_left(osc1, pan1) + pan_left(osc2, pan2) +
+            pan_left(osc3, pan3) + pan_left(osc4, pan4)) * 0.5;
+    right = (pan_right(osc1, pan1) + pan_right(osc2, pan2) +
+             pan_right(osc3, pan3) + pan_right(osc4, pan4)) * 0.5;
+};
+
+// Analog-style dual oscillator with FM/RM cross-modulation
+// Based on VHIKK X Algorithm 1 (Virtual Analogue)
+//
+// freq: Base frequency in Hz
+// morph: Waveform morph 0-1
+// warp: Cross-modulation amount -1 to 1 (negative=FM, positive=RM)
+//
+// Returns: Mono audio signal
+analog_osc(freq, morph, warp) = output
+with {
+    // Two oscillators with slight detune for classic analog sound
+    osc1 = vh_mo.morph_osc(freq, morph);
+    osc2 = vh_mo.morph_osc(freq * 1.002, morph);  // Slight detune
+
+    // Cross-modulation based on warp direction
+    // Negative warp = Exponential FM (pitch modulation)
+    // Positive warp = Ring Modulation (amplitude modulation)
+    fm_amount = max(0.0, -warp);  // Active when warp < 0
+    rm_amount = max(0.0, warp);   // Active when warp > 0
+
+    // FM: modulate osc1 frequency with osc2
+    // Simplified: use osc2 to modulate phase (like through-zero FM)
+    fm_depth = fm_amount * 0.5;
+    osc1_fm = vh_mo.morph_osc(freq * (1.0 + osc2 * fm_depth), morph);
+
+    // RM: multiply the two oscillators
+    rm_output = osc1 * osc2;
+
+    // Blend based on warp amount
+    dry_amount = 1.0 - abs(warp);
+    output = osc1 * dry_amount + osc1_fm * fm_amount + rm_output * rm_amount;
+};

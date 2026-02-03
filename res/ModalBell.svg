@@ -1,30 +1,43 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="60.96" height="380" viewBox="0 0 60.96 380">
-  <!-- 4HP Panel -->
-  <rect width="60.96" height="380" fill="#1a1a2e"/>
+  <!-- 4HP Panel - Modal Bell: metallic, resonant, bell-like -->
+  <defs>
+    <!-- Metallic gradient background -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="50%" style="stop-color:#16213e"/>
+      <stop offset="100%" style="stop-color:#0f0f1a"/>
+    </linearGradient>
+    <!-- Bell shimmer accent -->
+    <radialGradient id="bellGlow" cx="50%" cy="30%" r="60%">
+      <stop offset="0%" style="stop-color:#d4af37;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#d4af37;stop-opacity:0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="60.96" height="380" fill="url(#bgGrad)"/>
+
+  <!-- Bell glow effect -->
+  <ellipse cx="30.48" cy="100" rx="50" ry="80" fill="url(#bellGlow)"/>
+
+  <!-- Resonance rings (decorative) -->
+  <circle cx="30.48" cy="190" r="25" fill="none" stroke="#c9a227" stroke-width="0.3" stroke-opacity="0.2"/>
+  <circle cx="30.48" cy="190" r="35" fill="none" stroke="#c9a227" stroke-width="0.2" stroke-opacity="0.15"/>
+  <circle cx="30.48" cy="190" r="45" fill="none" stroke="#c9a227" stroke-width="0.15" stroke-opacity="0.1"/>
+
+  <!-- Subtle bell shape silhouette -->
+  <path d="M20 320 Q20 280 30.48 260 Q41 280 41 320 Z" fill="#d4af37" fill-opacity="0.05"/>
+
+  <!-- Panel border -->
   <rect x="0.5" y="0.5" width="59.96" height="379" fill="none" stroke="#3d3d5c" stroke-width="1"/>
 
   <!-- Title -->
-  <text x="30.48" y="28" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" font-weight="bold" fill="#e0e0e0">MODAL</text>
-  <text x="30.48" y="40" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" font-weight="bold" fill="#e0e0e0">BELL</text>
-
-  <!-- DECAY label -->
-  <text x="30.48" y="55" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">DECAY</text>
-
-  <!-- BRIGHT/MAT labels -->
-  <text x="17" y="118" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">BRIGHT</text>
-  <text x="44" y="118" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">MAT</text>
-
-  <!-- V/OCT and GATE labels -->
-  <text x="17" y="188" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">V/OCT</text>
-  <text x="44" y="188" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">GATE</text>
-
-  <!-- OUT labels -->
-  <text x="17" y="268" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">L</text>
-  <text x="44" y="268" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#808080">R</text>
+  <text x="30.48" y="22" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#e0e0e0">MODAL</text>
+  <text x="30.48" y="32" text-anchor="middle" font-family="Arial, sans-serif" font-size="7" font-weight="bold" fill="#e0e0e0">BELL</text>
 
   <!-- Faust indicator -->
-  <text x="30.48" y="330" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">FAUST DSP</text>
+  <text x="30.48" y="350" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">FAUST DSP</text>
 
   <!-- Brand -->
   <text x="30.48" y="365" text-anchor="middle" font-family="Arial, sans-serif" font-size="5" fill="#505070">WiggleRoom</text>

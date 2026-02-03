@@ -1,6 +1,6 @@
 {
   "module_type": "instrument",
-  "description": "Modal synthesis bell/percussion with strike position and velocity",
+  "description": "Morphing percussion synthesizer - Wood Block, Marimba, Vibraphone, Kalimba, Glockenspiel",
   "quality_thresholds": {
     "thd_max_percent": 55.0,
     "clipping_max_percent": 2.0,
@@ -11,28 +11,71 @@
     {
       "name": "default",
       "duration": 3.0,
-      "description": "Default bell settings"
+      "description": "Default marimba settings"
     },
     {
-      "name": "bright_metal",
+      "name": "wood_block",
+      "duration": 2.0,
+      "parameters": {
+        "morph": 0.0,
+        "brightness": 0.5,
+        "velocity": 0.9
+      },
+      "description": "Wood block - hollow, inharmonic, short decay"
+    },
+    {
+      "name": "marimba",
       "duration": 3.0,
       "parameters": {
+        "morph": 0.25,
+        "brightness": 0.4,
+        "velocity": 0.7,
+        "strike": 0.3
+      },
+      "description": "Marimba - warm wood, harmonic 1:4 ratio"
+    },
+    {
+      "name": "vibraphone",
+      "duration": 4.0,
+      "parameters": {
+        "morph": 0.5,
+        "brightness": 0.6,
+        "damping": 0.0,
+        "velocity": 0.8
+      },
+      "description": "Vibraphone - singing metal, long sustain"
+    },
+    {
+      "name": "kalimba",
+      "duration": 3.0,
+      "parameters": {
+        "morph": 0.75,
+        "brightness": 0.7,
+        "velocity": 0.85,
+        "strike": 0.25
+      },
+      "description": "Kalimba - anharmonic buzz, clamped tine"
+    },
+    {
+      "name": "glockenspiel",
+      "duration": 4.0,
+      "parameters": {
+        "morph": 1.0,
         "brightness": 0.9,
-        "material": 0.9,
-        "strike": 0.7
+        "velocity": 1.0,
+        "strike": 0.4
       },
-      "description": "Bright metallic bell, edge strike"
+      "description": "Glockenspiel - piercing steel, long ring"
     },
     {
-      "name": "soft_marimba",
-      "duration": 3.0,
+      "name": "damped_bell",
+      "duration": 2.0,
       "parameters": {
-        "brightness": 0.3,
-        "material": 0.1,
-        "velocity": 0.4,
-        "strike": 0.2
+        "morph": 0.5,
+        "damping": 0.8,
+        "brightness": 0.6
       },
-      "description": "Soft marimba-like tone"
+      "description": "Choked vibraphone - damped quickly"
     }
   ],
   "parameter_sweeps": {
@@ -43,7 +86,7 @@
     "exclude_params": ["velocity"]
   },
   "showcase": {
-    "duration": 25.0,
+    "duration": 30.0,
     "notes": [
       {"start": 0.0, "duration": 1.5, "volts": 0.0, "velocity": 1.0},
       {"start": 1.8, "duration": 1.5, "volts": 0.583, "velocity": 0.85},
@@ -57,20 +100,23 @@
       {"start": 16.2, "duration": 1.5, "volts": 0.917, "velocity": 0.75},
       {"start": 18.0, "duration": 1.5, "volts": 0.167, "velocity": 0.85},
       {"start": 19.8, "duration": 1.5, "volts": 0.5, "velocity": 1.0},
-      {"start": 21.6, "duration": 2.0, "volts": 0.0, "velocity": 0.9}
+      {"start": 21.6, "duration": 1.5, "volts": 0.0, "velocity": 0.9},
+      {"start": 23.4, "duration": 1.5, "volts": -0.75, "velocity": 0.8},
+      {"start": 25.2, "duration": 1.5, "volts": 0.333, "velocity": 0.95},
+      {"start": 27.0, "duration": 2.0, "volts": 0.0, "velocity": 1.0}
     ],
     "automations": [
-      {"param": "brightness", "start_time": 0.0, "end_time": 8.0, "start_value": 0.2, "end_value": 0.95},
-      {"param": "brightness", "start_time": 8.0, "end_time": 16.0, "start_value": 0.95, "end_value": 0.3},
-      {"param": "brightness", "start_time": 16.0, "end_time": 25.0, "start_value": 0.3, "end_value": 0.7},
-      {"param": "decay", "start_time": 0.0, "end_time": 12.0, "start_value": 0.4, "end_value": 2.5},
-      {"param": "decay", "start_time": 12.0, "end_time": 25.0, "start_value": 2.5, "end_value": 0.8},
-      {"param": "material", "start_time": 0.0, "end_time": 10.0, "start_value": 0.1, "end_value": 0.9},
-      {"param": "material", "start_time": 10.0, "end_time": 20.0, "start_value": 0.9, "end_value": 0.2},
-      {"param": "material", "start_time": 20.0, "end_time": 25.0, "start_value": 0.2, "end_value": 0.6},
-      {"param": "strike", "start_time": 0.0, "end_time": 6.0, "start_value": 0.1, "end_value": 0.8},
-      {"param": "strike", "start_time": 6.0, "end_time": 15.0, "start_value": 0.8, "end_value": 0.2},
-      {"param": "strike", "start_time": 15.0, "end_time": 25.0, "start_value": 0.2, "end_value": 0.6}
+      {"param": "morph", "start_time": 0.0, "end_time": 10.0, "start_value": 0.0, "end_value": 0.5},
+      {"param": "morph", "start_time": 10.0, "end_time": 20.0, "start_value": 0.5, "end_value": 1.0},
+      {"param": "morph", "start_time": 20.0, "end_time": 30.0, "start_value": 1.0, "end_value": 0.25},
+      {"param": "brightness", "start_time": 0.0, "end_time": 15.0, "start_value": 0.3, "end_value": 0.95},
+      {"param": "brightness", "start_time": 15.0, "end_time": 30.0, "start_value": 0.95, "end_value": 0.5},
+      {"param": "damping", "start_time": 0.0, "end_time": 25.0, "start_value": 0.0, "end_value": 0.0},
+      {"param": "damping", "start_time": 25.0, "end_time": 28.0, "start_value": 0.0, "end_value": 0.7},
+      {"param": "damping", "start_time": 28.0, "end_time": 30.0, "start_value": 0.7, "end_value": 0.0},
+      {"param": "strike", "start_time": 0.0, "end_time": 10.0, "start_value": 0.15, "end_value": 0.45},
+      {"param": "strike", "start_time": 10.0, "end_time": 20.0, "start_value": 0.45, "end_value": 0.1},
+      {"param": "strike", "start_time": 20.0, "end_time": 30.0, "start_value": 0.1, "end_value": 0.35}
     ]
   }
 }
