@@ -26,10 +26,31 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
 #include <vector>
+
+// Ensure math functions are in global namespace for Faust-generated code
+using std::abs;
+using std::acos;
+using std::asin;
+using std::atan;
+using std::atan2;
+using std::ceil;
+using std::cos;
+using std::exp;
+using std::fabs;
+using std::floor;
+using std::fmod;
+using std::log;
+using std::log10;
+using std::pow;
+using std::round;
+using std::sin;
+using std::sqrt;
+using std::tan;
 
 // Faust compatibility types
 #ifndef FAUSTFLOAT
@@ -48,6 +69,26 @@
 // Each Faust file gets its own namespace to avoid ODR violations
 namespace FaustGenerated {
 namespace FAUST_CONCAT(NS_, FAUST_MODULE_NAME) {
+
+// Import math functions into this namespace
+using ::abs;
+using ::acos;
+using ::asin;
+using ::atan;
+using ::atan2;
+using ::ceil;
+using ::cos;
+using ::exp;
+using ::fabs;
+using ::floor;
+using ::fmod;
+using ::log;
+using ::log10;
+using ::pow;
+using ::round;
+using ::sin;
+using ::sqrt;
+using ::tan;
 
 // Minimal Meta interface (for metadata declarations in DSP)
 struct Meta {
