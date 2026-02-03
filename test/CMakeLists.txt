@@ -10,14 +10,14 @@ file(MAKE_DIRECTORY ${FAUST_GEN_DIR})
 
 # List of all Faust modules
 set(FAUST_MODULES
-    MoogLPF
+    LadderLPF
     BigReverb
     SaturationEcho
     SpectralResonator
     ModalBell
     PluckedString
     ChaosFlute
-    SolinaEnsemble
+    TriPhaseEnsemble
     InfiniteFolder
     SpaceCello
     TheAbyss
@@ -29,9 +29,9 @@ set(FAUST_MODULES
 foreach(MODULE ${FAUST_MODULES})
     string(TOLOWER ${MODULE} MODULE_LOWER)
     # Map module names to their actual .dsp filenames
-    if(MODULE STREQUAL "MoogLPF")
-        set(DSP_FILE "moog_lpf.dsp")
-        set(HPP_FILE "moog_lpf.hpp")
+    if(MODULE STREQUAL "LadderLPF")
+        set(DSP_FILE "ladder_lpf.dsp")
+        set(HPP_FILE "ladder_lpf.hpp")
     elseif(MODULE STREQUAL "BigReverb")
         set(DSP_FILE "big_reverb.dsp")
         set(HPP_FILE "big_reverb.hpp")
@@ -50,9 +50,9 @@ foreach(MODULE ${FAUST_MODULES})
     elseif(MODULE STREQUAL "ChaosFlute")
         set(DSP_FILE "chaos_flute.dsp")
         set(HPP_FILE "chaos_flute.hpp")
-    elseif(MODULE STREQUAL "SolinaEnsemble")
-        set(DSP_FILE "solina_ensemble.dsp")
-        set(HPP_FILE "solina_ensemble.hpp")
+    elseif(MODULE STREQUAL "TriPhaseEnsemble")
+        set(DSP_FILE "tri_phase_ensemble.dsp")
+        set(HPP_FILE "tri_phase_ensemble.hpp")
     elseif(MODULE STREQUAL "InfiniteFolder")
         set(DSP_FILE "infinite_folder.dsp")
         set(HPP_FILE "infinite_folder.hpp")

@@ -24,8 +24,8 @@ extern Model* modelTheArchitect;
 #ifdef HAS_EUCLOGIC
 extern Model* modelEuclogic;
 #endif
-#ifdef HAS_MOOGLPF
-extern Model* modelMoogLPF;
+#ifdef HAS_LADDERLPF
+extern Model* modelLadderLPF;
 #endif
 #ifdef HAS_MODALBELL
 extern Model* modelModalBell;
@@ -45,8 +45,8 @@ extern Model* modelPluckedString;
 #ifdef HAS_CHAOSFLUTE
 extern Model* modelChaosFlute;
 #endif
-#ifdef HAS_SOLINAENSEMBLE
-extern Model* modelSolinaEnsemble;
+#ifdef HAS_TRIPHASEENSEMBLE
+extern Model* modelTriPhaseEnsemble;
 #endif
 #ifdef HAS_INFINITEFOLDER
 extern Model* modelInfiniteFolder;
@@ -115,8 +115,8 @@ void init(Plugin* p) {
 #ifdef HAS_EUCLOGIC
     p->addModel(modelEuclogic);
 #endif
-#ifdef HAS_MOOGLPF
-    p->addModel(modelMoogLPF);
+#ifdef HAS_LADDERLPF
+    p->addModel(modelLadderLPF);
 #endif
 #ifdef HAS_MODALBELL
     p->addModel(modelModalBell);
@@ -136,8 +136,8 @@ void init(Plugin* p) {
 #ifdef HAS_CHAOSFLUTE
     p->addModel(modelChaosFlute);
 #endif
-#ifdef HAS_SOLINAENSEMBLE
-    p->addModel(modelSolinaEnsemble);
+#ifdef HAS_TRIPHASEENSEMBLE
+    p->addModel(modelTriPhaseEnsemble);
 #endif
 #ifdef HAS_INFINITEFOLDER
     p->addModel(modelInfiniteFolder);

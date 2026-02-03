@@ -23,7 +23,6 @@ Exit codes:
 import argparse
 import hashlib
 import json
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field, asdict
@@ -32,6 +31,20 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+# Import shared utilities
+from utils import (
+    get_project_root,
+    get_render_executable,
+    run_faust_render,
+    get_modules,
+    get_module_params,
+    load_audio,
+    load_module_config as _load_module_config,
+    extract_audio_stats,
+    SAMPLE_RATE,
+    DEFAULT_QUALITY_THRESHOLDS,
+)
 
 # Import audio quality analysis module
 try:
@@ -44,15 +57,7 @@ try:
 except ImportError:
     HAS_AUDIO_QUALITY = False
 
-# Try to import optional dependencies
-try:
-    import librosa
-    HAS_LIBROSA = True
-except ImportError:
-    HAS_LIBROSA = False
-
 # Configuration
-SAMPLE_RATE = 48000
 TEST_DURATION = 2.0
 SENSITIVITY_THRESHOLD = 0.05  # Minimum sensitivity score to pass
 SENSITIVITY_STEPS = 5
@@ -61,12 +66,7 @@ CLIPPING_THRESHOLD = 0.99  # Samples above this are considered clipping
 MAX_CLIPPING_RATIO = 0.01  # Max ratio of clipping samples allowed (default)
 
 # Default thresholds (used when no module config exists)
-DEFAULT_THRESHOLDS = {
-    "thd_max_percent": 15.0,
-    "clipping_max_percent": 1.0,
-    "hnr_min_db": 0.0,
-    "allow_hot_signal": False
-}
+DEFAULT_THRESHOLDS = DEFAULT_QUALITY_THRESHOLDS
 
 
 # =============================================================================
@@ -94,49 +94,18 @@ class ModuleTestConfig:
 
 def load_module_config(module_name: str) -> ModuleTestConfig:
     """Load test configuration for a module from its test_config.json file."""
-    project_root = get_project_root()
-    config_path = project_root / "src" / "modules" / module_name / "test_config.json"
+    # Use the shared utility function
+    config_dict = _load_module_config(module_name)
 
-    if not config_path.exists():
-        # Return default config
-        return ModuleTestConfig(module_name=module_name)
+    config = ModuleTestConfig(module_name=module_name)
+    config.module_type = config_dict.get("module_type", "instrument")
+    config.skip_audio_tests = config_dict.get("skip_audio_tests", False)
+    config.skip_reason = config_dict.get("skip_reason", "")
+    config.description = config_dict.get("description", "")
+    config.thresholds = config_dict.get("thresholds", DEFAULT_THRESHOLDS.copy())
+    config.test_scenarios = config_dict.get("test_scenarios", [{"name": "default", "duration": 2.0}])
 
-    try:
-        with open(config_path) as f:
-            data = json.load(f)
-
-        config = ModuleTestConfig(module_name=module_name)
-        config.module_type = data.get("module_type", "instrument")
-        config.skip_audio_tests = data.get("skip_audio_tests", False)
-        config.skip_reason = data.get("skip_reason", "")
-        config.description = data.get("description", "")
-
-        # Load quality thresholds
-        if "quality_thresholds" in data:
-            qt = data["quality_thresholds"]
-            config.thresholds = {
-                "thd_max_percent": qt.get("thd_max_percent", 15.0),
-                "clipping_max_percent": qt.get("clipping_max_percent", 1.0),
-                "hnr_min_db": qt.get("hnr_min_db", 0.0),
-                "allow_hot_signal": qt.get("allow_hot_signal", False)
-            }
-
-        # Load test scenarios
-        if "test_scenarios" in data:
-            config.test_scenarios = data["test_scenarios"]
-        else:
-            # Default scenario
-            config.test_scenarios = [{"name": "default", "duration": 2.0}]
-
-        # Load parameter sweep config
-        if "parameter_sweeps" in data:
-            config.parameter_sweeps = data["parameter_sweeps"]
-
-        return config
-
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"Warning: Could not load config for {module_name}: {e}")
-        return ModuleTestConfig(module_name=module_name)
+    return config
 
 
 # Legacy support - build HOT_SIGNAL_MODULES dynamically from configs
@@ -149,16 +118,9 @@ def get_hot_signal_modules() -> set[str]:
     if modules_dir.exists():
         for module_dir in modules_dir.iterdir():
             if module_dir.is_dir():
-                config_path = module_dir / "test_config.json"
-                if config_path.exists():
-                    try:
-                        with open(config_path) as f:
-                            data = json.load(f)
-                        qt = data.get("quality_thresholds", {})
-                        if qt.get("allow_hot_signal", False):
-                            hot_modules.add(module_dir.name)
-                    except (json.JSONDecodeError, IOError):
-                        pass
+                config = _load_module_config(module_dir.name)
+                if config.get("thresholds", {}).get("allow_hot_signal", False):
+                    hot_modules.add(module_dir.name)
 
     # Fallback for backwards compatibility
     if not hot_modules:
@@ -242,106 +204,15 @@ class TestReport:
         }
 
 
-def get_project_root() -> Path:
-    return Path(__file__).parent.parent
-
-
-def get_render_executable() -> Path:
-    project_root = get_project_root()
-    exe = project_root / "build" / "test" / "faust_render"
-    if not exe.exists():
-        exe = project_root / "build" / "faust_render"
-    return exe
-
-
-def run_faust_render(args: list[str]) -> tuple[bool, str]:
-    exe = get_render_executable()
-    if not exe.exists():
-        return False, f"Executable not found: {exe}"
-
-    cmd = [str(exe)] + args
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            return False, result.stderr
-        return True, result.stdout
-    except Exception as e:
-        return False, str(e)
-
-
-def get_modules() -> list[str]:
-    success, output = run_faust_render(["--list-modules"])
-    if not success:
-        return []
-    return [line.strip() for line in output.strip().split("\n")
-            if line.strip() and not line.startswith("Available")]
-
-
-def get_module_params(module_name: str) -> list[dict[str, Any]]:
-    success, output = run_faust_render(["--module", module_name, "--list-params"])
-    if not success:
-        return []
-
-    params = []
-    for line in output.strip().split("\n"):
-        line = line.strip()
-        if line.startswith("["):
-            try:
-                bracket_end = line.index("]")
-                idx = int(line[1:bracket_end])
-                rest = line[bracket_end + 1:].strip()
-                path_end = rest.index("(")
-                path = rest[:path_end].strip()
-                name = path.split("/")[-1]
-                meta = rest[path_end + 1:-1]
-                min_val = float(meta.split("min=")[1].split(",")[0])
-                max_val = float(meta.split("max=")[1].split(",")[0])
-                init_val = float(meta.split("init=")[1].split(")")[0])
-                params.append({
-                    "index": idx, "name": name, "path": path,
-                    "min": min_val, "max": max_val, "init": init_val,
-                })
-            except (ValueError, IndexError):
-                continue
-    return params
-
-
 def render_audio(module_name: str, params: dict[str, float],
                  output_path: Path, duration: float = TEST_DURATION,
                  no_auto_gate: bool = False) -> bool:
-    args = [
-        "--module", module_name,
-        "--output", str(output_path),
-        "--duration", str(duration),
-        "--sample-rate", str(SAMPLE_RATE),
-    ]
-    if no_auto_gate:
-        args.append("--no-auto-gate")
-    for name, value in params.items():
-        args.extend(["--param", f"{name}={value}"])
-
-    success, _ = run_faust_render(args)
+    """Render audio using shared utility."""
+    from utils import render_audio as _render_audio
+    success, _ = _render_audio(
+        module_name, params, output_path, duration, SAMPLE_RATE, no_auto_gate
+    )
     return success
-
-
-def load_audio(path: Path) -> np.ndarray | None:
-    """Load audio file as numpy array."""
-    if not HAS_LIBROSA:
-        # Fallback: use scipy if available
-        try:
-            from scipy.io import wavfile
-            sr, data = wavfile.read(str(path))
-            if data.dtype == np.int16:
-                data = data.astype(np.float32) / 32768.0
-            return data
-        except Exception:
-            return None
-
-    try:
-        y, sr = librosa.load(str(path), sr=SAMPLE_RATE, mono=False)
-        return y
-    except Exception:
-        return None
 
 
 def compute_audio_hash(audio: np.ndarray) -> str:
@@ -349,22 +220,6 @@ def compute_audio_hash(audio: np.ndarray) -> str:
     # Quantize to reduce sensitivity to tiny floating point differences
     quantized = (audio * 1000).astype(np.int16)
     return hashlib.sha256(quantized.tobytes()).hexdigest()[:16]
-
-
-def extract_audio_stats(audio: np.ndarray) -> dict:
-    """Extract statistical features from audio."""
-    if audio.ndim > 1:
-        audio = audio.mean(axis=0)  # Mix to mono for stats
-
-    return {
-        "rms": float(np.sqrt(np.mean(audio ** 2))),
-        "peak": float(np.max(np.abs(audio))),
-        "dc_offset": float(np.mean(audio)),
-        "has_nan": bool(np.any(np.isnan(audio))),
-        "has_inf": bool(np.any(np.isinf(audio))),
-        "clipping_ratio": float(np.mean(np.abs(audio) > CLIPPING_THRESHOLD)),
-        "silence_ratio": float(np.mean(np.abs(audio) < 0.001)),
-    }
 
 
 # =============================================================================

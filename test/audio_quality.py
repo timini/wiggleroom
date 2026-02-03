@@ -17,7 +17,6 @@ Usage:
 
 import argparse
 import json
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field, asdict
@@ -28,54 +27,21 @@ import numpy as np
 from scipy import signal
 from scipy import ndimage
 
-# Try to import optional dependencies
-try:
-    import librosa
-    HAS_LIBROSA = True
-except ImportError:
-    HAS_LIBROSA = False
+# Import shared utilities
+from utils import (
+    get_project_root,
+    get_render_executable,
+    run_faust_render,
+    get_modules,
+    load_audio,
+    load_module_config,
+    linear_to_db,
+    SAMPLE_RATE,
+    DEFAULT_QUALITY_THRESHOLDS,
+)
 
 # Configuration
-SAMPLE_RATE = 48000
 TEST_DURATION = 2.0
-
-# Default quality thresholds (can be overridden by module config)
-DEFAULT_QUALITY_THRESHOLDS = {
-    "thd_max_percent": 15.0,
-    "clipping_max_percent": 1.0,
-    "hnr_min_db": 0.0,
-    "allow_hot_signal": False
-}
-
-
-def load_module_config(module_name: str) -> dict:
-    """Load test configuration for a module from its test_config.json file."""
-    project_root = get_project_root()
-    config_path = project_root / "src" / "modules" / module_name / "test_config.json"
-
-    if not config_path.exists():
-        return {"thresholds": DEFAULT_QUALITY_THRESHOLDS.copy()}
-
-    try:
-        with open(config_path) as f:
-            data = json.load(f)
-
-        thresholds = DEFAULT_QUALITY_THRESHOLDS.copy()
-        if "quality_thresholds" in data:
-            qt = data["quality_thresholds"]
-            thresholds["thd_max_percent"] = qt.get("thd_max_percent", 15.0)
-            thresholds["clipping_max_percent"] = qt.get("clipping_max_percent", 1.0)
-            thresholds["hnr_min_db"] = qt.get("hnr_min_db", 0.0)
-            thresholds["allow_hot_signal"] = qt.get("allow_hot_signal", False)
-
-        return {
-            "module_type": data.get("module_type", "instrument"),
-            "skip_audio_tests": data.get("skip_audio_tests", False),
-            "skip_reason": data.get("skip_reason", ""),
-            "thresholds": thresholds
-        }
-    except (json.JSONDecodeError, IOError):
-        return {"thresholds": DEFAULT_QUALITY_THRESHOLDS.copy()}
 
 
 # =============================================================================
@@ -165,84 +131,23 @@ class AudioQualityReport:
 
 
 # =============================================================================
-# Utility Functions
+# Local Utility Functions
 # =============================================================================
-
-def get_project_root() -> Path:
-    return Path(__file__).parent.parent
-
-
-def get_render_executable() -> Path:
-    project_root = get_project_root()
-    exe = project_root / "build" / "test" / "faust_render"
-    if not exe.exists():
-        exe = project_root / "build" / "faust_render"
-    return exe
-
-
-def run_faust_render(args: list[str]) -> tuple[bool, str]:
-    exe = get_render_executable()
-    if not exe.exists():
-        return False, f"Executable not found: {exe}"
-
-    cmd = [str(exe)] + args
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            return False, result.stderr
-        return True, result.stdout
-    except Exception as e:
-        return False, str(e)
-
 
 def render_audio(module_name: str, params: dict[str, float],
                  output_path: Path, duration: float = TEST_DURATION,
                  no_auto_gate: bool = False) -> bool:
-    args = [
-        "--module", module_name,
-        "--output", str(output_path),
-        "--duration", str(duration),
-        "--sample-rate", str(SAMPLE_RATE),
-    ]
-    if no_auto_gate:
-        args.append("--no-auto-gate")
-    for name, value in params.items():
-        args.extend(["--param", f"{name}={value}"])
-
-    success, _ = run_faust_render(args)
+    """Render audio for quality testing."""
+    from utils import render_audio as _render_audio
+    success, _ = _render_audio(
+        module_name, params, output_path, duration, SAMPLE_RATE, no_auto_gate
+    )
     return success
 
 
-def load_audio(path: Path) -> np.ndarray | None:
-    """Load audio file as numpy array."""
-    if HAS_LIBROSA:
-        try:
-            y, sr = librosa.load(str(path), sr=SAMPLE_RATE, mono=True)
-            return y
-        except Exception:
-            pass
-
-    # Fallback to scipy
-    try:
-        from scipy.io import wavfile
-        sr, data = wavfile.read(str(path))
-        if data.dtype == np.int16:
-            data = data.astype(np.float32) / 32768.0
-        if data.ndim > 1:
-            data = data.mean(axis=1)
-        return data
-    except Exception:
-        return None
-
-
 def db_to_linear(db: float) -> float:
+    """Convert decibels to linear scale."""
     return 10 ** (db / 20)
-
-
-def linear_to_db(linear: float) -> float:
-    if linear <= 0:
-        return -120.0
-    return 20 * np.log10(linear)
 
 
 # =============================================================================
@@ -935,15 +840,6 @@ def analyze_audio_quality(audio: np.ndarray, sr: int = SAMPLE_RATE,
 # Module Testing Interface
 # =============================================================================
 
-def get_modules() -> list[str]:
-    """Get list of available modules."""
-    success, output = run_faust_render(["--list-modules"])
-    if not success:
-        return []
-    return [line.strip() for line in output.strip().split("\n")
-            if line.strip() and not line.startswith("Available")]
-
-
 def test_module_quality(module_name: str, tmp_dir: Path,
                         thresholds: dict | None = None) -> AudioQualityReport:
     """
@@ -977,7 +873,7 @@ def test_module_quality(module_name: str, tmp_dir: Path,
         report.issues = ["Failed to render audio"]
         return report
 
-    audio = load_audio(wav_path)
+    audio = load_audio(wav_path, SAMPLE_RATE)
     if audio is None:
         report = AudioQualityReport(module_name=module_name)
         report.issues = ["Failed to load audio"]

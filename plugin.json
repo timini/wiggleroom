@@ -30,17 +30,17 @@
       "tags": [
         "Clock modulator",
         "Sequencer",
-        "LFO",
+        "Low-frequency oscillator",
         "Visual"
       ]
     },
     {
-      "slug": "MoogLPF",
-      "name": "Moog LPF",
-      "description": "Classic Moog ladder lowpass filter with resonance, built with Faust DSP",
+      "slug": "LadderLPF",
+      "name": "Ladder LPF",
+      "description": "Classic ladder lowpass filter with resonance, built with Faust DSP",
       "tags": [
         "Filter",
-        "Lowpass gate"
+        "Low-pass gate"
       ]
     },
     {
@@ -102,9 +102,9 @@
       ]
     },
     {
-      "slug": "SolinaEnsemble",
-      "name": "Solina Ensemble",
-      "description": "Classic 3-voice BBD string ensemble effect - recreates the ARP Solina tri-phase chorus for massive orchestral strings",
+      "slug": "TriPhaseEnsemble",
+      "name": "Tri-Phase Ensemble",
+      "description": "Classic 3-voice BBD string ensemble effect - vintage tri-phase chorus for massive orchestral strings",
       "tags": [
         "Effect",
         "Chorus",
@@ -156,7 +156,7 @@
       "name": "Gravity Clock",
       "description": "Clock-synced bouncing ball physics - generates LFO and triggers locked to musical divisions with optional ratcheting decay",
       "tags": [
-        "LFO",
+        "Low-frequency oscillator",
         "Clock modulator",
         "Envelope generator"
       ]
@@ -166,7 +166,7 @@
       "name": "Octo LFO",
       "description": "Clock-synced 8-channel LFO with wave shaping - Skew, Curve, and Fold modifiers with mini scope per channel",
       "tags": [
-        "LFO",
+        "Low-frequency oscillator",
         "Clock modulator",
         "Polyphonic"
       ]
@@ -190,6 +190,16 @@
         "Quantizer",
         "Polyphonic",
         "Tuner"
+      ]
+    },
+    {
+      "slug": "Linkage",
+      "name": "Linkage",
+      "description": "Chaotic percussion generator using coupled physical spring model",
+      "tags": [
+        "Physical modeling",
+        "Synth voice",
+        "Drum"
       ]
     }
   ]

@@ -19,7 +19,6 @@ Usage:
 import argparse
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -27,6 +26,17 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+# Import shared utilities
+from utils import (
+    get_project_root,
+    get_render_executable,
+    run_faust_render,
+    get_modules,
+    get_dsp_file_for_module,
+    extract_module_description,
+    SAMPLE_RATE,
+)
 
 # Check for dependencies
 HAS_GEMINI = False
@@ -47,7 +57,6 @@ except ImportError:
     pass
 
 # Configuration
-SAMPLE_RATE = 48000
 TEST_DURATION = 4.0
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-pro-preview")  # Or set via env var
 
@@ -135,57 +144,6 @@ Please be honest and critical - this feedback will be used to improve the synthe
 Format your response as structured sections with clear headings."""
 
 
-def get_dsp_file_for_module(module_name: str) -> Path | None:
-    """Find the .dsp file for a module."""
-    project_root = get_project_root()
-    # Try various naming conventions
-    patterns = [
-        project_root / "src" / "modules" / module_name / f"{module_name.lower()}.dsp",
-        project_root / "src" / "modules" / module_name / f"{camel_to_snake(module_name)}.dsp",
-    ]
-    for pattern in patterns:
-        if pattern.exists():
-            return pattern
-    # Search for any .dsp file in the module directory
-    module_dir = project_root / "src" / "modules" / module_name
-    if module_dir.exists():
-        dsp_files = list(module_dir.glob("*.dsp"))
-        if dsp_files:
-            return dsp_files[0]
-    return None
-
-
-def camel_to_snake(name: str) -> str:
-    """Convert CamelCase to snake_case."""
-    import re
-    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
-    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
-
-
-def extract_module_description(dsp_code: str) -> str:
-    """Extract module description from DSP comments."""
-    import re
-    lines = dsp_code.split('\n')
-    description_lines = []
-
-    for line in lines[:30]:  # Check first 30 lines
-        # Skip empty lines and imports
-        if not line.strip() or line.strip().startswith('import'):
-            continue
-        # Capture comments at the start of the file
-        if line.strip().startswith('//'):
-            desc = line.strip().lstrip('/ ')
-            if desc:
-                description_lines.append(desc)
-        # Also capture declare statements
-        declare_match = re.search(r'declare\s+description\s+"([^"]+)"', line)
-        if declare_match:
-            description_lines.append(declare_match.group(1))
-        # Stop at first non-comment, non-declare, non-empty line
-        elif not line.strip().startswith('declare') and line.strip():
-            break
-
-    return '\n'.join(description_lines) if description_lines else "No description available"
 
 
 @dataclass
@@ -220,56 +178,13 @@ _clap_model = None
 _clap_processor = None
 
 
-def get_project_root() -> Path:
-    return Path(__file__).parent.parent
-
-
-def get_render_executable() -> Path:
-    project_root = get_project_root()
-    exe = project_root / "build" / "test" / "faust_render"
-    if not exe.exists():
-        exe = project_root / "build" / "faust_render"
-    return exe
-
-
-def run_faust_render(args: list[str]) -> tuple[bool, str]:
-    exe = get_render_executable()
-    if not exe.exists():
-        return False, f"Executable not found: {exe}"
-
-    cmd = [str(exe)] + args
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            return False, result.stderr
-        return True, result.stdout
-    except Exception as e:
-        return False, str(e)
-
-
-def get_modules() -> list[str]:
-    """Get list of available modules."""
-    success, output = run_faust_render(["--list-modules"])
-    if not success:
-        return []
-    return [line.strip() for line in output.strip().split("\n")
-            if line.strip() and not line.startswith("Available")]
-
-
 def render_audio(module_name: str, output_path: Path,
                  params: dict[str, float] | None = None) -> bool:
     """Render audio from a module."""
-    args = [
-        "--module", module_name,
-        "--output", str(output_path),
-        "--duration", str(TEST_DURATION),
-        "--sample-rate", str(SAMPLE_RATE),
-    ]
-    if params:
-        for name, value in params.items():
-            args.extend(["--param", f"{name}={value}"])
-
-    success, _ = run_faust_render(args)
+    from utils import render_audio as _render_audio
+    success, _ = _render_audio(
+        module_name, params or {}, output_path, TEST_DURATION, SAMPLE_RATE
+    )
     return success
 
 

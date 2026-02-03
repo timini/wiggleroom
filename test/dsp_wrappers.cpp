@@ -34,11 +34,11 @@ public:
 // Include each Faust header with its unique module name
 // Use the namespaced class directly to avoid global VCVRackDSP conflicts
 
-// ==== MoogLPF ====
-#define FAUST_MODULE_NAME MoogLPF
-#include "moog_lpf.hpp"
-std::unique_ptr<AbstractDSP> createMoogLPF() {
-    return std::make_unique<DSPWrapper<FaustGenerated::NS_MoogLPF::VCVRackDSP>>();
+// ==== LadderLPF ====
+#define FAUST_MODULE_NAME LadderLPF
+#include "ladder_lpf.hpp"
+std::unique_ptr<AbstractDSP> createLadderLPF() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_LadderLPF::VCVRackDSP>>();
 }
 
 // Reset preprocessor state
@@ -98,11 +98,11 @@ std::unique_ptr<AbstractDSP> createChaosFlute() {
 
 #undef __mydsp_H__
 
-// ==== SolinaEnsemble ====
-#define FAUST_MODULE_NAME SolinaEnsemble
-#include "solina_ensemble.hpp"
-std::unique_ptr<AbstractDSP> createSolinaEnsemble() {
-    return std::make_unique<DSPWrapper<FaustGenerated::NS_SolinaEnsemble::VCVRackDSP>>();
+// ==== TriPhaseEnsemble ====
+#define FAUST_MODULE_NAME TriPhaseEnsemble
+#include "tri_phase_ensemble.hpp"
+std::unique_ptr<AbstractDSP> createTriPhaseEnsemble() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_TriPhaseEnsemble::VCVRackDSP>>();
 }
 
 #undef __mydsp_H__

@@ -10,6 +10,7 @@ on:
       - 'faust/**'
       - 'test/**'
       - 'CMakeLists.txt'
+      - 'Justfile'
       - '.github/workflows/test.yml'
   pull_request:
     branches: [main]
@@ -42,6 +43,10 @@ jobs:
             python3-pip \
             python3-venv
 
+      - name: Install just
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
       - name: Install Faust
         run: |
           sudo apt-get install -y faust
@@ -50,24 +55,16 @@ jobs:
       - name: Install Python dependencies
         run: |
           python3 -m pip install --upgrade pip
-          pip install numpy scipy librosa matplotlib
+          pip install numpy scipy librosa matplotlib google-generativeai
 
       - name: Configure and Build
-        run: |
-          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(nproc)
+        run: just build
 
       - name: Run Faust compilation tests
-        run: |
-          echo "Testing Faust DSP files..."
-          for dsp in $(find src/modules -name "*.dsp"); do
-            echo "  $dsp"
-            faust "$dsp" -o /dev/null
-          done
+        run: just test-faust
 
       - name: Run module tests
-        run: |
-          python3 test/test_framework.py --ci --output test/results.json
+        run: just test-modules-ci
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -100,8 +97,9 @@ jobs:
 
       - name: Generate validation report
         if: always()
-        run: |
-          python3 test/run_tests.py --quick --clean --workers 4
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: just test-report-full
 
       - name: Prepare report for deployment
         if: always()
@@ -160,14 +158,15 @@ jobs:
           sudo apt-get install -y faust
           pip install numpy scipy librosa matplotlib
 
-      - name: Build
+      - name: Install just
         run: |
-          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(nproc)
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+      - name: Build
+        run: just build
 
       - name: Run sensitivity analysis
-        run: |
-          python3 test/analyze_sensitivity.py --output test/sensitivity
+        run: just test-sensitivity
 
       - name: Upload sensitivity report
         uses: actions/upload-artifact@v4

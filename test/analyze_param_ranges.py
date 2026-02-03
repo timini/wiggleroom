@@ -24,6 +24,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# Import shared utilities
+from utils import (
+    get_project_root,
+    get_render_executable,
+    get_module_params as _get_module_params,
+)
+
 
 @dataclass
 class ParamInfo:
@@ -63,38 +70,18 @@ class RangeAnalysis:
     notes: list[str] = field(default_factory=list)
 
 
-def get_project_root() -> Path:
-    return Path(__file__).parent.parent
-
-
-def get_render_executable() -> Path:
-    project_root = get_project_root()
-    exe = project_root / "build" / "test" / "faust_render"
-    if not exe.exists():
-        exe = project_root / "build" / "faust_render"
-    return exe
-
-
 def get_module_params(module_name: str) -> list[ParamInfo]:
     """Get parameter info from faust_render."""
-    exe = get_render_executable()
-    result = subprocess.run(
-        [str(exe), "--module", module_name, "--list-params"],
-        capture_output=True, text=True
-    )
-
-    params = []
-    for line in result.stdout.split('\n'):
-        # Parse: [0] /Module/param (min=0, max=1, init=0.5)
-        match = re.search(r'/[^/]+/(\w+)\s+\(min=([\d.-]+),\s*max=([\d.-]+),\s*init=([\d.-]+)\)', line)
-        if match:
-            params.append(ParamInfo(
-                name=match.group(1),
-                min_val=float(match.group(2)),
-                max_val=float(match.group(3)),
-                init_val=float(match.group(4))
-            ))
-    return params
+    params_list = _get_module_params(module_name)
+    return [
+        ParamInfo(
+            name=p["name"],
+            min_val=p["min"],
+            max_val=p["max"],
+            init_val=p["init"]
+        )
+        for p in params_list
+    ]
 
 
 def render_with_param(module_name: str, param_name: str, param_value: float,

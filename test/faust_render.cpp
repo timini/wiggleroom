@@ -7,7 +7,7 @@
  * Usage:
  *   ./faust_render --module TheAbyss --output test.wav --duration 2.0 \
  *       --param decay=0.8 --param pressure=0.6
- *   ./faust_render --module MoogLPF --list-params
+ *   ./faust_render --module LadderLPF --list-params
  */
 
 #include "AbstractDSP.hpp"
@@ -27,14 +27,14 @@
 using namespace WiggleRoom::TestConfig;
 
 // Forward declarations for factory functions (defined in separate source files)
-std::unique_ptr<AbstractDSP> createMoogLPF();
+std::unique_ptr<AbstractDSP> createLadderLPF();
 std::unique_ptr<AbstractDSP> createBigReverb();
 std::unique_ptr<AbstractDSP> createSaturationEcho();
 std::unique_ptr<AbstractDSP> createSpectralResonator();
 std::unique_ptr<AbstractDSP> createModalBell();
 std::unique_ptr<AbstractDSP> createPluckedString();
 std::unique_ptr<AbstractDSP> createChaosFlute();
-std::unique_ptr<AbstractDSP> createSolinaEnsemble();
+std::unique_ptr<AbstractDSP> createTriPhaseEnsemble();
 std::unique_ptr<AbstractDSP> createInfiniteFolder();
 std::unique_ptr<AbstractDSP> createSpaceCello();
 std::unique_ptr<AbstractDSP> createTheAbyss();
@@ -98,14 +98,14 @@ bool writeWav(const std::string& filename, const std::vector<float>& samples,
 // ============================================================================
 
 std::unique_ptr<AbstractDSP> createDSP(const std::string& moduleName) {
-    if (moduleName == "MoogLPF") return createMoogLPF();
+    if (moduleName == "LadderLPF") return createLadderLPF();
     if (moduleName == "BigReverb") return createBigReverb();
     if (moduleName == "SaturationEcho") return createSaturationEcho();
     if (moduleName == "SpectralResonator") return createSpectralResonator();
     if (moduleName == "ModalBell") return createModalBell();
     if (moduleName == "PluckedString") return createPluckedString();
     if (moduleName == "ChaosFlute") return createChaosFlute();
-    if (moduleName == "SolinaEnsemble") return createSolinaEnsemble();
+    if (moduleName == "TriPhaseEnsemble") return createTriPhaseEnsemble();
     if (moduleName == "InfiniteFolder") return createInfiniteFolder();
     if (moduleName == "SpaceCello") return createSpaceCello();
     if (moduleName == "TheAbyss") return createTheAbyss();
@@ -115,8 +115,8 @@ std::unique_ptr<AbstractDSP> createDSP(const std::string& moduleName) {
 }
 
 std::vector<std::string> getModuleNames() {
-    return {"MoogLPF", "BigReverb", "SaturationEcho", "SpectralResonator",
-            "ModalBell", "PluckedString", "ChaosFlute", "SolinaEnsemble",
+    return {"LadderLPF", "BigReverb", "SaturationEcho", "SpectralResonator",
+            "ModalBell", "PluckedString", "ChaosFlute", "TriPhaseEnsemble",
             "InfiniteFolder", "SpaceCello", "TheAbyss", "Matter", "Linkage"};
 }
 
@@ -157,12 +157,12 @@ ModuleTestConfig loadModuleConfig(const std::string& moduleName) {
         config.test_scenarios[0].name == "default") {
 
         // Apply legacy type detection for backwards compatibility
-        if (moduleName == "MoogLPF" || moduleName == "InfiniteFolder") {
+        if (moduleName == "LadderLPF" || moduleName == "InfiniteFolder") {
             config.module_type = ModuleType::Filter;
         } else if (moduleName == "SpectralResonator") {
             config.module_type = ModuleType::Resonator;
         } else if (moduleName == "BigReverb" || moduleName == "SaturationEcho" ||
-                   moduleName == "SolinaEnsemble") {
+                   moduleName == "TriPhaseEnsemble") {
             config.module_type = ModuleType::Effect;
         }
 
@@ -326,7 +326,7 @@ void printUsage(const char* programName) {
               << "  --no-auto-gate      Disable automatic gate/trigger handling\n"
               << "  --help              Show this help\n\n"
               << "Examples:\n"
-              << "  " << programName << " --module MoogLPF --list-params\n"
+              << "  " << programName << " --module LadderLPF --list-params\n"
               << "  " << programName << " --module ChaosFlute --list-scenarios\n"
               << "  " << programName << " --module ChaosFlute --scenario high_chaos\n"
               << "  " << programName << " --module TheAbyss --output test.wav --param decay=0.8\n";

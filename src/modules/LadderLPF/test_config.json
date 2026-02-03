@@ -1,0 +1,42 @@
+{
+  "module_type": "filter",
+  "description": "Ladder lowpass filter",
+  "quality_thresholds": {
+    "thd_max_percent": 10.0,
+    "clipping_max_percent": 1.0,
+    "hnr_min_db": 0.0,
+    "allow_hot_signal": false
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 2.0,
+      "description": "Default filter settings"
+    },
+    {
+      "name": "high_resonance",
+      "duration": 2.0,
+      "parameters": {
+        "resonance": 0.9
+      },
+      "description": "High resonance, near self-oscillation"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": [],
+    "steps": 10
+  },
+  "showcase": {
+    "duration": 16.0,
+    "notes": [],
+    "automations": [
+      {"param": "cutoff", "start_time": 0.0, "end_time": 4.0, "start_value": 0.1, "end_value": 0.95},
+      {"param": "cutoff", "start_time": 4.0, "end_time": 8.0, "start_value": 0.95, "end_value": 0.2},
+      {"param": "cutoff", "start_time": 8.0, "end_time": 12.0, "start_value": 0.2, "end_value": 0.8},
+      {"param": "cutoff", "start_time": 12.0, "end_time": 16.0, "start_value": 0.8, "end_value": 0.5},
+      {"param": "resonance", "start_time": 0.0, "end_time": 5.0, "start_value": 0.0, "end_value": 0.9},
+      {"param": "resonance", "start_time": 5.0, "end_time": 10.0, "start_value": 0.9, "end_value": 0.2},
+      {"param": "resonance", "start_time": 10.0, "end_time": 16.0, "start_value": 0.2, "end_value": 0.6}
+    ]
+  }
+}

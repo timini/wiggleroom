@@ -121,9 +121,23 @@ test-faust:
     fi
     echo "All Faust files OK"
 
-# Test DSP numerical stability (requires Python 3)
-test-stability:
-    python3 tests/test_faust_output.py
+# Generate full validation report with quality metrics and AI analysis
+# Requires: GEMINI_API_KEY (set in environment or .env file)
+test-report-full: build
+    #!/usr/bin/env bash
+    set -e
+    # Source .env file if it exists
+    if [ -f .env ]; then
+        set -a
+        source .env
+        set +a
+    fi
+    if [ -z "$GEMINI_API_KEY" ]; then
+        echo "Error: GEMINI_API_KEY is required"
+        echo "Set it in your environment or create a .env file with: GEMINI_API_KEY=your_key"
+        exit 1
+    fi
+    python3 test/run_tests.py --quick --clean --workers 4 --quality --ai
 
 # Render audio from Faust modules and generate spectrograms
 test-audio module="": build

@@ -13,8 +13,6 @@ Usage:
 """
 
 import argparse
-import json
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,8 +23,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
 
+# Import shared utilities
+from utils import (
+    get_project_root,
+    get_render_executable,
+    run_faust_render,
+    get_modules,
+    get_module_params,
+    SAMPLE_RATE,
+)
+
 # Configuration
-SAMPLE_RATE = 48000
 DURATION = 2.0
 NUM_STEPS = 5  # Number of values to test per parameter
 
@@ -67,82 +74,13 @@ class AudioFeatures:
         ]
 
 
-def get_project_root() -> Path:
-    return Path(__file__).parent.parent
-
-
-def get_render_executable() -> Path:
-    project_root = get_project_root()
-    exe = project_root / "build" / "test" / "faust_render"
-    if not exe.exists():
-        exe = project_root / "build" / "faust_render"
-    return exe
-
-
-def run_faust_render(args: list[str]) -> tuple[bool, str]:
-    exe = get_render_executable()
-    if not exe.exists():
-        return False, f"Executable not found: {exe}"
-
-    cmd = [str(exe)] + args
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            return False, result.stderr
-        return True, result.stdout
-    except Exception as e:
-        return False, str(e)
-
-
-def get_modules() -> list[str]:
-    success, output = run_faust_render(["--list-modules"])
-    if not success:
-        return []
-    return [line.strip() for line in output.strip().split("\n")
-            if line.strip() and not line.startswith("Available")]
-
-
-def get_module_params(module_name: str) -> list[dict[str, Any]]:
-    success, output = run_faust_render(["--module", module_name, "--list-params"])
-    if not success:
-        return []
-
-    params = []
-    for line in output.strip().split("\n"):
-        line = line.strip()
-        if line.startswith("["):
-            try:
-                bracket_end = line.index("]")
-                idx = int(line[1:bracket_end])
-                rest = line[bracket_end + 1:].strip()
-                path_end = rest.index("(")
-                path = rest[:path_end].strip()
-                name = path.split("/")[-1]
-                meta = rest[path_end + 1:-1]
-                min_val = float(meta.split("min=")[1].split(",")[0])
-                max_val = float(meta.split("max=")[1].split(",")[0])
-                init_val = float(meta.split("init=")[1].split(")")[0])
-                params.append({
-                    "index": idx, "name": name, "path": path,
-                    "min": min_val, "max": max_val, "init": init_val,
-                })
-            except (ValueError, IndexError):
-                continue
-    return params
-
-
 def render_audio(module_name: str, params: dict[str, float],
                  output_path: Path) -> bool:
-    args = [
-        "--module", module_name,
-        "--output", str(output_path),
-        "--duration", str(DURATION),
-        "--sample-rate", str(SAMPLE_RATE),
-    ]
-    for name, value in params.items():
-        args.extend(["--param", f"{name}={value}"])
-
-    success, _ = run_faust_render(args)
+    """Render audio using shared utility."""
+    from utils import render_audio as _render_audio
+    success, _ = _render_audio(
+        module_name, params, output_path, DURATION, SAMPLE_RATE
+    )
     return success
 
 

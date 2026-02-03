@@ -3,13 +3,16 @@
 Faust Module Test Runner
 
 Orchestrates audio rendering and spectrogram generation for all Faust modules
-with parameter grid testing.
+with parameter grid testing. Includes optional audio quality analysis and
+AI-powered assessment.
 
 Usage:
     python run_tests.py                    # Run all tests
     python run_tests.py --module MoogLPF   # Test specific module
     python run_tests.py --quick            # Quick test (fewer param values)
     python run_tests.py --report           # Generate HTML report only
+    python run_tests.py --quality          # Include audio quality metrics
+    python run_tests.py --ai               # Include AI analysis (requires GEMINI_API_KEY)
 """
 
 import argparse
@@ -17,112 +20,45 @@ import itertools
 import json
 import os
 import shutil
-import subprocess
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+# Import shared utilities
+from utils import (
+    get_project_root,
+    get_render_executable,
+    run_faust_render,
+    get_modules,
+    get_module_params,
+    load_audio,
+    load_module_config,
+    extract_audio_stats,
+    SAMPLE_RATE,
+)
+
 # Configuration
-SAMPLE_RATE = 48000
 DURATION = 2.0
 PARAM_VALUES_FULL = 5  # Number of values per parameter (full grid)
 PARAM_VALUES_QUICK = 3  # Number of values per parameter (quick mode)
 MAX_COMBINATIONS = 500  # Maximum combinations per module
 NUM_WORKERS = 8  # Number of parallel workers
 
+# Try to import audio quality analysis
+try:
+    from audio_quality import analyze_audio_quality, AudioQualityReport
+    HAS_AUDIO_QUALITY = True
+except ImportError:
+    HAS_AUDIO_QUALITY = False
 
-def get_project_root() -> Path:
-    """Get the project root directory."""
-    return Path(__file__).parent.parent
-
-
-def get_render_executable() -> Path:
-    """Get path to faust_render executable."""
-    project_root = get_project_root()
-    exe = project_root / "build" / "test" / "faust_render"
-    if not exe.exists():
-        # Try without test subdirectory
-        exe = project_root / "build" / "faust_render"
-    return exe
-
-
-def run_faust_render(args: list[str]) -> tuple[bool, str]:
-    """Run faust_render with given arguments."""
-    exe = get_render_executable()
-    if not exe.exists():
-        return False, f"Executable not found: {exe}"
-
-    cmd = [str(exe)] + args
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            return False, result.stderr
-        return True, result.stdout
-    except subprocess.TimeoutExpired:
-        return False, "Timeout"
-    except Exception as e:
-        return False, str(e)
-
-
-def get_module_params(module_name: str) -> list[dict[str, Any]]:
-    """Get parameter info for a module."""
-    success, output = run_faust_render(["--module", module_name, "--list-params"])
-    if not success:
-        return []
-
-    params = []
-    for line in output.strip().split("\n"):
-        line = line.strip()
-        if line.startswith("["):
-            # Parse: [0] /path/name (min=0, max=1, init=0.5)
-            try:
-                bracket_end = line.index("]")
-                idx = int(line[1:bracket_end])
-
-                rest = line[bracket_end + 1 :].strip()
-                path_end = rest.index("(")
-                path = rest[:path_end].strip()
-
-                # Extract name from path (last component)
-                name = path.split("/")[-1]
-
-                # Parse min/max/init
-                meta = rest[path_end + 1 : -1]
-                min_val = float(meta.split("min=")[1].split(",")[0])
-                max_val = float(meta.split("max=")[1].split(",")[0])
-                init_val = float(meta.split("init=")[1].split(")")[0])
-
-                params.append(
-                    {
-                        "index": idx,
-                        "name": name,
-                        "path": path,
-                        "min": min_val,
-                        "max": max_val,
-                        "init": init_val,
-                    }
-                )
-            except (ValueError, IndexError):
-                continue
-
-    return params
-
-
-def get_modules() -> list[str]:
-    """Get list of available modules."""
-    success, output = run_faust_render(["--list-modules"])
-    if not success:
-        return []
-
-    modules = []
-    for line in output.strip().split("\n"):
-        line = line.strip()
-        if line and not line.startswith("Available"):
-            modules.append(line)
-
-    return modules
+# Try to import AI analysis
+try:
+    from ai_audio_analysis import analyze_with_gemini, AIAnalysisResult
+    HAS_AI_ANALYSIS = True
+except ImportError:
+    HAS_AI_ANALYSIS = False
 
 
 def generate_param_values(
@@ -177,25 +113,26 @@ def generate_param_grid(
     return combinations
 
 
-def render_audio(
+def render_audio_with_filename(
     module_name: str,
     params: dict[str, float],
     output_dir: Path,
     duration: float = DURATION,
     sample_rate: int = SAMPLE_RATE,
 ) -> tuple[bool, Path, dict[str, float] | None]:
-    """Render audio for a parameter combination.
+    """Render audio for a parameter combination with auto-generated filename.
 
     Returns: (success, output_path, metadata_if_hashed)
     The third element is the params dict if hash was used, None otherwise.
     """
+    import hashlib
+    from utils import render_audio as _render_audio
+
     # Create filename from parameters
     param_str = "_".join(f"{k}={v:.2f}" for k, v in sorted(params.items()))
     hash_metadata = None
     if len(param_str) > 100:
         # Hash for very long param strings, save metadata separately
-        import hashlib
-
         param_hash = hashlib.md5(param_str.encode()).hexdigest()[:8]
         param_str = f"hash_{param_hash}"
         hash_metadata = params  # Return params for metadata file
@@ -203,21 +140,9 @@ def render_audio(
     filename = f"{module_name}_{param_str}.wav"
     output_path = output_dir / filename
 
-    # Build command
-    args = [
-        "--module",
-        module_name,
-        "--output",
-        str(output_path),
-        "--duration",
-        str(duration),
-        "--sample-rate",
-        str(sample_rate),
-    ]
-    for name, value in params.items():
-        args.extend(["--param", f"{name}={value}"])
-
-    success, msg = run_faust_render(args)
+    success, _ = _render_audio(
+        module_name, params, output_path, duration, sample_rate
+    )
     return success, output_path, hash_metadata
 
 
@@ -242,10 +167,12 @@ def generate_spectrogram(wav_path: Path, output_dir: Path) -> tuple[bool, Path]:
 
 def render_single_test(args: tuple) -> dict[str, Any]:
     """Worker function for parallel rendering. Renders audio and generates spectrogram."""
-    module_name, param_combo, wav_dir, spec_dir, duration, sample_rate = args
+    module_name, param_combo, wav_dir, spec_dir, duration, sample_rate, include_quality = args
 
     # Render audio
-    success, wav_path, hash_metadata = render_audio(module_name, param_combo, wav_dir, duration, sample_rate)
+    success, wav_path, hash_metadata = render_audio_with_filename(
+        module_name, param_combo, wav_dir, duration, sample_rate
+    )
     if not success:
         return {"params": param_combo, "success": False}
 
@@ -266,12 +193,31 @@ def render_single_test(args: tuple) -> dict[str, Any]:
     # Generate spectrogram
     spec_success, spec_path = generate_spectrogram(wav_path, spec_dir)
 
-    return {
+    result = {
         "params": param_combo,
         "success": True,
         "wav": str(wav_path),
         "spectrogram": str(spec_path) if spec_success else None,
     }
+
+    # Run audio quality analysis if requested
+    if include_quality and HAS_AUDIO_QUALITY:
+        audio = load_audio(wav_path)
+        if audio is not None:
+            try:
+                quality_report = analyze_audio_quality(audio, SAMPLE_RATE, module_name)
+                result["quality"] = {
+                    "thd_percent": quality_report.thd.thd_percent if quality_report.thd else None,
+                    "alias_ratio_db": quality_report.aliasing.alias_ratio_db if quality_report.aliasing else None,
+                    "hnr_db": quality_report.spectral.harmonic_to_noise_ratio if quality_report.spectral else None,
+                    "character": quality_report.harmonics.character if quality_report.harmonics else None,
+                    "peak_amplitude": quality_report.envelope.peak_amplitude if quality_report.envelope else None,
+                    "overall_score": quality_report.overall_quality_score,
+                }
+            except Exception:
+                pass
+
+    return result
 
 
 def sort_results_by_params(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -312,14 +258,63 @@ def generate_param_bar_html(
     </div>'''
 
 
+def compute_module_quality_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute aggregate quality metrics for a module."""
+    thd_values = []
+    hnr_values = []
+    peak_values = []
+    scores = []
+    characters = {}
+
+    for r in results:
+        if not r.get("success"):
+            continue
+        q = r.get("quality")
+        if not q:
+            continue
+
+        if q.get("thd_percent") is not None:
+            thd_values.append(q["thd_percent"])
+        if q.get("hnr_db") is not None:
+            hnr_values.append(q["hnr_db"])
+        if q.get("peak_amplitude") is not None:
+            peak_values.append(q["peak_amplitude"])
+        if q.get("overall_score") is not None:
+            scores.append(q["overall_score"])
+        if q.get("character"):
+            char = q["character"]
+            characters[char] = characters.get(char, 0) + 1
+
+    summary = {}
+    if thd_values:
+        summary["avg_thd"] = sum(thd_values) / len(thd_values)
+        summary["max_thd"] = max(thd_values)
+    if hnr_values:
+        summary["min_hnr"] = min(hnr_values)
+        summary["max_hnr"] = max(hnr_values)
+    if peak_values:
+        summary["avg_peak"] = sum(peak_values) / len(peak_values)
+        summary["max_peak"] = max(peak_values)
+    if scores:
+        summary["avg_score"] = sum(scores) / len(scores)
+    if characters:
+        total = sum(characters.values())
+        summary["characters"] = {k: round(v / total * 100) for k, v in characters.items()}
+
+    return summary
+
+
 def generate_html_report(
     output_dir: Path,
     module_results: dict[str, list[dict[str, Any]]],
-    param_metadata: dict[str, list[dict[str, Any]]] = None
+    param_metadata: dict[str, list[dict[str, Any]]] = None,
+    ai_results: dict[str, dict[str, Any]] = None,
+    include_quality: bool = False,
 ) -> Path:
-    """Generate HTML report with all spectrograms."""
+    """Generate HTML report with all spectrograms, quality metrics, and AI analysis."""
     report_path = output_dir / "report.html"
     param_metadata = param_metadata or {}
+    ai_results = ai_results or {}
 
     total_renders = sum(len(results) for results in module_results.values())
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -351,6 +346,7 @@ def generate_html_report(
             border-bottom: 2px solid #333;
             padding-bottom: 10px;
             font-weight: 400;
+            cursor: pointer;
         }}
         .module {{
             margin-bottom: 40px;
@@ -384,6 +380,150 @@ def generate_html_report(
         .param-legend-item strong {{
             color: #fff;
         }}
+
+        /* Collapsible sections */
+        .collapsible {{
+            cursor: pointer;
+            user-select: none;
+        }}
+        .collapsible::before {{
+            content: "\\25BC";
+            display: inline-block;
+            margin-right: 8px;
+            transition: transform 0.2s;
+            font-size: 12px;
+        }}
+        .collapsible.collapsed::before {{
+            transform: rotate(-90deg);
+        }}
+        .collapsible-content {{
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }}
+        .collapsible-content.collapsed {{
+            max-height: 0 !important;
+        }}
+
+        /* AI Analysis Card */
+        .ai-card {{
+            background: linear-gradient(135deg, #1e3a5f, #1e2a45);
+            border: 1px solid #2a4a6f;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }}
+        .ai-card h4 {{
+            margin: 0 0 15px 0;
+            color: #7aafff;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .ai-scores {{
+            display: flex;
+            gap: 20px;
+            margin-bottom: 15px;
+        }}
+        .ai-score {{
+            background: #152535;
+            padding: 10px 15px;
+            border-radius: 8px;
+            text-align: center;
+        }}
+        .ai-score-label {{
+            font-size: 11px;
+            color: #888;
+            text-transform: uppercase;
+        }}
+        .ai-score-value {{
+            font-size: 24px;
+            font-weight: bold;
+            color: #7aafff;
+        }}
+        .ai-score-value.good {{ color: #4ade80; }}
+        .ai-score-value.medium {{ color: #fbbf24; }}
+        .ai-score-value.poor {{ color: #f87171; }}
+        .ai-issues, .ai-suggestions {{
+            margin-top: 10px;
+        }}
+        .ai-issues h5, .ai-suggestions h5 {{
+            margin: 0 0 8px 0;
+            font-size: 12px;
+            color: #888;
+            text-transform: uppercase;
+        }}
+        .ai-issues ul, .ai-suggestions ul {{
+            margin: 0;
+            padding-left: 20px;
+            font-size: 13px;
+        }}
+        .ai-issues li {{ color: #f87171; }}
+        .ai-suggestions li {{ color: #4ade80; }}
+
+        /* Quality Summary Card */
+        .quality-card {{
+            background: linear-gradient(135deg, #2a3a2a, #1e2a25);
+            border: 1px solid #3a5a3a;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }}
+        .quality-card h4 {{
+            margin: 0 0 15px 0;
+            color: #7affaa;
+            font-size: 14px;
+        }}
+        .quality-metrics {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }}
+        .quality-metric {{
+            background: #152520;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+        }}
+        .quality-metric-label {{
+            color: #888;
+        }}
+        .quality-metric-value {{
+            color: #7affaa;
+            font-weight: bold;
+            margin-left: 5px;
+        }}
+        .character-distribution {{
+            margin-top: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }}
+        .character-tag {{
+            background: #253530;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            color: #7affaa;
+        }}
+
+        /* Quality badges on items */
+        .quality-badges {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 8px;
+        }}
+        .quality-badge {{
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: #252540;
+        }}
+        .quality-badge.good {{ background: #1a3a1a; color: #4ade80; }}
+        .quality-badge.medium {{ background: #3a3a1a; color: #fbbf24; }}
+        .quality-badge.poor {{ background: #3a1a1a; color: #f87171; }}
+
         .grid {{
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -562,6 +702,34 @@ def generate_html_report(
         .toc a:hover {{
             text-decoration: underline;
         }}
+
+        /* Renders section toggle */
+        .renders-toggle {{
+            background: #1e1e35;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 12px 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #888;
+            font-size: 14px;
+            transition: all 0.2s;
+            margin-bottom: 15px;
+        }}
+        .renders-toggle:hover {{
+            background: #252545;
+            color: #aaf;
+        }}
+        .renders-toggle::before {{
+            content: "\\25B6";
+            font-size: 10px;
+            transition: transform 0.2s;
+        }}
+        .renders-toggle.expanded::before {{
+            transform: rotate(90deg);
+        }}
     </style>
 </head>
 <body>
@@ -570,6 +738,8 @@ def generate_html_report(
         <strong>Generated:</strong> {timestamp}<br>
         <strong>Modules tested:</strong> {len(module_results)}<br>
         <strong>Total renders:</strong> {total_renders}
+        {f'<br><strong>AI Analysis:</strong> {len(ai_results)} modules' if ai_results else ''}
+        {f'<br><strong>Quality Metrics:</strong> Enabled' if include_quality else ''}
     </div>
     <div class="toc">
         <h3>Jump to Module</h3>
@@ -585,8 +755,114 @@ def generate_html_report(
         # Sort results by parameter values
         sorted_results = sort_results_by_params(results)
 
+        # Get AI and quality data
+        ai_data = ai_results.get(module_name)
+        quality_summary = compute_module_quality_summary(results) if include_quality else None
+
         html += f'<div class="module" id="{module_name}">\n'
         html += f"<h2>{module_name}</h2>\n"
+
+        # AI Analysis Card (collapsible, open by default)
+        if ai_data:
+            quality_score = ai_data.get("quality_score")
+            musical_score = ai_data.get("musical_score")
+
+            def get_score_class(score):
+                if score is None:
+                    return ""
+                if score >= 7:
+                    return "good"
+                if score >= 5:
+                    return "medium"
+                return "poor"
+
+            html += '''
+            <div class="ai-card">
+                <h4 class="collapsible" onclick="toggleCollapsible(this)">
+                    <span>&#129302;</span> AI Analysis (Gemini)
+                </h4>
+                <div class="collapsible-content">
+'''
+            html += '<div class="ai-scores">\n'
+            if quality_score is not None:
+                html += f'''
+                <div class="ai-score">
+                    <div class="ai-score-label">Quality</div>
+                    <div class="ai-score-value {get_score_class(quality_score)}">{quality_score}/10</div>
+                </div>
+'''
+            if musical_score is not None:
+                html += f'''
+                <div class="ai-score">
+                    <div class="ai-score-label">Musical</div>
+                    <div class="ai-score-value {get_score_class(musical_score)}">{musical_score}/10</div>
+                </div>
+'''
+            html += '</div>\n'
+
+            issues = ai_data.get("issues", [])
+            if issues:
+                html += '<div class="ai-issues">\n<h5>Issues</h5>\n<ul>\n'
+                for issue in issues[:5]:
+                    html += f'<li>{issue}</li>\n'
+                html += '</ul>\n</div>\n'
+
+            suggestions = ai_data.get("suggestions", [])
+            if suggestions:
+                html += '<div class="ai-suggestions">\n<h5>Suggestions</h5>\n<ul>\n'
+                for suggestion in suggestions[:5]:
+                    html += f'<li>{suggestion}</li>\n'
+                html += '</ul>\n</div>\n'
+
+            html += '''
+                </div>
+            </div>
+'''
+
+        # Quality Summary Card
+        if quality_summary and any(quality_summary.values()):
+            html += '''
+            <div class="quality-card">
+                <h4>Quality Summary</h4>
+                <div class="quality-metrics">
+'''
+            if "avg_thd" in quality_summary:
+                html += f'''
+                <div class="quality-metric">
+                    <span class="quality-metric-label">Avg THD:</span>
+                    <span class="quality-metric-value">{quality_summary["avg_thd"]:.1f}%</span>
+                </div>
+'''
+            if "max_peak" in quality_summary:
+                html += f'''
+                <div class="quality-metric">
+                    <span class="quality-metric-label">Max Peak:</span>
+                    <span class="quality-metric-value">{quality_summary["max_peak"]:.2f}</span>
+                </div>
+'''
+            if "min_hnr" in quality_summary and "max_hnr" in quality_summary:
+                html += f'''
+                <div class="quality-metric">
+                    <span class="quality-metric-label">HNR:</span>
+                    <span class="quality-metric-value">{quality_summary["min_hnr"]:.0f}-{quality_summary["max_hnr"]:.0f} dB</span>
+                </div>
+'''
+            if "avg_score" in quality_summary:
+                html += f'''
+                <div class="quality-metric">
+                    <span class="quality-metric-label">Avg Score:</span>
+                    <span class="quality-metric-value">{quality_summary["avg_score"]:.0f}/100</span>
+                </div>
+'''
+            html += '</div>\n'
+
+            if "characters" in quality_summary:
+                html += '<div class="character-distribution">\n'
+                for char, pct in sorted(quality_summary["characters"].items(), key=lambda x: -x[1]):
+                    html += f'<span class="character-tag">{char} ({pct}%)</span>\n'
+                html += '</div>\n'
+
+            html += '</div>\n'
 
         # Parameter legend
         if module_params:
@@ -600,14 +876,21 @@ def generate_html_report(
                 html += f'<div class="param-legend-item"><strong>{p["name"]}</strong>: {p["min"]:.2f} → {p["max"]:.2f}</div>\n'
             html += '</div>\n</div>\n'
 
-        html += f"<p style='color: #888; margin-bottom: 15px;'>Rendered {len(results)} parameter combinations</p>\n"
-        html += '<div class="grid">\n'
+        # Renders section - collapsible, closed by default
+        html += f'''
+        <div class="renders-toggle" onclick="toggleRenders(this)">
+            Parameter Renders ({len(results)} combinations)
+        </div>
+        <div class="collapsible-content collapsed" style="max-height: 0;">
+            <div class="grid">
+'''
 
         for idx, result in enumerate(sorted_results, 1):
             spec_path = result.get("spectrogram")
             wav_path = result.get("wav")
             params = result.get("params", {})
             success = result.get("success", False)
+            quality = result.get("quality")
 
             if spec_path and Path(spec_path).exists():
                 rel_spec = Path(spec_path).name
@@ -642,6 +925,33 @@ def generate_html_report(
                     min_val, max_val = param_ranges.get(param_name, (0, 1))
                     param_bars += generate_param_bar_html(param_name, value, min_val, max_val)
 
+                # Generate quality badges
+                quality_badges = ""
+                if quality:
+                    def badge_class(val, thresholds):
+                        if val is None:
+                            return ""
+                        good, medium = thresholds
+                        if val <= good:
+                            return "good"
+                        if val <= medium:
+                            return "medium"
+                        return "poor"
+
+                    if quality.get("thd_percent") is not None:
+                        thd = quality["thd_percent"]
+                        cls = badge_class(thd, (5, 15))
+                        quality_badges += f'<span class="quality-badge {cls}">THD: {thd:.0f}%</span>'
+                    if quality.get("hnr_db") is not None:
+                        hnr = quality["hnr_db"]
+                        # Higher is better for HNR
+                        cls = "good" if hnr >= 15 else ("medium" if hnr >= 5 else "poor")
+                        quality_badges += f'<span class="quality-badge {cls}">HNR: {hnr:.0f}dB</span>'
+                    if quality.get("overall_score") is not None:
+                        score = quality["overall_score"]
+                        cls = "good" if score >= 80 else ("medium" if score >= 60 else "poor")
+                        quality_badges += f'<span class="quality-badge {cls}">{score:.0f}/100</span>'
+
                 html += f'''
                 <div class="item">
                     <div class="item-number">#{idx}</div>
@@ -649,6 +959,7 @@ def generate_html_report(
                         <img src="spectrograms/{rel_spec}" alt="{module_name}">
                     </a>
                     {audio_element}
+                    {f'<div class="quality-badges">{quality_badges}</div>' if quality_badges else ''}
                     <div class="params-container">
                         {param_bars}
                     </div>
@@ -662,9 +973,9 @@ def generate_html_report(
                 </div>
 '''
 
-        html += "</div>\n</div>\n"
+        html += "</div>\n</div>\n</div>\n"
 
-    # Add JavaScript for lazy loading audio
+    # Add JavaScript for lazy loading audio and collapsible sections
     html += """
     <script>
     function loadAudio(button) {
@@ -693,6 +1004,37 @@ def generate_html_report(
         // Start loading
         audio.src = src;
         audio.load();
+    }
+
+    // Collapsible AI card functionality
+    function toggleCollapsible(header) {
+        header.classList.toggle('collapsed');
+        const content = header.nextElementSibling;
+        if (content.classList.contains('collapsed')) {
+            content.classList.remove('collapsed');
+            content.style.maxHeight = content.scrollHeight + 'px';
+        } else {
+            content.style.maxHeight = content.scrollHeight + 'px';
+            // Force reflow
+            content.offsetHeight;
+            content.classList.add('collapsed');
+            content.style.maxHeight = '0';
+        }
+    }
+
+    // Renders section toggle
+    function toggleRenders(toggle) {
+        toggle.classList.toggle('expanded');
+        const content = toggle.nextElementSibling;
+        if (content.classList.contains('collapsed')) {
+            content.classList.remove('collapsed');
+            content.style.maxHeight = content.scrollHeight + 'px';
+        } else {
+            content.style.maxHeight = content.scrollHeight + 'px';
+            content.offsetHeight;
+            content.classList.add('collapsed');
+            content.style.maxHeight = '0';
+        }
     }
 
     // Optional: Preload audio when item becomes visible
@@ -727,6 +1069,7 @@ def run_module_tests(
     num_values: int = PARAM_VALUES_FULL,
     max_combinations: int = MAX_COMBINATIONS,
     num_workers: int = NUM_WORKERS,
+    include_quality: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run tests for a single module. Returns (results, param_metadata)."""
     print(f"\n{'=' * 60}")
@@ -746,6 +1089,8 @@ def run_module_tests(
     # Generate parameter grid
     grid = generate_param_grid(params, num_values, max_combinations)
     print(f"  Testing {len(grid)} parameter combinations ({num_workers} workers)")
+    if include_quality:
+        print(f"  Quality analysis: enabled")
 
     # Create output directories
     wav_dir = output_dir / "wav" / module_name
@@ -755,7 +1100,7 @@ def run_module_tests(
 
     # Prepare work items
     work_items = [
-        (module_name, param_combo, wav_dir, spec_dir, DURATION, SAMPLE_RATE)
+        (module_name, param_combo, wav_dir, spec_dir, DURATION, SAMPLE_RATE, include_quality)
         for param_combo in grid
     ]
 
@@ -790,6 +1135,48 @@ def run_module_tests(
     return results, params
 
 
+def run_ai_analysis_for_module(module_name: str, output_dir: Path) -> dict[str, Any] | None:
+    """Run AI analysis for a module and return the result."""
+    if not HAS_AI_ANALYSIS:
+        return None
+
+    if not os.environ.get("GEMINI_API_KEY"):
+        return None
+
+    # Render a default audio for AI analysis
+    from utils import render_audio as _render_audio
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        wav_path = Path(f.name)
+
+    try:
+        success, _ = _render_audio(module_name, {}, wav_path, duration=4.0)
+        if not success:
+            return None
+
+        print(f"    Running AI analysis for {module_name}...")
+        gemini_result = analyze_with_gemini(wav_path, module_name)
+
+        if "error" in gemini_result:
+            print(f"    AI analysis error: {gemini_result['error']}")
+            return None
+
+        return {
+            "quality_score": gemini_result.get("quality_score"),
+            "musical_score": gemini_result.get("musical_score"),
+            "analysis": gemini_result.get("analysis", ""),
+            "issues": gemini_result.get("issues", []),
+            "suggestions": gemini_result.get("suggestions", []),
+        }
+    except Exception as e:
+        print(f"    AI analysis failed: {e}")
+        return None
+    finally:
+        if wav_path.exists():
+            wav_path.unlink()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run Faust module audio tests")
     parser.add_argument("--module", help="Test specific module only")
@@ -816,6 +1203,19 @@ def main():
         type=int,
         default=NUM_WORKERS,
         help=f"Number of parallel workers (default: {NUM_WORKERS})",
+    )
+    # Quality and AI analysis options
+    parser.add_argument(
+        "--quality", action="store_true", help="Include audio quality metrics per render"
+    )
+    parser.add_argument(
+        "--no-quality", action="store_true", help="Skip audio quality metrics"
+    )
+    parser.add_argument(
+        "--ai", action="store_true", help="Include AI analysis per module (requires GEMINI_API_KEY)"
+    )
+    parser.add_argument(
+        "--no-ai", action="store_true", help="Skip AI analysis"
     )
 
     args = parser.parse_args()
@@ -851,28 +1251,64 @@ def main():
     print(f"Parameter values: {num_values} per parameter")
     print(f"Workers: {args.workers}")
 
+    # Determine quality and AI settings
+    include_quality = args.quality and not args.no_quality
+    include_ai = args.ai and not args.no_ai
+
+    if include_quality:
+        if HAS_AUDIO_QUALITY:
+            print("Audio quality analysis: enabled")
+        else:
+            print("Audio quality analysis: disabled (module not available)")
+            include_quality = False
+
+    if include_ai:
+        if HAS_AI_ANALYSIS and os.environ.get("GEMINI_API_KEY"):
+            print("AI analysis: enabled")
+        else:
+            if not HAS_AI_ANALYSIS:
+                print("AI analysis: disabled (module not available)")
+            else:
+                print("AI analysis: disabled (GEMINI_API_KEY not set)")
+            include_ai = False
+
     # Run tests
     all_results = {}
     all_param_metadata = {}
+    all_ai_results = {}
+
     for module in modules:
         results, param_metadata = run_module_tests(
             module, output_dir, num_values=num_values,
             max_combinations=args.max_combinations,
-            num_workers=args.workers
+            num_workers=args.workers,
+            include_quality=include_quality
         )
         all_results[module] = results
         all_param_metadata[module] = param_metadata
 
+        # Run AI analysis if enabled
+        if include_ai:
+            ai_result = run_ai_analysis_for_module(module, output_dir)
+            if ai_result:
+                all_ai_results[module] = ai_result
+
     # Generate report
     print("\n" + "=" * 60)
     print("Generating HTML report...")
-    report_path = generate_html_report(output_dir, all_results, all_param_metadata)
+    report_path = generate_html_report(
+        output_dir, all_results, all_param_metadata,
+        ai_results=all_ai_results,
+        include_quality=include_quality
+    )
     print(f"Report: {report_path}")
 
     # Summary
     total = sum(len(r) for r in all_results.values())
     successful = sum(1 for r in all_results.values() for x in r if x.get("success"))
     print(f"\nSummary: {successful}/{total} renders successful")
+    if all_ai_results:
+        print(f"AI analysis completed for {len(all_ai_results)} modules")
 
 
 if __name__ == "__main__":
