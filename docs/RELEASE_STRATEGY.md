@@ -14,7 +14,7 @@ WiggleRoom modules are organized into **thematic packs**, each with **Free** and
 
 ### Module Assignment
 
-#### Voices Pack
+#### Voices Pack (14 modules)
 
 | Module | Tier | Rationale |
 |--------|------|-----------|
@@ -25,8 +25,15 @@ WiggleRoom modules are organized into **thematic packs**, each with **Free** and
 | TheAbyss | Pro | Niche but unique (waterphone) |
 | Matter | Pro | Complex resonant body model |
 | VektorX | Pro | Flagship drone synth |
+| ACID9Voice | Pro | TB-303 inspired acid synth |
+| TR808 | Pro | Classic drum machine emulation |
+| TetanusCoil | Pro | Chaotic oscillator |
+| NutShaker | Pro | Physical shaker model |
+| PhysicalChoir | Pro | Vocal choir synthesis |
+| Linkage | Pro | Chaotic percussion generator |
+| ChaosPad | Pro | XY pad with chaos effects |
 
-#### Effects Pack
+#### Effects Pack (7 modules)
 
 | Module | Tier | Rationale |
 |--------|------|-----------|
@@ -38,7 +45,7 @@ WiggleRoom modules are organized into **thematic packs**, each with **Free** and
 | SpectralResonator | Pro | Advanced spectral processing |
 | TheCauldron | Pro | Unique wave math processor |
 
-#### Modulators Pack
+#### Modulators Pack (8 modules)
 
 | Module | Tier | Rationale |
 |--------|------|-----------|
@@ -47,43 +54,46 @@ WiggleRoom modules are organized into **thematic packs**, each with **Free** and
 | Intersect | Free | Useful trigger generator |
 | Cycloid | Pro | Visual Euclidean sequencer |
 | TheArchitect | Pro | Advanced poly-quantizer |
+| Euclogic | Pro | 4-channel Euclidean sequencer |
+| Euclogic2 | Free | Compact 2-channel Euclidean |
+| ACID9Seq | Pro | Companion sequencer for ACID9Voice |
 
 ### Summary
 
 | Pack | Free Modules | Pro Modules | Total |
 |------|--------------|-------------|-------|
-| Voices | 2 | 5 | 7 |
+| Voices | 2 | 12 | 14 |
 | Effects | 3 | 4 | 7 |
-| Modulators | 3 | 2 | 5 |
-| **Total** | **8** | **11** | **19** |
+| Modulators | 4 | 4 | 8 |
+| **Total** | **9** | **20** | **29** |
 
 ### Visual Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    WIGGLE ROOM PACKS                        │
-├─────────────────┬─────────────────┬─────────────────────────┤
-│     VOICES      │     EFFECTS     │      MODULATORS         │
-├────────┬────────┼────────┬────────┼────────┬────────────────┤
-│  FREE  │  PRO   │  FREE  │  PRO   │  FREE  │      PRO       │
-├────────┼────────┼────────┼────────┼────────┼────────────────┤
-│Plucked │Chaos   │LadderLPF │Satura- │Gravity │Cycloid         │
-│String  │Flute   │        │tionEcho│Clock   │                │
-│        │        │        │        │        │                │
-│Modal   │Space   │Big     │TriPhase  │OctoLFO │TheArchitect    │
-│Bell    │Cello   │Reverb  │Ensemble│        │                │
-│        │        │        │        │        │                │
-│        │TheAbyss│Infinite│Spectral│Inter-  │                │
-│        │        │Folder  │Reson.  │sect    │                │
-│        │        │        │        │        │                │
-│        │Matter  │        │The     │        │                │
-│        │        │        │Cauldron│        │                │
-│        │        │        │        │        │                │
-│        │VektorX │        │        │        │                │
-├────────┼────────┼────────┼────────┼────────┼────────────────┤
-│   2    │   5    │   3    │   4    │   3    │       2        │
-└────────┴────────┴────────┴────────┴────────┴────────────────┘
-         8 Free                    11 Pro
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         WIGGLE ROOM PACKS                                 │
+├────────────────────────┬─────────────────────┬────────────────────────────┤
+│        VOICES          │       EFFECTS       │        MODULATORS          │
+├──────────┬─────────────┼──────────┬──────────┼─────────────┬──────────────┤
+│   FREE   │     PRO     │   FREE   │   PRO    │    FREE     │     PRO      │
+├──────────┼─────────────┼──────────┼──────────┼─────────────┼──────────────┤
+│ Plucked  │ ChaosFlute  │ LadderLPF│ Satura-  │ GravityClock│ Cycloid      │
+│ String   │ SpaceCello  │ BigReverb│ tionEcho │ OctoLFO     │ TheArchitect │
+│ ModalBell│ TheAbyss    │ Infinite │ TriPhase │ Intersect   │ Euclogic     │
+│          │ Matter      │ Folder   │ Ensemble │ Euclogic2   │ ACID9Seq     │
+│          │ VektorX     │          │ Spectral │             │              │
+│          │ ACID9Voice  │          │ Resonator│             │              │
+│          │ TR808       │          │ The      │             │              │
+│          │ TetanusCoil │          │ Cauldron │             │              │
+│          │ NutShaker   │          │          │             │              │
+│          │ Physical    │          │          │             │              │
+│          │ Choir       │          │          │             │              │
+│          │ Linkage     │          │          │             │              │
+│          │ ChaosPad    │          │          │             │              │
+├──────────┼─────────────┼──────────┼──────────┼─────────────┼──────────────┤
+│    2     │     12      │    3     │    4     │      4      │      4       │
+└──────────┴─────────────┴──────────┴──────────┴─────────────┴──────────────┘
+              9 Free                         20 Pro
 ```
 
 ---
@@ -218,3 +228,4 @@ Comparable pricing in VCV ecosystem:
 | 2025-01-21 | Thematic packs (Voices/Effects/Modulators) | Better organization, users buy what they need |
 | 2025-01-21 | Free + Pro tiers per pack | Free modules attract users, Pro generates revenue |
 | 2025-01-21 | Monorepo with multi-pack builds | Keep code together, easier maintenance |
+| 2026-02-03 | Updated to 29 modules | Added ACID9Voice, TR808, TetanusCoil, NutShaker, PhysicalChoir, Linkage, ChaosPad, Euclogic, Euclogic2, ACID9Seq |
