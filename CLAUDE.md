@@ -19,7 +19,7 @@ WiggleRoom is organized into **thematic packs** with **Free** and **Pro** tiers:
 | Pack | Free Modules | Pro Modules |
 |------|--------------|-------------|
 | **Voices** | PluckedString, ModalBell | ChaosFlute, SpaceCello, TheAbyss, Matter, VektorX |
-| **Effects** | MoogLPF, BigReverb, InfiniteFolder | SaturationEcho, SolinaEnsemble, SpectralResonator, TheCauldron |
+| **Effects** | LadderLPF, BigReverb, InfiniteFolder | SaturationEcho, TriPhaseEnsemble, SpectralResonator, TheCauldron |
 | **Modulators** | GravityClock, OctoLFO, Intersect | Cycloid, TheArchitect |
 
 See [docs/RELEASE_STRATEGY.md](docs/RELEASE_STRATEGY.md) for full details on naming, pricing, and release phases.

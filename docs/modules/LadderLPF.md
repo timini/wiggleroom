@@ -1,10 +1,10 @@
-# Moog LPF
+# Ladder LPF
 
-A classic 4-pole (24dB/octave) ladder lowpass filter inspired by the Moog synthesizer, with resonance and V/Oct cutoff tracking.
+A classic 4-pole (24dB/octave) ladder lowpass filter with resonance and V/Oct cutoff tracking.
 
 ## Overview
 
-Moog LPF provides the warm, musical filtering that made the Moog synthesizer legendary. The ladder topology creates a distinctive 24dB/octave rolloff with smooth resonance that can approach self-oscillation. V/Oct tracking on the cutoff allows the filter to follow melodic sequences.
+Ladder LPF provides warm, musical filtering using the classic ladder topology. The ladder topology creates a distinctive 24dB/octave rolloff with smooth resonance that can approach self-oscillation. V/Oct tracking on the cutoff allows the filter to follow melodic sequences.
 
 Built with Faust DSP for high-quality, efficient processing.
 

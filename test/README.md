@@ -66,7 +66,7 @@ just test-modules module=ChaosFlute  # Test specific module
 **Output:**
 ```
 Testing 11 module(s)...
-  Testing: MoogLPF... OK
+  Testing: LadderLPF... OK
   Testing: BigReverb... OK
   ...
 SUMMARY: 11/11 modules passed
@@ -92,7 +92,7 @@ just test-modules-ci
   "summary": {"total": 11, "passed": 11, "failed": 0},
   "modules": [
     {
-      "name": "MoogLPF",
+      "name": "LadderLPF",
       "passed": true,
       "duration_ms": 1576,
       "tests": [
@@ -201,9 +201,9 @@ Equivalent to running `just test-faust` then `just test-modules`.
 
 | Type | Modules | Input Signal |
 |------|---------|--------------|
-| Filter | MoogLPF, InfiniteFolder | Continuous 440Hz saw wave |
+| Filter | LadderLPF, InfiniteFolder | Continuous 440Hz saw wave |
 | Resonator | SpectralResonator | Periodic noise bursts (20ms every 300ms) |
-| Effect | BigReverb, SaturationEcho, SolinaEnsemble | 100ms noise burst then silence |
+| Effect | BigReverb, SaturationEcho, TriPhaseEnsemble | 100ms noise burst then silence |
 | Instrument | ModalBell, PluckedString, ChaosFlute, SpaceCello, TheAbyss | Gate/trigger signal only |
 
 ### 3. Audio Stability Test
@@ -286,7 +286,7 @@ The `faust_render` executable renders audio from any Faust module.
 
 ```bash
 # Render with defaults
-./build/test/faust_render --module MoogLPF --output test.wav
+./build/test/faust_render --module LadderLPF --output test.wav
 
 # Set duration and sample rate
 ./build/test/faust_render --module TheAbyss --output test.wav \
@@ -415,7 +415,7 @@ When you add a new Faust module:
 
 3. **Add to module list**:
    ```cpp
-   return {"MoogLPF", ..., "MyModule"};
+   return {"LadderLPF", ..., "MyModule"};
    ```
 
 4. **Set module type** (for input signal generation):

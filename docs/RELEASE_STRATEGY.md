@@ -30,11 +30,11 @@ WiggleRoom modules are organized into **thematic packs**, each with **Free** and
 
 | Module | Tier | Rationale |
 |--------|------|-----------|
-| MoogLPF | Free | Classic filter, essential utility |
+| LadderLPF | Free | Classic filter, essential utility |
 | BigReverb | Free | High-quality reverb attracts users |
 | InfiniteFolder | Free | West coast essential |
 | SaturationEcho | Pro | Premium tape delay |
-| SolinaEnsemble | Pro | Vintage string ensemble |
+| TriPhaseEnsemble | Pro | Vintage string ensemble |
 | SpectralResonator | Pro | Advanced spectral processing |
 | TheCauldron | Pro | Unique wave math processor |
 
@@ -67,10 +67,10 @@ WiggleRoom modules are organized into **thematic packs**, each with **Free** and
 ├────────┬────────┼────────┬────────┼────────┬────────────────┤
 │  FREE  │  PRO   │  FREE  │  PRO   │  FREE  │      PRO       │
 ├────────┼────────┼────────┼────────┼────────┼────────────────┤
-│Plucked │Chaos   │MoogLPF │Satura- │Gravity │Cycloid         │
+│Plucked │Chaos   │LadderLPF │Satura- │Gravity │Cycloid         │
 │String  │Flute   │        │tionEcho│Clock   │                │
 │        │        │        │        │        │                │
-│Modal   │Space   │Big     │Solina  │OctoLFO │TheArchitect    │
+│Modal   │Space   │Big     │TriPhase  │OctoLFO │TheArchitect    │
 │Bell    │Cello   │Reverb  │Ensemble│        │                │
 │        │        │        │        │        │                │
 │        │TheAbyss│Infinite│Spectral│Inter-  │                │

@@ -19,7 +19,7 @@ WiggleRoom supports two module types:
 
 | Type | Description | Base Class | Examples |
 |------|-------------|------------|----------|
-| **Faust DSP** | Audio DSP written in Faust language | `FaustModule<VCVRackDSP>` | MoogLPF, ModalBell, Matter |
+| **Faust DSP** | Audio DSP written in Faust language | `FaustModule<VCVRackDSP>` | LadderLPF, ModalBell, Matter |
 | **Native C++** | Custom DSP written in C++ | `rack::Module` | SuperOsc, Cycloid, Intersect |
 
 ### Directory Structure
@@ -453,9 +453,9 @@ The test harness auto-generates appropriate input signals:
 
 | Type | Modules | Input Signal |
 |------|---------|--------------|
-| Filter | MoogLPF, InfiniteFolder | 440Hz sawtooth |
+| Filter | LadderLPF, InfiniteFolder | 440Hz sawtooth |
 | Resonator | SpectralResonator | Noise bursts (20ms every 300ms) |
-| Effect | BigReverb, SaturationEcho, SolinaEnsemble | 100ms noise burst |
+| Effect | BigReverb, SaturationEcho, TriPhaseEnsemble | 100ms noise burst |
 | Instrument | ModalBell, PluckedString, Matter, etc. | Gate signal only |
 
 ### Audio Analysis Tools

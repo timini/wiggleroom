@@ -1,10 +1,10 @@
-# Solina Ensemble
+# Tri-Phase Ensemble
 
-A classic 3-voice BBD string ensemble effect that recreates the legendary ARP Solina (1974) tri-phase chorus. Transforms thin waveforms into massive, swirling orchestral string sounds.
+A classic 3-voice BBD string ensemble effect with tri-phase chorus. Transforms thin waveforms into massive, swirling orchestral string sounds.
 
 ## Overview
 
-The Solina Ensemble effect uses three bucket-brigade delay (BBD) lines running in parallel, each modulated by LFOs that are 120° out of phase with each other. This creates the characteristic "motionless motion" - incredibly thick and moving sound without the wobbly pitch problems of standard chorus effects.
+The Tri-Phase Ensemble effect uses three bucket-brigade delay (BBD) lines running in parallel, each modulated by LFOs that are 120° out of phase with each other. This creates the characteristic "motionless motion" - incredibly thick and moving sound without the wobbly pitch problems of standard chorus effects.
 
 Built with Faust DSP for authentic analog-style processing.
 
@@ -77,13 +77,13 @@ graph LR
 ### Depth
 Controls the intensity of the pitch modulation:
 - **Low (0-50%):** Subtle thickening, good for adding body
-- **Medium (50-100%):** Classic Solina ensemble sound
+- **Medium (50-100%):** Classic tri-phase ensemble sound
 - **High (100-200%):** Exaggerated, dramatic swirling
 
 ### Rate
 Scales both the slow (chorus) and fast (vibrato) LFOs:
 - **Slow (0.1-0.5x):** Dreamy, slow-motion ensemble
-- **Normal (1.0x):** Authentic Solina speed
+- **Normal (1.0x):** Classic ensemble speed
 - **Fast (2.0-3.0x):** More aggressive, vibrato-heavy sound
 
 ### Tone
@@ -108,7 +108,7 @@ Controls dry/wet balance:
 
 ## Why It Sounds "Orchestral"
 
-Standard chorus effects use a single delay line with pitch modulation, which creates obvious pitch wobble. The Solina's tri-phase design works differently:
+Standard chorus effects use a single delay line with pitch modulation, which creates obvious pitch wobble. The tri-phase design works differently:
 
 1. **Three voices** modulated 120° apart
 2. When one voice pitches up, another pitches down, and the third stabilizes
