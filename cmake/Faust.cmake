@@ -94,6 +94,7 @@ function(add_faust_dsp)
             COMMAND ${FAUST_EXECUTABLE}
                 -i                                      # Inline all code
                 -a "${FAUST_ARCHITECTURE_FILE}"         # Use VCV Rack architecture
+                -fm arch                                # Assume math functions in architecture (avoid math.h inside namespace)
                 -o "${OUTPUT_HPP}"                      # Output file
                 "${DSP_FILE_ABS}"                       # Input DSP file
             DEPENDS "${DSP_FILE_ABS}" "${FAUST_ARCHITECTURE_FILE}"

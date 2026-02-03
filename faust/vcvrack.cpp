@@ -24,33 +24,75 @@
    - getParamPath(int index) / getParamMin/Max/Init(int index)
 ************************************************************************/
 
+// Standard includes - MUST be before any namespace to avoid GCC 13 issues
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <math.h>
 #include <string>
 #include <vector>
 
-// Ensure math functions are in global namespace for Faust-generated code
-using std::abs;
-using std::acos;
-using std::asin;
-using std::atan;
-using std::atan2;
-using std::ceil;
-using std::cos;
-using std::exp;
-using std::fabs;
-using std::floor;
-using std::fmod;
-using std::log;
-using std::log10;
-using std::pow;
-using std::round;
-using std::sin;
-using std::sqrt;
-using std::tan;
+// Fast math function aliases for Faust -fm arch mode
+// These map fast_* functions to standard math functions
+// Wrapped in include guard to avoid redefinition when multiple headers are included
+#ifndef FAUST_FAST_MATH_DEFINED
+#define FAUST_FAST_MATH_DEFINED
+inline float fast_acosf(float x) { return std::acos(x); }
+inline float fast_asinf(float x) { return std::asin(x); }
+inline float fast_atanf(float x) { return std::atan(x); }
+inline float fast_atan2f(float y, float x) { return std::atan2(y, x); }
+inline float fast_ceilf(float x) { return std::ceil(x); }
+inline float fast_cosf(float x) { return std::cos(x); }
+inline float fast_coshf(float x) { return std::cosh(x); }
+inline float fast_expf(float x) { return std::exp(x); }
+inline float fast_exp2f(float x) { return std::exp2(x); }
+inline float fast_exp10f(float x) { return std::pow(10.0f, x); }
+inline float fast_fabsf(float x) { return std::fabs(x); }
+inline float fast_floorf(float x) { return std::floor(x); }
+inline float fast_fmodf(float x, float y) { return std::fmod(x, y); }
+inline float fast_logf(float x) { return std::log(x); }
+inline float fast_log2f(float x) { return std::log2(x); }
+inline float fast_log10f(float x) { return std::log10(x); }
+inline float fast_powf(float x, float y) { return std::pow(x, y); }
+inline float fast_remainderf(float x, float y) { return std::remainder(x, y); }
+inline float fast_rintf(float x) { return std::rint(x); }
+inline float fast_roundf(float x) { return std::round(x); }
+inline float fast_sinf(float x) { return std::sin(x); }
+inline float fast_sinhf(float x) { return std::sinh(x); }
+inline float fast_sqrtf(float x) { return std::sqrt(x); }
+inline float fast_tanf(float x) { return std::tan(x); }
+inline float fast_tanhf(float x) { return std::tanh(x); }
+
+// Double precision versions
+inline double fast_acos(double x) { return std::acos(x); }
+inline double fast_asin(double x) { return std::asin(x); }
+inline double fast_atan(double x) { return std::atan(x); }
+inline double fast_atan2(double y, double x) { return std::atan2(y, x); }
+inline double fast_ceil(double x) { return std::ceil(x); }
+inline double fast_cos(double x) { return std::cos(x); }
+inline double fast_cosh(double x) { return std::cosh(x); }
+inline double fast_exp(double x) { return std::exp(x); }
+inline double fast_exp2(double x) { return std::exp2(x); }
+inline double fast_exp10(double x) { return std::pow(10.0, x); }
+inline double fast_fabs(double x) { return std::fabs(x); }
+inline double fast_floor(double x) { return std::floor(x); }
+inline double fast_fmod(double x, double y) { return std::fmod(x, y); }
+inline double fast_log(double x) { return std::log(x); }
+inline double fast_log2(double x) { return std::log2(x); }
+inline double fast_log10(double x) { return std::log10(x); }
+inline double fast_pow(double x, double y) { return std::pow(x, y); }
+inline double fast_remainder(double x, double y) { return std::remainder(x, y); }
+inline double fast_rint(double x) { return std::rint(x); }
+inline double fast_round(double x) { return std::round(x); }
+inline double fast_sin(double x) { return std::sin(x); }
+inline double fast_sinh(double x) { return std::sinh(x); }
+inline double fast_sqrt(double x) { return std::sqrt(x); }
+inline double fast_tan(double x) { return std::tan(x); }
+inline double fast_tanh(double x) { return std::tanh(x); }
+#endif // FAUST_FAST_MATH_DEFINED
 
 // Faust compatibility types
 #ifndef FAUSTFLOAT
@@ -69,26 +111,6 @@ using std::tan;
 // Each Faust file gets its own namespace to avoid ODR violations
 namespace FaustGenerated {
 namespace FAUST_CONCAT(NS_, FAUST_MODULE_NAME) {
-
-// Import math functions into this namespace
-using ::abs;
-using ::acos;
-using ::asin;
-using ::atan;
-using ::atan2;
-using ::ceil;
-using ::cos;
-using ::exp;
-using ::fabs;
-using ::floor;
-using ::fmod;
-using ::log;
-using ::log10;
-using ::pow;
-using ::round;
-using ::sin;
-using ::sqrt;
-using ::tan;
 
 // Minimal Meta interface (for metadata declarations in DSP)
 struct Meta {
