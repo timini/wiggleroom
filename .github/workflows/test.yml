@@ -60,6 +60,9 @@ jobs:
       - name: Configure and Build
         run: just build
 
+      - name: Validate plugin manifest
+        run: just validate-manifest
+
       - name: Run Faust compilation tests
         run: just test-faust
 
