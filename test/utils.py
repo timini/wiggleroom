@@ -268,10 +268,14 @@ def load_module_config(module_name: str) -> dict[str, Any]:
                 "clipping_max_percent": qt.get("clipping_max_percent", 1.0),
                 "hnr_min_db": qt.get("hnr_min_db", 0.0),
                 "allow_hot_signal": qt.get("allow_hot_signal", False),
+                "dc_offset_max": qt.get("dc_offset_max", 0.01),
             }
 
         if "test_scenarios" in data:
             config["test_scenarios"] = data["test_scenarios"]
+
+        if "parameter_sweeps" in data:
+            config["parameter_sweeps"] = data["parameter_sweeps"]
 
         return config
 

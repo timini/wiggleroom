@@ -91,6 +91,10 @@ class ModuleTestConfig:
             return 0.15  # 15% for wavefolders, saturators, etc.
         return self.thresholds.get("clipping_max_percent", 1.0) / 100.0
 
+    def get_dc_offset_threshold(self) -> float:
+        """Get DC offset threshold from config or use default."""
+        return self.thresholds.get("dc_offset_max", DC_OFFSET_THRESHOLD)
+
 
 def load_module_config(module_name: str) -> ModuleTestConfig:
     """Load test configuration for a module from its test_config.json file."""
@@ -104,6 +108,7 @@ def load_module_config(module_name: str) -> ModuleTestConfig:
     config.description = config_dict.get("description", "")
     config.thresholds = config_dict.get("thresholds", DEFAULT_THRESHOLDS.copy())
     config.test_scenarios = config_dict.get("test_scenarios", [{"name": "default", "duration": 2.0}])
+    config.parameter_sweeps = config_dict.get("parameter_sweeps", {})
 
     return config
 
@@ -283,9 +288,10 @@ def test_audio_stability(module_name: str, tmp_dir: Path) -> TestResult:
     stats = extract_audio_stats(audio)
     issues = []
 
-    # Check DC offset
-    if abs(stats["dc_offset"]) > DC_OFFSET_THRESHOLD:
-        issues.append(f"High DC offset: {stats['dc_offset']:.4f}")
+    # Check DC offset - use config threshold
+    dc_offset_limit = config.get_dc_offset_threshold()
+    if abs(stats["dc_offset"]) > dc_offset_limit:
+        issues.append(f"High DC offset: {stats['dc_offset']:.4f} (threshold: {dc_offset_limit:.4f})")
 
     # Check clipping - use config threshold
     clipping_limit = config.get_clipping_threshold()
@@ -342,13 +348,20 @@ def test_gate_response(module_name: str, tmp_dir: Path) -> TestResult:
                      f"Gate affects output (RMS diff: {rms_diff:.4f})")
 
 
-def test_parameter_sensitivity(module_name: str, tmp_dir: Path) -> TestResult:
+def test_parameter_sensitivity(module_name: str, tmp_dir: Path, exclude_params: list[str] | None = None) -> TestResult:
     """Test that parameters actually affect the output."""
     params = get_module_params(module_name)
 
-    # Filter out control parameters
+    # Default control parameters to exclude
+    default_exclude = {"gate", "trigger", "velocity", "volts", "freq", "pitch"}
+
+    # Add module-specific exclusions
+    if exclude_params:
+        default_exclude.update(p.lower() for p in exclude_params)
+
+    # Filter out control parameters and module-specific exclusions
     test_params = [p for p in params
-                   if p["name"].lower() not in ["gate", "trigger", "velocity", "volts", "freq", "pitch"]]
+                   if p["name"].lower() not in default_exclude]
 
     if not test_params:
         return TestResult("parameter_sensitivity", True, "No testable parameters")
@@ -812,13 +825,20 @@ def run_module_tests(module_name: str, tmp_dir: Path,
 
     result = ModuleTestResults(module_name=module_name, passed=True)
 
+    # Load module config for test customization
+    config = load_module_config(module_name)
+
+    # Get parameter exclusion list from config
+    param_sweeps = config.parameter_sweeps or {}
+    exclude_params = param_sweeps.get("exclude", [])
+
     # Run core tests
     result.add(test_compilation(module_name))
     result.add(test_basic_render(module_name, tmp_dir))
     result.add(test_audio_stability(module_name, tmp_dir))
     result.add(test_gate_response(module_name, tmp_dir))
     result.add(test_pitch_tracking(module_name, tmp_dir))
-    result.add(test_parameter_sensitivity(module_name, tmp_dir))
+    result.add(test_parameter_sensitivity(module_name, tmp_dir, exclude_params))
     result.add(test_regression(module_name, tmp_dir, baseline_dir))
 
     # Run audio quality tests
