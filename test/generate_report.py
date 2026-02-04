@@ -2,7 +2,24 @@
 """
 Regenerate HTML report from existing rendered files.
 Does not re-render audio - just rebuilds the HTML.
+
+DEPRECATED: This script is deprecated. Use generate_unified_report.py instead.
+
+The unified report combines showcase audio, quality metrics, and AI analysis
+in a single comprehensive report suitable for PR reviews.
+
+New usage:
+    python generate_unified_report.py              # All modules, standard mode
+    python generate_unified_report.py --fast       # Fast mode (no AI)
+    python generate_unified_report.py --full       # Full mode with Gemini
 """
+
+import warnings
+warnings.warn(
+    "generate_report.py is deprecated. Use generate_unified_report.py instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import json
 import re

@@ -137,6 +137,12 @@ just validate-modules        # Run module audio quality tests
 just validate-audio          # Audio quality analysis (THD, aliasing)
 just validate-ai             # AI-powered analysis (Gemini + CLAP)
 
+# UNIFIED REPORT (for PR reviews)
+just report                  # Standard: showcase + quality + CLAP
+just report-fast             # Fast: no AI analysis (CI mode)
+just report-full             # Full: CLAP + Gemini + param grid
+just report-module ModuleName  # Single module report
+
 # COMBINED
 just ci                      # Full CI pipeline: verify -> build -> validate
 just test                    # Same as ci
@@ -166,33 +172,53 @@ just test-modules-fast       # Module tests without quality analysis
 
 See [DEVELOPMENT.md](DEVELOPMENT.md#testing-framework) for full testing documentation.
 
-## Showcase Audio & Reports
+## Unified Audio Report
 
-Generate comprehensive showcase audio for modules with multiple notes and parameter sweeps:
+Generate comprehensive audio reports for PR reviews with showcase audio, quality metrics, and AI analysis:
 
 ```bash
-# Generate showcase report for all modules
-just showcase
+# Standard report (showcase + quality + CLAP) - recommended for PR reviews
+just report
 
-# Generate for specific module
-just showcase-module ChaosFlute
+# Fast report (no AI) - for quick CI checks
+just report-fast
 
-# Skip AI analysis (faster)
-just showcase-fast
+# Full report (CLAP + Gemini + parameter grid) - deep dive
+just report-full
 
-# Render showcase audio only (no report)
-just render-showcase ChaosFlute
+# Single module report
+just report-module ChaosFlute
 ```
 
-The showcase report (`test/output/showcase_report.html`) provides:
+The unified report (`test/output/unified_report.html`) provides:
 - Module SVG panel display
 - Audio player with full showcase clip
 - Spectrogram visualization
 - Note sequence visualization (piano roll)
 - Parameter automation graph
 - Quality metrics (THD, HNR, peak, clipping)
-- AI analysis (CLAP scores, sound character, Gemini analysis)
+- AI analysis (CLAP scores, sound character)
+- Gemini analysis (in --full mode)
+- Parameter grid with value visualizations (in --full mode)
 - Pass/fail status based on thresholds
+
+### Report Modes
+
+| Mode | Command | AI | Speed | Use Case |
+|------|---------|-----|-------|----------|
+| **Fast** | `just report-fast` | None | Fastest | CI quick check |
+| **Standard** | `just report` | CLAP | Fast | PR review |
+| **Full** | `just report-full` | CLAP + Gemini | Slower | Deep dive |
+
+### Legacy Commands (Deprecated)
+
+The following commands still work but are deprecated:
+
+```bash
+just showcase           # Use 'just report' instead
+just showcase-module    # Use 'just report-module' instead
+just showcase-fast      # Use 'just report-fast' instead
+```
 
 ### Environment Setup for AI Analysis
 

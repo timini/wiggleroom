@@ -443,12 +443,47 @@ test-ai module="": build
         python3 test/ai_audio_analysis.py --instruments-only -v
     fi
 
-# --- Showcase Reports ---
+# =============================================================================
+# UNIFIED REPORT
+# =============================================================================
+
+# Generate unified report (showcase + quality + CLAP analysis)
+report: build
+    python3 test/generate_unified_report.py -v
+    @echo "Open test/output/unified_report.html to view results"
+
+# Generate fast report (no AI, for quick CI checks)
+report-fast: build
+    python3 test/generate_unified_report.py --fast -v
+    @echo "Open test/output/unified_report.html to view results"
+
+# Generate full report (CLAP + Gemini + parameter grid)
+report-full: build
+    python3 test/generate_unified_report.py --full -v
+    @echo "Open test/output/unified_report.html to view results"
+
+# Generate unified report for specific module
+report-module module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/generate_unified_report.py -m "{{module}}" -v
+        echo "Open test/output/unified_report.html to view results"
+    else
+        echo "Usage: just report-module ModuleName"
+        exit 1
+    fi
+
+# =============================================================================
+# SHOWCASE REPORTS (DEPRECATED - use 'report' commands instead)
+# =============================================================================
 # Note: For Gemini AI analysis, create .env file with: GEMINI_API_KEY=your_key
 # The scripts automatically load .env from project root
 
 # Generate showcase report for all modules (includes AI analysis if .env has GEMINI_API_KEY)
+# DEPRECATED: Use 'just report' instead
 showcase: build
+    @echo "Note: 'just showcase' is deprecated. Use 'just report' for the unified report."
     python3 test/generate_showcase_report.py -v
     @echo "Open test/output/showcase_report.html to view results"
 

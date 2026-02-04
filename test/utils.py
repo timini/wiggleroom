@@ -389,3 +389,82 @@ def extract_audio_stats(audio: np.ndarray, clipping_threshold: float = 0.99) -> 
         "clipping_ratio": float(np.mean(np.abs(audio) > clipping_threshold)),
         "silence_ratio": float(np.mean(np.abs(audio) < 0.001)),
     }
+
+
+# =============================================================================
+# Report generation utilities
+# =============================================================================
+
+def format_value(value: float) -> str:
+    """Format a value nicely for display.
+
+    Args:
+        value: The numeric value to format
+
+    Returns:
+        Formatted string representation
+    """
+    if abs(value) < 0.01 and value != 0:
+        return f"{value:.3f}"
+    elif abs(value) < 10:
+        return f"{value:.2f}"
+    elif abs(value) < 1000:
+        return f"{value:.1f}"
+    else:
+        return f"{value:.0f}"
+
+
+def generate_param_bar_html(name: str, value: float, min_val: float, max_val: float) -> str:
+    """Generate HTML for a parameter visualization bar with range labels and zero marker.
+
+    Args:
+        name: Parameter name
+        value: Current parameter value
+        min_val: Minimum allowed value
+        max_val: Maximum allowed value
+
+    Returns:
+        HTML string for the parameter bar visualization
+    """
+    if max_val == min_val:
+        pct = 50
+    else:
+        pct = ((value - min_val) / (max_val - min_val)) * 100
+    pct = max(0, min(100, pct))
+
+    # Calculate zero position if range spans zero
+    zero_marker = ""
+    if min_val < 0 < max_val:
+        zero_pct = ((0 - min_val) / (max_val - min_val)) * 100
+        zero_marker = f'<div class="zero-marker" style="left: {zero_pct:.1f}%"></div>'
+
+    return f'''<div class="param-row">
+        <span class="param-name">{name}</span>
+        <span class="param-min">{format_value(min_val)}</span>
+        <div class="param-bar-container">
+            <div class="param-bar" style="width: {pct:.1f}%"></div>
+            <div class="param-marker" style="left: {pct:.1f}%"></div>
+            {zero_marker}
+        </div>
+        <span class="param-max">{format_value(max_val)}</span>
+        <span class="param-value">{format_value(value)}</span>
+    </div>'''
+
+
+def volts_to_note_name(volts: float) -> str:
+    """Convert V/Oct voltage to note name.
+
+    Args:
+        volts: Voltage in V/Oct format (0V = C4)
+
+    Returns:
+        Note name string (e.g., "C4", "F#5")
+    """
+    # 0V = C4 (MIDI 60)
+    semitones = round(volts * 12)
+    midi_note = 60 + semitones
+
+    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+    octave = (midi_note // 12) - 1
+    note = note_names[midi_note % 12]
+    return f"{note}{octave}"
