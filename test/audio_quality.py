@@ -48,6 +48,21 @@ DEFAULT_QUALITY_THRESHOLDS = {
 }
 
 
+def load_ci_config() -> dict:
+    """Load CI configuration from test/ci_config.json."""
+    project_root = get_project_root()
+    ci_config_path = project_root / "test" / "ci_config.json"
+
+    if not ci_config_path.exists():
+        return {}
+
+    try:
+        with open(ci_config_path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
 def load_module_config(module_name: str) -> dict:
     """Load test configuration for a module from its test_config.json file."""
     project_root = get_project_root()
@@ -1085,6 +1100,8 @@ def main():
         description="Audio quality analysis for Faust DSP modules"
     )
     parser.add_argument("--module", help="Specific module to analyze")
+    parser.add_argument("--all-modules", action="store_true",
+                       help="Analyze all available modules")
     parser.add_argument("--report", action="store_true",
                        help="Generate detailed report")
     parser.add_argument("--json", action="store_true",
@@ -1096,8 +1113,16 @@ def main():
                        help="Run THD test only")
     parser.add_argument("--test-aliasing", action="store_true",
                        help="Run aliasing test only")
+    parser.add_argument("--ci", action="store_true",
+                       help="CI mode: use ci_config.json thresholds, JSON output, exit code")
 
     args = parser.parse_args()
+
+    # Load CI config if in CI mode
+    ci_config = {}
+    if args.ci:
+        ci_config = load_ci_config()
+        args.json = True  # Force JSON output in CI mode
 
     # Check executable
     if not get_render_executable().exists():
@@ -1107,6 +1132,11 @@ def main():
     # Get modules
     if args.module:
         modules = [args.module]
+    elif args.all_modules or args.ci:
+        modules = get_modules()
+        if not modules:
+            print("Error: No modules found")
+            sys.exit(1)
     else:
         modules = get_modules()
         if not modules:
@@ -1116,13 +1146,28 @@ def main():
     import tempfile
     all_reports = []
 
+    # Get CI quality gates if in CI mode
+    ci_quality_gates = ci_config.get("quality_gates", {}) if args.ci else {}
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
 
         for module_name in modules:
             if not args.json:
                 print(f"Analyzing: {module_name}...")
-            report = test_module_quality(module_name, tmp_dir)
+
+            # In CI mode, use CI thresholds; otherwise use module config
+            if args.ci and ci_quality_gates:
+                ci_thresholds = {
+                    "thd_max_percent": ci_quality_gates.get("thd_max_percent", 20.0),
+                    "clipping_max_percent": ci_quality_gates.get("clipping_max_percent", 5.0),
+                    "hnr_min_db": ci_quality_gates.get("hnr_min_db", -5.0),
+                    "allow_hot_signal": False
+                }
+                report = test_module_quality(module_name, tmp_dir, thresholds=ci_thresholds)
+            else:
+                report = test_module_quality(module_name, tmp_dir)
+
             all_reports.append(report)
 
             if not args.json:
@@ -1153,8 +1198,23 @@ def main():
             print(json_str)
 
     # Exit code based on quality
-    min_score = min(r.overall_quality_score for r in all_reports) if all_reports else 0
-    sys.exit(0 if min_score >= 70 else 1)
+    if args.ci:
+        # In CI mode, use CI config threshold
+        min_quality_score = ci_quality_gates.get("clap_quality_min", 50)
+        min_score = min(r.overall_quality_score for r in all_reports) if all_reports else 0
+
+        # Also check for critical issues
+        ci_passed = min_score >= min_quality_score
+        for report in all_reports:
+            if "Audio is silent" in report.issues:
+                if not ci_quality_gates.get("silent_output", False):
+                    ci_passed = False
+                    break
+
+        sys.exit(0 if ci_passed else 1)
+    else:
+        min_score = min(r.overall_quality_score for r in all_reports) if all_reports else 0
+        sys.exit(0 if min_score >= 70 else 1)
 
 
 if __name__ == "__main__":

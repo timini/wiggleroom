@@ -82,6 +82,20 @@ TEST_DURATION = 4.0
 # Without prefix, API returns 404. Set via GEMINI_MODEL env var or .env file.
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "models/gemini-3-pro-preview")
 
+
+def load_ci_config() -> dict:
+    """Load CI configuration from test/ci_config.json."""
+    ci_config_path = get_project_root() / "test" / "ci_config.json"
+
+    if not ci_config_path.exists():
+        return {}
+
+    try:
+        with open(ci_config_path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
 # CLAP quality descriptors - positive and negative
 CLAP_POSITIVE_DESCRIPTORS = [
     "clean synthesizer sound",
@@ -1003,7 +1017,7 @@ def main():
         description="AI-powered audio analysis using Gemini and CLAP"
     )
     parser.add_argument("--module", help="Specific module to analyze")
-    parser.add_argument("--all", action="store_true",
+    parser.add_argument("--all", "--all-modules", action="store_true",
                        help="Analyze all available modules")
     parser.add_argument("--instruments-only", action="store_true",
                        help="Only analyze instrument modules")
@@ -1016,8 +1030,18 @@ def main():
     parser.add_argument("--output", help="Output file for results")
     parser.add_argument("-v", "--verbose", action="store_true",
                        help="Verbose output")
+    parser.add_argument("--ci", action="store_true",
+                       help="CI mode: CLAP-only, use ci_config.json thresholds, JSON output, exit code")
 
     args = parser.parse_args()
+
+    # Load CI config if in CI mode
+    ci_config = {}
+    if args.ci:
+        ci_config = load_ci_config()
+        args.clap_only = True  # Force CLAP-only in CI mode (no API key needed)
+        args.json = True  # Force JSON output in CI mode
+        args.all = True  # Analyze all modules in CI mode
 
     # Check dependencies
     if not HAS_CLAP and not HAS_GEMINI:
@@ -1138,6 +1162,24 @@ def main():
             clap = f"{r.clap_scores.quality_score:.0f}" if r.clap_scores else "N/A"
             gemini = f"{r.gemini_quality_score*10:.0f}" if r.gemini_quality_score else "N/A"
             print(f"{r.module_name:<18} {combined:<10} {clap:<10} {gemini:<10}")
+
+    # CI exit code based on quality gates
+    if args.ci:
+        ci_quality_gates = ci_config.get("quality_gates", {})
+        min_quality = ci_quality_gates.get("clap_quality_min", 50)
+
+        ci_passed = True
+        for r in results:
+            if r.clap_scores:
+                if r.clap_scores.quality_score < min_quality:
+                    ci_passed = False
+                    break
+            elif r.combined_quality_score is not None:
+                if r.combined_quality_score < min_quality:
+                    ci_passed = False
+                    break
+
+        sys.exit(0 if ci_passed else 1)
 
 
 if __name__ == "__main__":

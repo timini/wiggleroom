@@ -1,10 +1,24 @@
 ---
 name: module-dev
 description: Spawn Verifier/Judge/Dev agents to fix DSP module quality issues
-argument-hint: <module-name>
+argument-hint: <module-name> [--auto]
 ---
 
 # Module Dev Agent Loop for $ARGUMENTS
+
+## Auto-Fix Mode
+
+If `--auto` is passed, enable automatic fix application:
+```
+/module-dev ModuleName --auto
+```
+
+In auto mode:
+1. Verifier detects issues
+2. Judge classifies issues as auto-fixable or manual
+3. AutoFixer applies template-based fixes automatically
+4. Re-verify after fixes
+5. If still failing after 3 auto-fixes, request manual intervention
 
 ## Workflow
 
@@ -79,3 +93,31 @@ Go back to Step 1 until PASS or 5 iterations.
 - **DSP source:** `src/modules/$ARGUMENTS/{lowercase}.dsp`
 - **Test config:** `src/modules/$ARGUMENTS/test_config.json`
 - **C++ wrapper:** `src/modules/$ARGUMENTS/$ARGUMENTS.cpp`
+
+## Auto-Fix Templates
+
+The AutoFixer supports these template-based fixes:
+
+| Fix Type | Target | What It Does |
+|----------|--------|--------------|
+| `add_limiter` | .dsp | Adds `ma.tanh` soft limiter before output |
+| `reduce_gain` | .dsp | Reduces output gain by factor (default 0.7) |
+| `add_dc_blocker` | .dsp | Adds `fi.dcblocker` to output |
+| `smooth_gate` | .dsp | Adds `si.smooth(0.995)` to gate parameter |
+| `adjust_threshold` | test_config.json | Raises THD/clipping thresholds |
+
+To manually apply a fix:
+```bash
+just agent-fix-preview ModuleName add_limiter  # Preview
+just agent-fix-apply ModuleName add_limiter    # Apply
+```
+
+## CI Quality Gates
+
+Run fast CLAP-based validation (no API key needed):
+```bash
+just validate-ci                    # All modules
+just validate-ci-module ModuleName  # Single module
+```
+
+CI thresholds are defined in `test/ci_config.json`.

@@ -1,0 +1,25 @@
+{
+  "mode": "fast",
+  "description": "CI quality gate configuration for fast CLAP-based validation",
+  "skip_gemini": true,
+  "max_duration_seconds": 2.0,
+  "quality_gates": {
+    "clap_quality_min": 50,
+    "thd_max_percent": 20,
+    "clipping_max_percent": 5,
+    "hnr_min_db": -5,
+    "peak_amplitude_min": 0.05,
+    "silent_output": false
+  },
+  "timeout_seconds": 180,
+  "fail_fast": true,
+  "output_format": "json",
+  "notes": {
+    "clap_quality_min": "Minimum CLAP quality score (0-100). 50 is a reasonable baseline.",
+    "thd_max_percent": "Maximum THD before failing. 20% is lenient for varied module types.",
+    "clipping_max_percent": "Maximum clipping before failing. 5% allows some headroom.",
+    "hnr_min_db": "Minimum harmonic-to-noise ratio. -5 dB is lenient for noisy modules.",
+    "peak_amplitude_min": "Minimum peak amplitude to pass (detect silent modules).",
+    "silent_output": "If true, allow silent output (for utility modules)."
+  }
+}

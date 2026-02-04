@@ -85,3 +85,18 @@ Do NOT fix issues - just report them.
 | `just test-ai-clap {MODULE}` | CLAP embedding analysis |
 | `just validate {MODULE}` | Full validation suite |
 | `just analyze-ranges {MODULE}` | Parameter range analysis |
+| `just validate-ci` | CI quality gate (CLAP-only, fast) |
+
+## CI Mode
+
+When `--ci` flag is passed to test scripts:
+- Uses CLAP-only analysis (no Gemini API key needed)
+- Applies strict quality gates from `test/ci_config.json`
+- Returns structured JSON output for automation
+- Uses appropriate exit codes (0=pass, 1=fail)
+
+CI quality thresholds (from ci_config.json):
+- CLAP quality score minimum: 50
+- THD maximum: 20%
+- Clipping maximum: 5%
+- HNR minimum: -5 dB
