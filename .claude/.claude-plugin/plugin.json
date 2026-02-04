@@ -1,0 +1,8 @@
+{
+  "name": "module-dev",
+  "version": "1.0.0",
+  "description": "DSP module development workflow with Verifier, Judge, and Dev agents",
+  "author": {
+    "name": "Tim Richardson"
+  }
+}

@@ -29,13 +29,21 @@ See [docs/RELEASE_STRATEGY.md](docs/RELEASE_STRATEGY.md) for full details on nam
 ```
 WiggleRoom/
 ├── .claude/                  # Claude Code configuration
-│   ├── agents/               # Subagent prompt templates
-│   │   ├── verifier.md       # Build + test + collect metrics
-│   │   ├── judge.md          # Evaluate + prioritize fixes
-│   │   └── dev-agent.md      # Apply targeted DSP fixes
+│   ├── .claude-plugin/       # Plugin metadata
+│   │   └── plugin.json       # Defines module-dev plugin
+│   ├── agents/               # Custom subagent types (module-dev:*)
+│   │   ├── architect.md      # module-dev:architect - Design module from spec
+│   │   ├── builder.md        # module-dev:builder - Create all module files
+│   │   ├── verifier.md       # module-dev:verifier - Build + test + metrics
+│   │   ├── judge.md          # module-dev:judge - Evaluate + prioritize fixes
+│   │   └── dev.md            # module-dev:dev - Apply targeted DSP fixes
 │   └── skills/               # Custom slash commands
-│       └── dsp-fix/          # /dsp-fix workflow
-│           └── SKILL.md      # Automated verify → judge → fix loop
+│       ├── module-dev/       # /module-dev - Fix existing modules
+│       │   └── SKILL.md      # Automated verify → judge → fix loop
+│       └── new-module/       # /new-module - Create new modules
+│           └── SKILL.md      # Architect → builder → verify/fix cycle
+├── specs/                    # Module specifications
+│   └── _TEMPLATE.md          # Spec template for new modules
 ├── cmake/                    # CMake helpers & toolchains
 │   ├── RackSDK.cmake         # SDK finder/downloader
 │   └── Toolchain-*.cmake     # Cross-compilation toolchains
@@ -327,15 +335,77 @@ just validate ModuleName
 
 See [DEVELOPMENT.md#iterative-module-development-technique](DEVELOPMENT.md#iterative-module-development-technique) for detailed workflow.
 
-## DSP Module Fix Workflow
+## Creating New Modules
 
-For Faust DSP module development, use the **`/dsp-fix` slash command** to automate the verify → judge → fix cycle until the module passes quality thresholds.
+Use the **`/new-module` slash command** to create a new Faust DSP module from a specification.
+
+### Quick Start
+
+```bash
+# Create a new module with description
+/new-module ChaosSynth A chaotic subtractive synthesizer with Lorenz attractor modulation
+```
+
+### Workflow
+
+The `/new-module` command runs a 3-phase agent cycle:
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│    Architect    │────▶│     Builder     │────▶│    Verifier     │
+│                 │     │                 │     │                 │
+│ - Read spec     │     │ - Create .dsp   │     │ - Build         │
+│ - Design algo   │     │ - Create .cpp   │     │ - Run tests     │
+│ - Plan params   │     │ - Register      │     │ - Check quality │
+└─────────────────┘     └─────────────────┘     └────────┬────────┘
+                                                         │
+                              ┌───────────────────────────┘
+                              ▼
+                   (if NEEDS_WORK: Judge → Dev → Verifier loop)
+```
+
+1. **Save spec** to `specs/{ModuleName}.md`
+2. **Architect** designs the module (algorithm, parameters, I/O)
+3. **Builder** creates all files and registers the module
+4. **Verifier/Judge/Dev** loop until module passes
+
+### Spec Template
+
+Copy `specs/_TEMPLATE.md` for new modules:
+
+```markdown
+# ModuleName Module Specification
+
+## Overview
+Brief description
+
+## Type
+instrument / filter / effect / resonator / utility
+
+## Sonic Character
+Warm, harsh, ethereal, punchy...
+
+## Parameters
+| Parameter | Description | Range | Default |
+|-----------|-------------|-------|---------|
+| cutoff | Filter cutoff | 20-20000 Hz | 1000 |
+
+## Inputs/Outputs
+...
+
+## Algorithm
+Physical modeling / subtractive / FM / granular...
+```
+
+## Fixing Existing Modules
+
+For Faust DSP module development, use the **`/module-dev` slash command** to automate the verify → judge → fix cycle until the module passes quality thresholds.
 
 ### Quick Start
 
 ```bash
 # Run the automated fix workflow for a module
-/dsp-fix ModuleName
+/module-dev ModuleName
 ```
 
 This slash command orchestrates the complete feedback loop:
@@ -364,98 +434,47 @@ This slash command orchestrates the complete feedback loop:
 | THD | <15% | Higher OK for distortion effects |
 | HNR | >0 dB | Harmonic-to-noise ratio |
 
-### Subagent Reference
+### Custom Subagent Types
 
-The `/dsp-fix` command uses three subagent roles (prompts in `.claude/agents/`):
+All module development commands use custom subagent types defined in `.claude/agents/`:
 
-| Agent | File | Purpose |
-|-------|------|---------|
-| **Verifier** | `.claude/agents/verifier.md` | Build, run quality tests, collect metrics |
-| **Judge** | `.claude/agents/judge.md` | Evaluate results, prioritize fixes |
-| **Dev** | `.claude/agents/dev-agent.md` | Apply targeted fixes to DSP code |
+| Subagent Type | File | Purpose |
+|---------------|------|---------|
+| `module-dev:architect` | `.claude/agents/architect.md` | Design module from spec |
+| `module-dev:builder` | `.claude/agents/builder.md` | Create all module files |
+| `module-dev:verifier` | `.claude/agents/verifier.md` | Build, run quality tests, collect metrics |
+| `module-dev:judge` | `.claude/agents/judge.md` | Evaluate results, prioritize fixes |
+| `module-dev:dev` | `.claude/agents/dev.md` | Apply targeted fixes to DSP code |
 
-### Manual Subagent Spawning
+### Spawning Subagents via Task Tool
 
-You can also spawn subagents manually using the Task tool:
+You can spawn these subagents directly using the Task tool:
 
 #### Verifier Subagent
 
 ```
 Task tool:
-  subagent_type: "general-purpose"
+  subagent_type: "module-dev:verifier"
   description: "Verify {ModuleName}"
-  prompt: |
-    You are the Verifier for Faust DSP module development.
-
-    Your task: Build and test the {MODULE_NAME} module, returning structured quality metrics.
-
-    ## Steps
-    1. Build: `just build`
-    2. Quality tests: `python3 test/audio_quality.py --module {MODULE_NAME} --report -v`
-    3. AI analysis: `python3 test/ai_audio_analysis.py --module {MODULE_NAME} --clap-only -v`
-    4. Parameter ranges: `python3 test/analyze_param_ranges.py {MODULE_NAME}`
-
-    ## Output Format
-    Return: Build Status, Audio Quality (Peak, Clipping, THD, HNR, Score), Issues Found, AI Analysis, Verdict (PASS/NEEDS_WORK/CRITICAL_ISSUES)
-
-    Do NOT fix issues - just report them.
+  prompt: "Verify the {ModuleName} module. Return metrics and verdict."
 ```
 
-#### 2. Judge Subagent
-
-Spawns a subagent to evaluate Verifier results and generate prioritized fix instructions.
+#### Judge Subagent
 
 ```
 Task tool:
-  subagent_type: "general-purpose"
+  subagent_type: "module-dev:judge"
   description: "Judge {ModuleName}"
-  prompt: |
-    You are the Judge for Faust DSP module development.
-
-    Your task: Evaluate verification results and generate prioritized fix instructions.
-
-    ## Verification Results
-    {PASTE_VERIFIER_OUTPUT_HERE}
-
-    ## Severity Classification
-    - CRITICAL: Build failure, silent output, clipping >15%
-    - HIGH: Clipping 5-15%, quality score <60
-    - MEDIUM: THD >15%, HNR <10dB, AI-detected harshness
-    - LOW: Minor suggestions, optimizations
-
-    ## Output Format
-    Return: Verdict, Score, Priority Issues (with specific Faust code fixes), Next Action
-
-    Do NOT apply fixes - generate instructions for Dev agent.
+  prompt: "Evaluate these verification results and generate fix instructions:\n\n{VERIFIER_OUTPUT}"
 ```
 
-#### 3. Dev Agent (Optional)
-
-Can apply fixes in main conversation, or spawn a dedicated subagent:
+#### Dev Subagent
 
 ```
 Task tool:
-  subagent_type: "general-purpose"
+  subagent_type: "module-dev:dev"
   description: "Fix {ModuleName}"
-  prompt: |
-    You are the Dev Agent for Faust DSP module development.
-
-    Your task: Apply the #1 priority fix to {MODULE_NAME}.
-
-    ## Judge Instructions
-    {PASTE_JUDGE_OUTPUT_HERE}
-
-    ## Workflow
-    1. Read DSP: src/modules/{MODULE_NAME}/{module_name}.dsp
-    2. Apply ONLY the #1 priority fix
-    3. Rebuild: `just build`
-
-    ## Common Fixes
-    - Clipping: `output : ma.tanh : *(0.7)`
-    - Clicks: `gate : si.smooth(0.995)`
-    - DC Offset: `signal : fi.dcblocker`
-
-    Report what you changed and build status.
+  prompt: "Apply this fix to {ModuleName}:\n\n{JUDGE_OUTPUT}"
 ```
 
 ### Severity Levels
@@ -506,22 +525,22 @@ The `test/agents/` directory has Python tools the subagents can use:
 ### Example Loop Execution
 
 ```
-1. User: "Fix the TetanusCoil module"
+1. User: "/module-dev TetanusCoil"
 
-2. Claude spawns Verifier:
+2. Claude spawns module-dev:verifier:
    → Builds module
    → Runs quality tests
    → Returns: "THD 28%, HNR -0.1dB, Verdict: NEEDS_WORK"
 
-3. Claude spawns Judge:
+3. Claude spawns module-dev:judge:
    → Evaluates results
    → Returns: "#1 Priority: Adjust test_config.json thresholds for extreme effect"
 
-4. Claude (or Dev agent) applies fix:
+4. Claude (or module-dev:dev agent) applies fix:
    → Updates test_config.json
    → Rebuilds
 
-5. Claude spawns Verifier again:
+5. Claude spawns module-dev:verifier again:
    → Returns: "Verdict: PASS"
 
 6. Done!

@@ -80,6 +80,8 @@ dist/
 notes.md
 TODO.local
 
-# Claude Code - ignore cache but keep agent definitions
+# Claude Code - ignore cache but keep agents, skills, and plugin config
 .claude/*
 !.claude/agents/
+!.claude/skills/
+!.claude/.claude-plugin/
