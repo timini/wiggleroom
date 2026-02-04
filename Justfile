@@ -100,18 +100,34 @@ _internal-cross:
 # --- Testing ---
 
 # Test all Faust DSP files compile correctly
+# Only tests main module DSP files (excludes test/, lib/, and fx/ subdirectories)
 test-faust:
     #!/usr/bin/env bash
     set -e
     echo "Testing Faust DSP files..."
     errors=0
-    for dsp in $(find src/modules -name "*.dsp"); do
+    # Find all .dsp files directly in module directories (exclude subdirectories like test/, lib/, fx/)
+    for dsp in $(find src/modules -maxdepth 2 -name "*.dsp"); do
         echo -n "  $dsp ... "
-        if faust "$dsp" -o /dev/null 2>&1; then
+        # Get the module directory for include paths
+        module_dir=$(dirname "$dsp")
+        lib_dir="$module_dir/lib"
+        fx_dir="$module_dir/fx"
+
+        # Build include path arguments
+        include_args="-I $module_dir"
+        if [ -d "$lib_dir" ]; then
+            include_args="$include_args -I $lib_dir"
+        fi
+        if [ -d "$fx_dir" ]; then
+            include_args="$include_args -I $fx_dir"
+        fi
+
+        if faust $include_args "$dsp" -o /dev/null 2>&1; then
             echo "OK"
         else
             echo "FAILED"
-            faust "$dsp" -o /dev/null 2>&1 || true
+            faust $include_args "$dsp" -o /dev/null 2>&1 || true
             errors=$((errors + 1))
         fi
     done
