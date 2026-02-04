@@ -83,23 +83,51 @@ just clean      # Remove build artifacts
 just package    # Cross-compile for all platforms (requires Docker)
 ```
 
+## Testing Terminology
+
+This project uses ISO 9001 / software engineering standard terminology:
+
+| Term | Question | What It Checks |
+|------|----------|----------------|
+| **Verification** | "Are we building the product right?" | Structural correctness, conformance to specs |
+| **Validation** | "Are we building the right product?" | Audio quality, fitness for purpose |
+
+### Command Summary
+
+```bash
+# VERIFICATION (fast, no build needed)
+just verify                  # All verification checks
+just verify-manifest         # Check plugin.json against VCV requirements
+just verify-manifest-tests   # Run manifest verification unit tests
+just verify-test-infra       # Test the test infrastructure
+
+# VALIDATION (requires build)
+just validate-modules        # Run module audio quality tests
+just validate-audio          # Audio quality analysis (THD, aliasing)
+just validate-ai             # AI-powered analysis (Gemini + CLAP)
+
+# COMBINED
+just ci                      # Full CI pipeline: verify -> build -> validate
+just test                    # Same as ci
+```
+
 ## Testing
 
 ```bash
-# Run all tests (includes audio quality tests)
-python3 test/test_framework.py
+# Run full test suite (verification + build + validation)
+just test
 
-# Test specific module
-python3 test/test_framework.py --module ModuleName -v
+# VERIFICATION (structural checks)
+just verify-manifest         # Check plugin.json requirements
+just verify-test-infra       # Test infrastructure unit tests
 
-# Run tests without audio quality analysis (faster)
-just test-modules-fast
+# VALIDATION (audio quality)
+just validate-modules        # Run module tests
+just validate-modules ModuleName  # Test specific module
+just validate-audio ModuleName    # Audio quality analysis
 
-# Audio quality analysis (THD, aliasing, harmonics, envelope)
-just test-quality ModuleName
-
-# Generate JSON quality report
-just test-quality-report ModuleName
+# Quick testing
+just test-modules-fast       # Module tests without quality analysis
 
 # List module parameters
 ./build/test/faust_render --module ModuleName --list-params

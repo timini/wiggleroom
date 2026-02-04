@@ -8,6 +8,7 @@ This document covers the architecture, patterns, and practices for developing mo
 - [Faust DSP Modules](#faust-dsp-modules)
 - [Native C++ Modules](#native-c-modules)
 - [Testing Framework](#testing-framework)
+- [CI Pipeline](#ci-pipeline)
 - [Adding a New Module](#adding-a-new-module)
 - [Agent-Based Development](#agent-based-development)
 
@@ -739,6 +740,306 @@ This runs:
 │  6. If all pass: Module complete ✓                           │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## CI Pipeline
+
+The project uses GitHub Actions for continuous integration with a multi-stage pipeline that ensures code quality at every level.
+
+### Testing Terminology (ISO 9001 / Software Engineering Standard)
+
+| Term | Question | What It Checks |
+|------|----------|----------------|
+| **Verification** | "Are we building the product right?" | Structural correctness, conformance to specs |
+| **Validation** | "Are we building the right product?" | Audio quality, fitness for purpose |
+
+### Pipeline Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CI PIPELINE STAGES                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ╔═══════════════════════════════════════════════════════════════════════╗  │
+│  ║  VERIFICATION - "Are we building the product right?"                  ║  │
+│  ╠═══════════════════════════════════════════════════════════════════════╣  │
+│  ║  Stage 1: Verify Manifest     Fast checks, no build required          ║  │
+│  ║  ├─ 1.1 Verify plugin.json (VCV Library requirements)                 ║  │
+│  ║  ├─ 1.2 Manifest verification tests                                   ║  │
+│  ║  └─ 1.3 JSON syntax check                                             ║  │
+│  ║                                                                        ║  │
+│  ║  Stage 2: Verify Test Infra   Test the test infrastructure            ║  │
+│  ║  ├─ 2.1 Utility function tests (test_utils_unit.py)                   ║  │
+│  ║  └─ 2.2 Audio quality analysis tests (test_audio_quality_unit.py)     ║  │
+│  ║                                                                        ║  │
+│  ║  Stage 3: Verify Build        Compile everything                       ║  │
+│  ║  ├─ 3.1 Faust DSP compilation                                         ║  │
+│  ║  └─ 3.2 Plugin build                                                  ║  │
+│  ╚═══════════════════════════════════════════════════════════════════════╝  │
+│                            │                                                 │
+│                            ▼                                                 │
+│  ╔═══════════════════════════════════════════════════════════════════════╗  │
+│  ║  VALIDATION - "Are we building the right product?"                    ║  │
+│  ╠═══════════════════════════════════════════════════════════════════════╣  │
+│  ║  Stage 4: Validate Audio      Run module quality tests                 ║  │
+│  ║  ├─ 4.1 Module tests (stability, sensitivity, quality)               ║  │
+│  ║  └─ 4.2 Check test results                                            ║  │
+│  ║                                                                        ║  │
+│  ║  Stage 5: Validate Report     Generate detailed analysis               ║  │
+│  ║  ├─ 5.1 Full validation report (THD, AI analysis)                     ║  │
+│  ║  └─ 5.2 Prepare for deployment                                        ║  │
+│  ╚═══════════════════════════════════════════════════════════════════════╝  │
+│                            │                                                 │
+│                            ▼                                                 │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │  Stage 6: Deploy              Publish report (main branch only)        │  │
+│  │  └─ Deploy to GitHub Pages                                            │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Stage 1: Verify Manifest
+
+Fast pre-build checks that catch common issues before compilation.
+
+#### 1.1 Manifest Verification (`scripts/verify_manifest.py`)
+
+Verifies `plugin.json` against VCV Library submission requirements:
+
+| Check | Description | Severity |
+|-------|-------------|----------|
+| **Valid Tags** | All module tags must be from VCV's 57 official tags | ERROR |
+| **Trademark Detection** | Names/descriptions cannot contain brand names (Moog, Roland, etc.) | ERROR |
+| **Module Sync** | All modules in code must be in manifest and vice versa | ERROR |
+| **Slug Format** | Slugs must be valid identifiers (alphanumeric + underscore) | ERROR |
+
+**Valid Tags** (57 total, case-insensitive):
+```
+Arpeggiator, Attenuator, Blank, Chorus, Clock generator, Clock modulator,
+Compressor, Controller, Delay, Distortion, Drum, Dual, Dynamics, Effect,
+Envelope follower, Envelope generator, Equalizer, Expander, External,
+Filter, Flanger, Function generator, Granular, Hardware clone, Limiter,
+Logic, Low-frequency oscillator, Low-pass gate, Mid-side, Mixer, Multiple,
+Noise, Oscillator, Panning, Phaser, Physical modeling, Polyphonic, Quad,
+Quantizer, Random, Recording, Reverb, Ring modulator, Sample and hold,
+Sampler, Sequencer, Slew limiter, Speech, Switch, Synth voice, Tuner,
+Utility, Visual, Vocoder, Voltage-controlled amplifier, Waveshaper
+```
+
+**Trademark Patterns Detected**:
+- Brand names: moog, roland, korg, yamaha, oberheim, sequential, arp, buchla, etc.
+- Product names: tb-303, tr-808, tr-909, minimoog, prophet, jupiter, juno, etc.
+
+#### 1.2 Manifest Verification Tests (`test/test_manifest_verification.py`)
+
+33 unit tests covering all verification scenarios:
+
+```bash
+# Run manifest verification tests
+just verify-manifest-tests
+```
+
+| Test Category | Tests | Description |
+|---------------|-------|-------------|
+| Valid Tags | 8 | All 57 official tags accepted |
+| Invalid Tags | 5 | Typos, made-up tags rejected |
+| Trademark Detection | 12 | Brand names, product names, edge cases |
+| Slug Validation | 4 | Valid/invalid slug formats |
+| Full Manifest | 4 | Integration tests with complete manifests |
+
+### Stage 2: Verify Test Infrastructure
+
+Tests the test infrastructure itself to ensure verification tools work correctly.
+
+#### 2.1 Utility Function Tests (`test/test_utils_unit.py`)
+
+32 unit tests for shared test utilities:
+
+| Test Class | Tests | What It Verifies |
+|------------|-------|------------------|
+| `TestGetProjectRoot` | 3 | Path resolution works correctly |
+| `TestLoadModuleConfig` | 4 | Module configs load with defaults/overrides |
+| `TestExtractAudioStats` | 7 | RMS, peak, DC offset, NaN/Inf detection |
+| `TestDbConversions` | 8 | dB ↔ linear conversions accurate |
+| `TestCamelToSnake` | 5 | Naming convention conversion |
+| `TestExtractModuleDescription` | 3 | DSP comment extraction |
+| `TestIntegration` | 2 | Real project files work |
+
+```bash
+# Run test infrastructure verification
+just verify-test-infra
+```
+
+#### 2.2 Audio Quality Analysis Tests (`test/test_audio_quality_unit.py`)
+
+31 unit tests for audio analysis functions:
+
+| Test Class | Tests | What It Verifies |
+|------------|-------|------------------|
+| `TestMeasureTHD` | 6 | THD measurement accuracy |
+| `TestDetectAliasing` | 3 | Aliasing detection |
+| `TestAnalyzeHarmonics` | 4 | Even/odd harmonic analysis |
+| `TestComputeSpectralRichness` | 5 | Entropy, flatness, HNR, crest factor |
+| `TestAnalyzeEnvelope` | 4 | Attack/decay/release detection |
+| `TestAudioQualityReport` | 3 | Report data structure |
+| `TestLoadModuleConfig` | 2 | Audio quality thresholds |
+| `TestEdgeCases` | 3 | Short audio, DC offset, zero signal |
+| `TestIntegration` | 1 | Full analysis pipeline |
+
+### Stage 3: Verify Build
+
+Compiles Faust DSP and C++ code.
+
+#### 3.1 Faust DSP Compilation
+
+Tests all `.dsp` files compile without errors:
+
+```bash
+just test-faust
+```
+
+#### 3.2 Plugin Build
+
+Full CMake build of the plugin:
+
+```bash
+just build
+```
+
+### Stage 4: Validate Audio Quality
+
+Runs comprehensive module quality tests.
+
+#### Module Tests (`test/test_framework.py`)
+
+| Test | What It Checks |
+|------|----------------|
+| `compilation` | Module loads and lists parameters |
+| `basic_render` | Renders audio without NaN/Inf |
+| `audio_stability` | DC offset < 1%, clipping < threshold, not silent |
+| `gate_response` | Gate parameter affects output (instruments) |
+| `pitch_tracking` | V/Oct produces correct octave ratio |
+| `parameter_sensitivity` | All parameters affect output |
+| `regression` | Output matches baseline (if exists) |
+
+#### Quality Thresholds
+
+Default thresholds (can be overridden per-module in `test_config.json`):
+
+| Threshold | Default | Description |
+|-----------|---------|-------------|
+| `thd_max_percent` | 15.0 | Maximum THD allowed |
+| `clipping_max_percent` | 1.0 | Maximum clipping ratio |
+| `hnr_min_db` | 0.0 | Minimum harmonic-to-noise ratio |
+| `allow_hot_signal` | false | Allow higher output (wavefolders) |
+
+### Stage 5: Validate Full Report
+
+Generates detailed analysis report with spectrograms and AI assessment.
+
+```bash
+# Generate full report (requires GEMINI_API_KEY)
+just test-report-full
+```
+
+Report includes:
+- Audio spectrograms for each module
+- THD measurements
+- Harmonic analysis
+- AI-powered subjective assessment (Gemini)
+- Parameter sensitivity analysis
+
+### Stage 6: Deploy
+
+Deploys quality report to GitHub Pages (main branch only).
+
+**Report URL**: `https://<username>.github.io/<repo>/`
+
+### Running Locally
+
+```bash
+# VERIFICATION (structural correctness)
+just verify-manifest         # Stage 1.1: Verify plugin.json
+just verify-manifest-tests   # Stage 1.2: Manifest verification tests
+just verify-test-infra       # Stage 2: Test infrastructure
+just test-faust              # Stage 3.1: Faust DSP compilation
+just build                   # Stage 3.2: Plugin build
+
+# VALIDATION (audio quality)
+just validate-modules        # Stage 4: Module audio tests
+just test-report-full        # Stage 5: Full quality report
+
+# COMBINED COMMANDS
+just verify                  # All verification stages (fast, no build)
+just verify-all              # Same as verify
+just ci                      # Full CI pipeline locally (verify -> build -> validate)
+just test                    # Same as ci
+```
+
+### Pull Request Checks
+
+PRs trigger additional analysis:
+
+| Job | Trigger | Description |
+|-----|---------|-------------|
+| `sensitivity` | PRs only | Full parameter sensitivity analysis |
+
+### CI Configuration
+
+The pipeline is defined in `.github/workflows/test.yml`.
+
+#### Trigger Conditions
+
+```yaml
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/**/*.dsp'
+      - 'src/**/*.cpp'
+      - 'src/**/*.hpp'
+      - 'faust/**'
+      - 'test/**'
+      - 'scripts/**'
+      - 'plugin.json'
+      - 'CMakeLists.txt'
+      - 'Justfile'
+      - '.github/workflows/test.yml'
+  pull_request:
+    branches: [main]
+```
+
+#### Required Secrets
+
+| Secret | Required For | Description |
+|--------|--------------|-------------|
+| `GEMINI_API_KEY` | Stage 5 | AI-powered audio analysis |
+
+### Failure Modes
+
+| Stage | Failure | Effect |
+|-------|---------|--------|
+| 1. Verify Manifest | Invalid tags/trademarks | Blocks all subsequent stages |
+| 2. Verify Test Infra | Test infrastructure broken | Blocks build |
+| 3. Verify Build | Compilation error | Blocks validation |
+| 4. Validate Audio | Module quality issues | Blocks report deployment |
+| 5. Validate Report | Generation issues | Continues (non-blocking) |
+| 6. Deploy | Pages deployment | Non-blocking |
+
+### VCV Library Submission Checklist
+
+Before submitting to VCV Library, ensure:
+
+- [ ] `just verify-manifest` passes (no errors)
+- [ ] `just verify-manifest-tests` passes (all 33 tests)
+- [ ] `just verify-test-infra` passes (all 63 tests)
+- [ ] `just build` succeeds
+- [ ] `just validate-modules` passes
+- [ ] No trademark names in module names/descriptions
+- [ ] All tags are from official VCV tag list
+- [ ] All modules in code are listed in plugin.json
 
 ---
 

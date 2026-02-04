@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Tests for VCV Rack Library manifest validation.
+Tests for VCV Rack Library manifest verification.
 
-Run with: python3 -m pytest test/test_manifest_validation.py -v
-Or: just test-validation
+Run with: python3 -m pytest test/test_manifest_verification.py -v
+Or: just verify-manifest-tests
 """
 
 import json
@@ -14,7 +14,7 @@ import sys
 
 # Add scripts to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from validate_manifest import (
+from verify_manifest import (
     validate_tags,
     check_trademark,
     validate_slug,

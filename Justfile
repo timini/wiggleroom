@@ -181,20 +181,6 @@ test-sensitivity module="": build
     fi
     echo "Open test/sensitivity/*/report.html to view results"
 
-# Run comprehensive module tests (catches parameter issues, stability, regressions)
-test-modules module="": build
-    #!/usr/bin/env bash
-    set -e
-    if [ -n "{{module}}" ]; then
-        python3 test/test_framework.py --module "{{module}}" -v
-    else
-        python3 test/test_framework.py -v
-    fi
-
-# Run module tests in CI mode (JSON output, exit code)
-test-modules-ci: build
-    python3 test/test_framework.py --ci --output test/results.json
-
 # Generate baseline files for regression testing
 test-generate-baselines: build
     python3 test/test_framework.py --generate-baselines
@@ -202,16 +188,6 @@ test-generate-baselines: build
 # Regenerate HTML report from existing renders (no re-rendering)
 test-report:
     python3 test/generate_report.py
-
-# Run audio quality analysis (THD, aliasing, harmonics, envelope)
-test-quality module="": build
-    #!/usr/bin/env bash
-    set -e
-    if [ -n "{{module}}" ]; then
-        python3 test/audio_quality.py --module "{{module}}" -v
-    else
-        python3 test/audio_quality.py -v
-    fi
 
 # Run audio quality analysis with JSON output
 test-quality-report module="": build
@@ -234,16 +210,6 @@ test-modules-fast module="": build
         python3 test/test_framework.py --module "{{module}}" --no-quality -v
     else
         python3 test/test_framework.py --no-quality -v
-    fi
-
-# AI-powered audio analysis (Gemini + CLAP)
-test-ai module="": build
-    #!/usr/bin/env bash
-    set -e
-    if [ -n "{{module}}" ]; then
-        python3 test/ai_audio_analysis.py --module "{{module}}" -v
-    else
-        python3 test/ai_audio_analysis.py --instruments-only -v
     fi
 
 # AI analysis with CLAP only (no API key needed)
@@ -278,7 +244,7 @@ analyze-ranges-faust module="": build
         exit 1
     fi
 
-# Full validation: quality + AI + range analysis
+# Full validation: quality + AI + range analysis (single module deep-dive)
 validate module="": build
     #!/usr/bin/env bash
     set -e
@@ -296,26 +262,132 @@ validate module="": build
         exit 1
     fi
 
-# --- Validation ---
+# =============================================================================
+# VERIFICATION - "Are we building the product right?"
+# Structural correctness, conformance to specs
+# =============================================================================
 
-# Validate plugin.json against VCV Library requirements
-validate-manifest:
-    python3 scripts/validate_manifest.py
+# Verify plugin.json against VCV Library requirements
+verify-manifest:
+    python3 scripts/verify_manifest.py
 
-# Validate manifest in strict mode (warnings are errors)
-validate-manifest-strict:
-    python3 scripts/validate_manifest.py --strict
+# Verify manifest in strict mode (warnings are errors)
+verify-manifest-strict:
+    python3 scripts/verify_manifest.py --strict
 
-# Run validation unit tests
-test-validation:
-    python3 -m pytest test/test_manifest_validation.py -v
+# Run manifest verification unit tests
+verify-manifest-tests:
+    python3 -m pytest test/test_manifest_verification.py -v
 
-# Run all validation checks (manifest + tests)
-validate-all: validate-manifest test-validation
-    @echo "All validation checks passed!"
+# Run test infrastructure unit tests (tests the test tools)
+verify-test-infra:
+    cd test && python3 -m pytest test_utils_unit.py test_audio_quality_unit.py -v
 
-# Run all tests (validation + Faust compilation + module tests)
-test: validate-all test-faust test-modules
+# Run all verification checks (structural correctness)
+verify-all: verify-manifest verify-manifest-tests verify-test-infra test-faust
+    @echo "All verification checks passed!"
+
+# Alias for verify-all
+verify: verify-all
+
+# =============================================================================
+# VALIDATION - "Are we building the right product?"
+# Audio quality, fitness for purpose
+# =============================================================================
+
+# Run module audio quality validation
+validate-modules module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/test_framework.py --module "{{module}}" -v
+    else
+        python3 test/test_framework.py -v
+    fi
+
+# Run module validation in CI mode (JSON output, exit code)
+validate-modules-ci: build
+    python3 test/test_framework.py --ci --output test/results.json
+
+# Run audio quality analysis (THD, aliasing, harmonics, envelope)
+validate-audio module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/audio_quality.py --module "{{module}}" -v
+    else
+        python3 test/audio_quality.py -v
+    fi
+
+# AI-powered audio validation (Gemini + CLAP)
+validate-ai module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/ai_audio_analysis.py --module "{{module}}" -v
+    else
+        python3 test/ai_audio_analysis.py --instruments-only -v
+    fi
+
+# =============================================================================
+# COMBINED COMMANDS
+# =============================================================================
+
+# Full CI pipeline locally (verify -> build -> validate)
+ci: verify-all build validate-modules
+    @echo "CI pipeline complete!"
+
+# Run all tests (verification + build + validation)
+test: verify-all build validate-modules
+
+# =============================================================================
+# LEGACY ALIASES (backwards compatibility)
+# =============================================================================
+
+# Alias: validate-manifest -> verify-manifest
+validate-manifest: verify-manifest
+
+# Alias: test-validation -> verify-manifest-tests
+test-validation: verify-manifest-tests
+
+# Alias: test-verify-scripts -> verify-test-infra
+test-verify-scripts: verify-test-infra
+
+# Alias: validate-all -> verify-all
+validate-all: verify-all
+
+# Alias: test-modules -> validate-modules
+test-modules module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/test_framework.py --module "{{module}}" -v
+    else
+        python3 test/test_framework.py -v
+    fi
+
+# Alias: test-modules-ci -> validate-modules-ci
+test-modules-ci: validate-modules-ci
+
+# Alias: test-quality -> validate-audio
+test-quality module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/audio_quality.py --module "{{module}}" -v
+    else
+        python3 test/audio_quality.py -v
+    fi
+
+# Alias: test-ai -> validate-ai
+test-ai module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/ai_audio_analysis.py --module "{{module}}" -v
+    else
+        python3 test/ai_audio_analysis.py --instruments-only -v
+    fi
 
 # --- Showcase Reports ---
 # Note: For Gemini AI analysis, create .env file with: GEMINI_API_KEY=your_key
