@@ -161,11 +161,11 @@ std::unique_ptr<AbstractDSP> createVektorX() {
 
 #undef __mydsp_H__
 
-// ==== TR808 ====
-#define FAUST_MODULE_NAME TR808
-#include "tr808.hpp"
-std::unique_ptr<AbstractDSP> createTR808() {
-    return std::make_unique<DSPWrapper<FaustGenerated::NS_TR808::VCVRackDSP>>();
+// ==== AnalogDrums ====
+#define FAUST_MODULE_NAME AnalogDrums
+#include "analog_drums.hpp"
+std::unique_ptr<AbstractDSP> createAnalogDrums() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_AnalogDrums::VCVRackDSP>>();
 }
 
 #undef __mydsp_H__

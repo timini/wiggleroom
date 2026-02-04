@@ -41,7 +41,7 @@ std::unique_ptr<AbstractDSP> createTheAbyss();
 std::unique_ptr<AbstractDSP> createMatter();
 std::unique_ptr<AbstractDSP> createTheCauldron();
 std::unique_ptr<AbstractDSP> createVektorX();
-std::unique_ptr<AbstractDSP> createTR808();
+std::unique_ptr<AbstractDSP> createAnalogDrums();
 std::unique_ptr<AbstractDSP> createACID9Voice();
 std::unique_ptr<AbstractDSP> createTetanusCoil();
 std::unique_ptr<AbstractDSP> createNutShaker();
@@ -120,7 +120,7 @@ std::unique_ptr<AbstractDSP> createDSP(const std::string& moduleName) {
     if (moduleName == "Matter") return createMatter();
     if (moduleName == "TheCauldron") return createTheCauldron();
     if (moduleName == "VektorX") return createVektorX();
-    if (moduleName == "TR808") return createTR808();
+    if (moduleName == "AnalogDrums") return createAnalogDrums();
     if (moduleName == "ACID9Voice") return createACID9Voice();
     if (moduleName == "TetanusCoil") return createTetanusCoil();
     if (moduleName == "NutShaker") return createNutShaker();
@@ -134,7 +134,7 @@ std::vector<std::string> getModuleNames() {
     return {"LadderLPF", "BigReverb", "SaturationEcho", "SpectralResonator",
             "ModalBell", "PluckedString", "ChaosFlute", "TriPhaseEnsemble",
             "InfiniteFolder", "SpaceCello", "TheAbyss", "Matter",
-            "TheCauldron", "VektorX", "TR808", "ACID9Voice", "TetanusCoil",
+            "TheCauldron", "VektorX", "AnalogDrums", "ACID9Voice", "TetanusCoil",
             "NutShaker", "PhysicalChoir", "ChaosPad", "Linkage"};
 }
 

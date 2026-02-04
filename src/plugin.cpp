@@ -69,8 +69,8 @@ extern Model* modelTheCauldron;
 #ifdef HAS_VEKTORX
 extern Model* modelVektorX;
 #endif
-#ifdef HAS_TR808
-extern Model* modelTR808;
+#ifdef HAS_ANALOGDRUMS
+extern Model* modelAnalogDrums;
 #endif
 #ifdef HAS_ACID9VOICE
 extern Model* modelACID9Voice;
@@ -160,8 +160,8 @@ void init(Plugin* p) {
 #ifdef HAS_VEKTORX
     p->addModel(modelVektorX);
 #endif
-#ifdef HAS_TR808
-    p->addModel(modelTR808);
+#ifdef HAS_ANALOGDRUMS
+    p->addModel(modelAnalogDrums);
 #endif
 #ifdef HAS_ACID9VOICE
     p->addModel(modelACID9Voice);

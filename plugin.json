@@ -140,10 +140,10 @@
       "tags": ["Sequencer", "Controller"]
     },
     {
-      "slug": "TR808",
-      "name": "TR808",
-      "description": "Drum machine voice emulation with classic analog drum sounds",
-      "tags": ["Drum", "Synth voice", "Sampler"]
+      "slug": "AnalogDrums",
+      "name": "Analog Drums",
+      "description": "Virtual analog drum machine with 12 independent voices - bass drum, snare, toms, hats, and percussion with circuit bending modifications",
+      "tags": ["Drum", "Synth voice", "Physical modeling"]
     },
     {
       "slug": "VektorX",

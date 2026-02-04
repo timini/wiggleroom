@@ -24,7 +24,7 @@ set(FAUST_MODULES
     Matter
     TheCauldron
     VektorX
-    TR808
+    AnalogDrums
     ACID9Voice
     TetanusCoil
     NutShaker
@@ -79,9 +79,9 @@ foreach(MODULE ${FAUST_MODULES})
     elseif(MODULE STREQUAL "VektorX")
         set(DSP_FILE "vektorx.dsp")
         set(HPP_FILE "vektorx.hpp")
-    elseif(MODULE STREQUAL "TR808")
-        set(DSP_FILE "tr808.dsp")
-        set(HPP_FILE "tr808.hpp")
+    elseif(MODULE STREQUAL "AnalogDrums")
+        set(DSP_FILE "analog_drums.dsp")
+        set(HPP_FILE "analog_drums.hpp")
     elseif(MODULE STREQUAL "ACID9Voice")
         set(DSP_FILE "acid9voice.dsp")
         set(HPP_FILE "acid9voice.hpp")

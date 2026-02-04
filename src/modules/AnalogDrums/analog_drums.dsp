@@ -9,7 +9,7 @@ declare author "WiggleRoom";
 declare description "Virtual analog TR-808 drum machine with circuit bending";
 
 // Import our circuit library
-import("tr808_lib.lib");
+import("analog_drums_lib.lib");
 
 //=====================================================================
 // BASS DRUM (BD)
