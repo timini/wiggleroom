@@ -1,4 +1,4 @@
-name: Test Faust Modules
+name: Test & Validate
 
 on:
   push:
@@ -9,6 +9,8 @@ on:
       - 'src/**/*.hpp'
       - 'faust/**'
       - 'test/**'
+      - 'scripts/**'
+      - 'plugin.json'
       - 'CMakeLists.txt'
       - 'Justfile'
       - '.github/workflows/test.yml'
@@ -25,8 +27,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  test:
+  # =============================================================================
+  # STAGE 1: Validation (fast checks, no build required)
+  # =============================================================================
+  validate:
+    name: "Stage 1: Validate"
     runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install validation dependencies
+        run: pip install pytest
+
+      - name: "1.1 Validate plugin.json manifest"
+        run: python3 scripts/validate_manifest.py
+
+      - name: "1.2 Run manifest validation tests"
+        run: python3 -m pytest test/test_manifest_validation.py -v
+
+      - name: "1.3 Check JSON syntax"
+        run: python3 -c "import json; json.load(open('plugin.json'))"
+
+  # =============================================================================
+  # STAGE 2: Build (compile everything)
+  # =============================================================================
+  build:
+    name: "Stage 2: Build"
+    runs-on: ubuntu-latest
+    needs: validate
 
     steps:
       - name: Checkout
@@ -52,22 +87,48 @@ jobs:
           sudo apt-get install -y faust
           faust --version
 
-      - name: Install Python dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install numpy scipy librosa matplotlib google-generativeai
-
-      - name: Configure and Build
-        run: just build
-
-      - name: Validate plugin manifest
-        run: just validate-manifest
-
-      - name: Run Faust compilation tests
+      - name: "2.1 Test Faust DSP compilation"
         run: just test-faust
 
-      - name: Run module tests
-        run: just test-modules-ci
+      - name: "2.2 Build plugin"
+        run: just build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/
+          retention-days: 1
+
+  # =============================================================================
+  # STAGE 3: Test (run module tests)
+  # =============================================================================
+  test:
+    name: "Stage 3: Test"
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/
+
+      - name: Fix executable permissions
+        run: chmod +x build/test/faust_render || true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsndfile1-dev python3-pip
+          pip install numpy scipy librosa
+
+      - name: "3.1 Run module tests"
+        run: python3 test/test_framework.py --ci --output test/results.json
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -76,7 +137,7 @@ jobs:
           name: test-results
           path: test/results.json
 
-      - name: Check test results
+      - name: "3.2 Check test results"
         if: always()
         run: |
           if [ -f test/results.json ]; then
@@ -98,18 +159,49 @@ jobs:
           "
           fi
 
-      - name: Generate validation report
-        if: always()
+  # =============================================================================
+  # STAGE 4: Quality Report (generate detailed report)
+  # =============================================================================
+  report:
+    name: "Stage 4: Quality Report"
+    runs-on: ubuntu-latest
+    needs: test
+    if: always()
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/
+
+      - name: Fix executable permissions
+        run: chmod +x build/test/faust_render || true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsndfile1-dev python3-pip
+          pip install numpy scipy librosa matplotlib google-generativeai
+
+      - name: Install just
+        run: curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+      - name: "4.1 Generate validation report"
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: just test-report-full
+        run: just test-report-full || true  # Don't fail on report generation issues
 
-      - name: Prepare report for deployment
-        if: always()
+      - name: "4.2 Prepare report for deployment"
         run: |
           mkdir -p report
-          cp test/output/report.html report/index.html
-          cp -r test/output/spectrograms report/spectrograms
+          cp test/output/report.html report/index.html 2>/dev/null || echo "<html><body>Report generation failed</body></html>" > report/index.html
+          if [ -d test/output/spectrograms ]; then
+            cp -r test/output/spectrograms report/spectrograms
+          fi
           if [ -d test/output/audio ]; then
             cp -r test/output/audio report/audio
           fi
@@ -127,9 +219,13 @@ jobs:
         with:
           path: report/
 
+  # =============================================================================
+  # STAGE 5: Deploy Report (GitHub Pages)
+  # =============================================================================
   deploy-report:
+    name: "Stage 5: Deploy"
     runs-on: ubuntu-latest
-    needs: test
+    needs: report
     if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     permissions:
@@ -145,28 +241,36 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-  # Optional: Run sensitivity analysis on PRs
+  # =============================================================================
+  # PR: Sensitivity Analysis (only on pull requests)
+  # =============================================================================
   sensitivity:
+    name: "PR: Sensitivity Analysis"
     runs-on: ubuntu-latest
+    needs: build
     if: github.event_name == 'pull_request'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/
+
+      - name: Fix executable permissions
+        run: chmod +x build/test/faust_render || true
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libsndfile1-dev python3-pip
-          sudo apt-get install -y faust
+          sudo apt-get install -y libsndfile1-dev python3-pip
           pip install numpy scipy librosa matplotlib
 
       - name: Install just
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
-
-      - name: Build
-        run: just build
+        run: curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
 
       - name: Run sensitivity analysis
         run: just test-sensitivity

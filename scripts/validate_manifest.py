@@ -107,38 +107,38 @@ INVALID_TAG_CORRECTIONS = {
 
 # Trademark names to avoid (case-insensitive patterns)
 # VCV Ethics Guidelines prohibit using brand/product names without permission
+# Note: We use looser matching (no strict word boundaries) to catch camelCase like "MoogLPF"
 TRADEMARK_PATTERNS = [
-    r"\bmoog\b",
-    r"\bsolina\b",
-    r"\broland\b",
-    r"\bkorg\b",
-    r"\byamaha\b",
-    r"\barp\b",  # ARP synthesizers
-    r"\boberheim\b",
-    r"\bprophet\b",
-    r"\bjuno\b",
-    r"\bjupiter\b",
-    r"\bminimoog\b",
-    r"\btb-?303\b",
-    r"\btr-?808\b",
-    r"\btr-?909\b",
-    r"\bsh-?101\b",
-    r"\bms-?20\b",
-    r"\bdx7\b",
-    r"\bnord\b",
-    r"\baccess\b",  # Access Virus
-    r"\bvirus\b",
-    r"\bwaldorf\b",
-    r"\bclavia\b",
-    r"\bbuchla\b",
-    r"\bserge\b",
-    r"\bemu\b",
-    r"\bensoniq\b",
-    r"\bkurzweil\b",
-    r"\bfairlight\b",
-    r"\bppg\b",
-    r"\bsequential\b",
-    r"\bdave smith\b",
+    r"moog",
+    r"solina",
+    r"roland",
+    r"(?<![a-z])korg",  # Avoid matching "cyborg" etc
+    r"yamaha",
+    r"(?<![a-z])arp(?![a-z])",  # ARP synthesizers - avoid "sharp", "warp"
+    r"oberheim",
+    r"prophet",
+    r"(?<![a-z])juno",  # Avoid "junto" etc
+    r"jupiter",
+    r"minimoog",
+    r"tb-?303",
+    r"tr-?808",
+    r"tr-?909",
+    r"sh-?101",
+    r"ms-?20",
+    r"(?<![a-z])dx7",
+    r"(?<![a-z])nord(?![a-z])",  # Avoid "nordic" etc
+    r"(?<![a-z])virus",  # Access Virus
+    r"waldorf",
+    r"clavia",
+    r"buchla",
+    r"(?<![a-z])serge(?![a-z])",  # Avoid "sergeant"
+    r"(?<![a-z])emu(?![a-z])",   # Avoid "emulate"
+    r"ensoniq",
+    r"kurzweil",
+    r"fairlight",
+    r"(?<![a-z])ppg(?![a-z])",
+    r"sequential",
+    r"dave smith",
 ]
 
 # Compile patterns for efficiency

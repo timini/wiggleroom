@@ -296,6 +296,8 @@ validate module="": build
         exit 1
     fi
 
+# --- Validation ---
+
 # Validate plugin.json against VCV Library requirements
 validate-manifest:
     python3 scripts/validate_manifest.py
@@ -304,8 +306,16 @@ validate-manifest:
 validate-manifest-strict:
     python3 scripts/validate_manifest.py --strict
 
-# Run all tests (Faust compilation + manifest validation + module tests)
-test: test-faust validate-manifest test-modules
+# Run validation unit tests
+test-validation:
+    python3 -m pytest test/test_manifest_validation.py -v
+
+# Run all validation checks (manifest + tests)
+validate-all: validate-manifest test-validation
+    @echo "All validation checks passed!"
+
+# Run all tests (validation + Faust compilation + module tests)
+test: validate-all test-faust test-modules
 
 # --- Showcase Reports ---
 # Note: For Gemini AI analysis, create .env file with: GEMINI_API_KEY=your_key
