@@ -246,6 +246,8 @@ def load_module_config(module_name: str) -> dict[str, Any]:
         "description": "",
         "thresholds": DEFAULT_QUALITY_THRESHOLDS.copy(),
         "test_scenarios": [{"name": "default", "duration": 2.0}],
+        "skip_tests": [],
+        "skip_tests_reason": "",
     }
 
     if not config_path.exists():
@@ -276,6 +278,12 @@ def load_module_config(module_name: str) -> dict[str, Any]:
 
         if "parameter_sweeps" in data:
             config["parameter_sweeps"] = data["parameter_sweeps"]
+
+        if "skip_tests" in data:
+            config["skip_tests"] = data["skip_tests"]
+
+        if "skip_tests_reason" in data:
+            config["skip_tests_reason"] = data["skip_tests_reason"]
 
         return config
 
