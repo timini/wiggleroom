@@ -130,8 +130,9 @@ The builder must create/update these files:
 - [ ] `src/plugin.cpp` - extern + addModel
 - [ ] `CMakeLists.txt` - HAS_* definition
 - [ ] `plugin.json` - module entry
-- [ ] `test/faust_render.cpp` - factory declaration
-- [ ] `test/dsp_wrappers.cpp` - DSP wrapper
+- [ ] `README.md` - add to module table and update count
+- [ ] `test/faust_render.cpp` - factory declaration (Faust modules only)
+- [ ] `test/dsp_wrappers.cpp` - DSP wrapper (Faust modules only)
 - [ ] `scripts/generate_faceplate.py` - HP width (for faceplate)
 
 ## Example Usage

@@ -709,6 +709,10 @@ soft_limit = ma.tanh;
    just install
    ```
 
+8. **Update README.md:**
+   - Add module to the appropriate category table (Physical Modeling, Filters & Effects, Synthesizers, Sequencers, or Utilities)
+   - Update the module count in the `## Modules (N)` heading
+
 **Full walkthrough: [DEVELOPMENT.md#adding-a-new-module](DEVELOPMENT.md#adding-a-new-module)**
 
 ## Key Requirements
