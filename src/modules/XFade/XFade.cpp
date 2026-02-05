@@ -12,6 +12,7 @@ struct XFade : Module {
         XFADE_PARAM,
         XFADE_CV_AMT_PARAM,
         MODE_PARAM,
+        OFFSET_PARAM,
         NUM_PARAMS
     };
     enum InputId {
@@ -40,6 +41,7 @@ struct XFade : Module {
         configSwitch(MODE_PARAM, 0.f, 2.f, 0.f, "Mode", {"Crossfade", "Ring Mod", "Fold"});
         configParam(XFADE_PARAM, 0.f, 1.f, 0.5f, "Mix / Amount", "%", 0, 100);
         configParam(XFADE_CV_AMT_PARAM, -1.f, 1.f, 0.f, "CV Amount", "%", 0, 100);
+        configSwitch(OFFSET_PARAM, 0.f, 1.f, 0.f, "Offset", {"0V", "+5V"});
 
         configInput(IN_A_INPUT, "Input A");
         configInput(IN_B_INPUT, "Input B");
@@ -107,6 +109,11 @@ struct XFade : Module {
                 break;
         }
 
+        // Apply +5V offset if enabled
+        if (params[OFFSET_PARAM].getValue() > 0.5f) {
+            out += 5.f;
+        }
+
         outputs[OUT_OUTPUT].setVoltage(out);
     }
 };
@@ -148,9 +155,13 @@ struct XFadeWidget : ModuleWidget {
         addInput(createInputCentered<PJ301MPort>(
             Vec(xCenter, 260), module, XFade::XFADE_CV_INPUT));
 
+        // Offset toggle (+5V)
+        addParam(createParamCentered<CKSS>(
+            Vec(xCenter, 290), module, XFade::OFFSET_PARAM));
+
         // Output
         addOutput(createOutputCentered<PJ301MPort>(
-            Vec(xCenter, 320), module, XFade::OUT_OUTPUT));
+            Vec(xCenter, 330), module, XFade::OUT_OUTPUT));
     }
 };
 
