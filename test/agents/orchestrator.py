@@ -22,6 +22,7 @@ from typing import Any
 
 from .verifier_agent import VerifierAgent, VerificationResult
 from .judge_agent import JudgeAgent, JudgmentResult, Verdict, Severity
+from .auto_fixer import AutoFixer, FixResult
 
 
 @dataclass
@@ -65,6 +66,7 @@ class FixInstructions:
     faust_hints: list[str]
     suggested_changes: list[str]
     context: str = ""
+    auto_fixable_issues: list[dict] = field(default_factory=list)  # Issues that can be auto-fixed
 
     def to_prompt(self) -> str:
         """Generate a prompt for Claude to fix the issues."""
@@ -114,6 +116,7 @@ class Orchestrator:
         self.max_iterations = max_iterations
         self.verifier = VerifierAgent(project_root)
         self.judge = JudgeAgent()
+        self.auto_fixer = AutoFixer(project_root)
 
     def run_iteration(self, module_name: str, verbose: bool = False) -> tuple[JudgmentResult, VerificationResult]:
         """
@@ -150,10 +153,23 @@ class Orchestrator:
                 'category': i.category,
                 'description': i.description,
                 'fix_instruction': i.fix_instruction,
-                'faust_hint': i.faust_hint
+                'faust_hint': i.faust_hint,
+                'auto_fix_type': i.auto_fix_type
             }
             for i in judgment.issues
             if i.severity in (Severity.CRITICAL, Severity.HIGH)
+        ]
+
+        # Extract auto-fixable issues
+        auto_fixable_issues = [
+            {
+                'severity': i.severity.value,
+                'category': i.category,
+                'description': i.description,
+                'auto_fix_type': i.auto_fix_type
+            }
+            for i in judgment.issues
+            if i.auto_fix_type is not None
         ]
 
         # Collect all Faust hints
@@ -170,7 +186,8 @@ class Orchestrator:
             priority_issues=priority_issues,
             faust_hints=faust_hints,
             suggested_changes=suggested_changes,
-            context=f"Score: {judgment.overall_score}/100, Verdict: {judgment.verdict.value}"
+            context=f"Score: {judgment.overall_score}/100, Verdict: {judgment.verdict.value}",
+            auto_fixable_issues=auto_fixable_issues
         )
 
     def run_development_loop(self, module_name: str,
@@ -258,10 +275,73 @@ class Orchestrator:
                 session.final_score = judgment.overall_score
                 break
 
-            # TODO: auto_fix implementation would go here
+            # Auto-fix implementation
+            if fix_instructions.auto_fixable_issues:
+                if verbose:
+                    print(f"\n{'-'*60}")
+                    print("AUTO-FIX: Attempting automatic fixes")
+                    print('-'*60)
+
+                fixes_applied = []
+                for issue in fix_instructions.auto_fixable_issues:
+                    fix_type = issue['auto_fix_type']
+                    if verbose:
+                        print(f"  Applying {fix_type} for: {issue['description'][:50]}...")
+
+                    result = self.auto_fixer.apply_fix(module_name, fix_type, {})
+
+                    if result.success:
+                        fixes_applied.append(result)
+                        if verbose:
+                            print(f"    SUCCESS: {result.message}")
+                    else:
+                        if verbose:
+                            print(f"    FAILED: {result.message}")
+
+                if fixes_applied:
+                    record.action_taken = f"Auto-fixed: {', '.join(r.fix_type for r in fixes_applied)}"
+
+                    # Rebuild after applying fixes
+                    if verbose:
+                        print(f"\n  Rebuilding after fixes...")
+
+                    import subprocess
+                    build_result = subprocess.run(
+                        ["just", "build"],
+                        cwd=self.project_root,
+                        capture_output=True,
+                        text=True
+                    )
+
+                    if build_result.returncode != 0:
+                        if verbose:
+                            print(f"  Build failed after auto-fix, rolling back...")
+                        self.auto_fixer.rollback(module_name)
+                        session.final_verdict = "AUTO_FIX_BUILD_FAILED"
+                        session.final_score = judgment.overall_score
+                        break
+
+                    # Continue to next iteration for re-verification
+                    continue
+                else:
+                    if verbose:
+                        print("  No auto-fixes could be applied, manual intervention needed")
+                    session.final_verdict = "MANUAL_FIX_REQUIRED"
+                    session.final_score = judgment.overall_score
+                    break
+            else:
+                if verbose:
+                    print("\n  No auto-fixable issues found, manual intervention needed")
+                session.final_verdict = "MANUAL_FIX_REQUIRED"
+                session.final_score = judgment.overall_score
+                break
 
         session.total_iterations = iteration
         session.completed_at = datetime.now().isoformat()
+
+        # Clear backups on success
+        if session.success:
+            self.auto_fixer.clear_backups(module_name)
 
         return session
 
@@ -320,6 +400,8 @@ def main():
                        help="Maximum iterations (default: 10)")
     parser.add_argument("--single", action="store_true",
                        help="Run single iteration only")
+    parser.add_argument("--auto", action="store_true",
+                       help="Enable automatic fix application")
     parser.add_argument("--json", action="store_true", help="Output JSON")
     parser.add_argument("-v", "--verbose", action="store_true",
                        help="Verbose output")
@@ -355,7 +437,7 @@ def main():
     else:
         # Full loop
         session = orchestrator.run_development_loop(
-            args.module, verbose=not args.json
+            args.module, auto_fix=args.auto, verbose=not args.json
         )
 
         if args.json:

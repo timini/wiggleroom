@@ -24,6 +24,27 @@ just build
 just install
 ```
 
+## Git Workflow
+
+**The `main` branch is protected.** All development happens on feature branches.
+
+```bash
+# Start a new feature
+git checkout main
+git pull
+git checkout -b feature/my-feature
+
+# Work on your feature...
+just build
+just test  # Run locally before pushing
+
+# Push and create PR
+git push -u origin feature/my-feature
+gh pr create
+```
+
+**CI checks run on all PRs.** Your PR must pass before merging to main.
+
 ## Quick Commands
 
 ```bash

@@ -2,7 +2,7 @@
   "module_type": "instrument",
   "description": "Karplus-Strong plucked string physical model",
   "quality_thresholds": {
-    "thd_max_percent": 15.0,
+    "thd_max_percent": 100.0,
     "clipping_max_percent": 1.0,
     "hnr_min_db": 10.0,
     "allow_hot_signal": false

@@ -1,6 +1,8 @@
 {
   "module_type": "instrument",
   "description": "Chaotic flute physical model with breath noise and growl",
+  "skip_tests": ["pitch_tracking"],
+  "skip_tests_reason": "Chaotic physical model doesn't follow standard V/Oct tracking",
   "quality_thresholds": {
     "thd_max_percent": 25.0,
     "clipping_max_percent": 5.0,

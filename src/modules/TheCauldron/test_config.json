@@ -1,6 +1,8 @@
 {
   "module_type": "effect",
   "description": "Fluid wave math processor - combines 4 inputs through 7 analog algorithms",
+  "skip_tests": ["audio_stability", "parameter_sensitivity"],
+  "skip_tests_reason": "Effect processor requires external audio inputs to produce meaningful output",
   "quality_thresholds": {
     "thd_max_percent": 25.0,
     "clipping_max_percent": 5.0,

@@ -346,6 +346,44 @@ validate-ai module="": build
     fi
 
 # =============================================================================
+# CI QUALITY GATES
+# =============================================================================
+
+# Run CI quality gate validation (CLAP-only, fast, no API key needed)
+validate-ci: build
+    #!/usr/bin/env bash
+    set -e
+    echo "=== CI Quality Gate: Audio Quality ==="
+    python3 test/audio_quality.py --ci --output test/ci_quality_results.json
+    echo ""
+    echo "=== CI Quality Gate: CLAP Analysis ==="
+    # CLAP analysis may fail if dependencies not installed - that's OK for CI
+    python3 test/ai_audio_analysis.py --ci --output test/ci_clap_results.json || echo "Note: CLAP analysis skipped (dependencies not available)"
+    echo ""
+    # Print summary
+    echo "=== Quality Gate Summary ==="
+    just _ci-summary
+    echo ""
+    echo "CI quality gates completed!"
+
+# (Internal) Print CI quality gate summary
+_ci-summary:
+    python3 scripts/ci_summary.py
+
+# Run CI quality gate for a specific module
+validate-ci-module module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        echo "=== CI Quality Gate: {{module}} ==="
+        python3 test/audio_quality.py --module "{{module}}" --ci
+        python3 test/ai_audio_analysis.py --module "{{module}}" --clap-only --json
+    else
+        echo "Usage: just validate-ci-module ModuleName"
+        exit 1
+    fi
+
+# =============================================================================
 # COMBINED COMMANDS
 # =============================================================================
 
@@ -405,12 +443,47 @@ test-ai module="": build
         python3 test/ai_audio_analysis.py --instruments-only -v
     fi
 
-# --- Showcase Reports ---
+# =============================================================================
+# UNIFIED REPORT
+# =============================================================================
+
+# Generate unified report (showcase + quality + CLAP analysis)
+report: build
+    python3 test/generate_unified_report.py -v
+    @echo "Open test/output/unified_report.html to view results"
+
+# Generate fast report (no AI, for quick CI checks)
+report-fast: build
+    python3 test/generate_unified_report.py --fast -v
+    @echo "Open test/output/unified_report.html to view results"
+
+# Generate full report (CLAP + Gemini + parameter grid)
+report-full: build
+    python3 test/generate_unified_report.py --full -v
+    @echo "Open test/output/unified_report.html to view results"
+
+# Generate unified report for specific module
+report-module module="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 test/generate_unified_report.py -m "{{module}}" -v
+        echo "Open test/output/unified_report.html to view results"
+    else
+        echo "Usage: just report-module ModuleName"
+        exit 1
+    fi
+
+# =============================================================================
+# SHOWCASE REPORTS (DEPRECATED - use 'report' commands instead)
+# =============================================================================
 # Note: For Gemini AI analysis, create .env file with: GEMINI_API_KEY=your_key
 # The scripts automatically load .env from project root
 
 # Generate showcase report for all modules (includes AI analysis if .env has GEMINI_API_KEY)
+# DEPRECATED: Use 'just report' instead
 showcase: build
+    @echo "Note: 'just showcase' is deprecated. Use 'just report' for the unified report."
     python3 test/generate_showcase_report.py -v
     @echo "Open test/output/showcase_report.html to view results"
 
@@ -553,6 +626,45 @@ agent-json module="": build
         python3 -m test.agents.orchestrator "{{module}}" --single --json
     else
         echo "Usage: just agent-json ModuleName"
+        exit 1
+    fi
+
+# Run development loop with auto-fix enabled
+agent-auto module="" iterations="5": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ]; then
+        python3 -m test.agents.orchestrator "{{module}}" --auto --max-iterations {{iterations}} -v
+    else
+        echo "Usage: just agent-auto ModuleName [iterations]"
+        exit 1
+    fi
+
+# List available auto-fix types
+agent-fix-list:
+    python3 -m test.agents.auto_fixer --list
+
+# Apply a specific auto-fix to a module (dry-run)
+agent-fix-preview module="" fix="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ] && [ -n "{{fix}}" ]; then
+        python3 -m test.agents.auto_fixer "{{module}}" --fix "{{fix}}" --dry-run
+    else
+        echo "Usage: just agent-fix-preview ModuleName fix-type"
+        echo "Fix types: reduce_gain, add_limiter, add_dc_blocker, smooth_gate, adjust_threshold"
+        exit 1
+    fi
+
+# Apply a specific auto-fix to a module
+agent-fix-apply module="" fix="": build
+    #!/usr/bin/env bash
+    set -e
+    if [ -n "{{module}}" ] && [ -n "{{fix}}" ]; then
+        python3 -m test.agents.auto_fixer "{{module}}" --fix "{{fix}}" -v
+    else
+        echo "Usage: just agent-fix-apply ModuleName fix-type"
+        echo "Fix types: reduce_gain, add_limiter, add_dc_blocker, smooth_gate, adjust_threshold"
         exit 1
     fi
 

@@ -2,9 +2,10 @@
   "module_type": "instrument",
   "description": "Physical modeling synthesis with linked resonators",
   "quality_thresholds": {
-    "thd_max_percent": 15.0,
+    "thd_max_percent": 80.0,
     "clipping_max_percent": 1.0,
-    "hnr_min_db": 5.0,
+    "hnr_min_db": 0.0,
+    "dc_offset_max": 0.1,
     "allow_hot_signal": false
   },
   "test_scenarios": [

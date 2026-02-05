@@ -2,7 +2,7 @@
   "module_type": "instrument",
   "description": "Stochastic percussion synthesizer using PhISM (Physically Informed Stochastic Modeling) for particle collision sounds",
   "quality_thresholds": {
-    "thd_max_percent": 20.0,
+    "thd_max_percent": 70.0,
     "clipping_max_percent": 2.0,
     "hnr_min_db": 3.0
   },

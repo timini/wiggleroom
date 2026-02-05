@@ -2,6 +2,26 @@
 
 The project uses GitHub Actions for continuous integration with a multi-stage pipeline.
 
+## Git Workflow
+
+**The `main` branch is protected.** All development happens on feature branches.
+
+```bash
+# Start a new feature
+git checkout main && git pull
+git checkout -b feature/my-feature
+
+# Develop and test locally
+just build
+just test
+
+# Push and create PR
+git push -u origin feature/my-feature
+gh pr create
+```
+
+**CI runs on all PRs to main.** PRs must pass all checks before merging.
+
 ## Terminology (ISO 9001)
 
 | Term | Question | What It Checks |
@@ -29,12 +49,13 @@ The project uses GitHub Actions for continuous integration with a multi-stage pi
 │  ║  VALIDATION - "Are we building the right product?"        ║  │
 │  ╠═══════════════════════════════════════════════════════════╣  │
 │  ║  Stage 4: Validate Audio (THD, clipping, stability)       ║  │
+│  ║  Stage 4b: AI Quality Gate (CLAP analysis, fast)          ║  │
 │  ║  Stage 5: Validate Report (AI analysis, spectrograms)     ║  │
 │  ╚═══════════════════════════════════════════════════════════╝  │
 │                            │                                     │
 │                            ▼                                     │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │  Stage 6: Deploy (GitHub Pages)                           │  │
+│  │  Stage 6: Deploy (GitHub Pages) - main branch only        │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -95,6 +116,24 @@ Runs module tests.
 just validate-modules
 ```
 
+## Stage 4b: AI Quality Gate
+
+Fast CLAP-based quality analysis (no API key needed).
+
+| Check | Threshold | Description |
+|-------|-----------|-------------|
+| CLAP quality | ≥50 | AI embedding quality score |
+| THD | ≤20% | Total harmonic distortion |
+| Clipping | ≤5% | Sample clipping percentage |
+| HNR | ≥-5 dB | Harmonic-to-noise ratio |
+
+```bash
+just validate-ci            # All modules
+just validate-ci-module X   # Single module
+```
+
+Configuration: `test/ci_config.json`
+
 ## Stage 5: Validate Full Report
 
 Generates detailed analysis with AI assessment.
@@ -117,11 +156,13 @@ just verify-test-infra       # Stage 2
 just test-faust              # Stage 3.1
 just build                   # Stage 3.2
 just validate-modules        # Stage 4
+just validate-ci             # Stage 4b (AI quality gate)
 just test-report-full        # Stage 5
 
 # Combined
 just verify                  # All verification (no build)
 just ci                      # Full pipeline
+just test                    # Same as ci
 ```
 
 ## Failure Modes
@@ -131,7 +172,8 @@ just ci                      # Full pipeline
 | 1. Verify Manifest | Invalid tags/trademarks | Blocks all |
 | 2. Verify Test Infra | Broken tools | Blocks build |
 | 3. Verify Build | Compilation error | Blocks validation |
-| 4. Validate Audio | Quality issues | Blocks deploy |
+| 4. Validate Audio | Quality issues | Blocks merge |
+| 4b. AI Quality Gate | Quality below threshold | Non-blocking (warning) |
 | 5. Validate Report | Generation issues | Non-blocking |
 | 6. Deploy | Pages issues | Non-blocking |
 
@@ -139,18 +181,28 @@ just ci                      # Full pipeline
 
 ```yaml
 on:
-  push:
-    branches: [main, develop]
-    paths:
-      - 'src/**/*.dsp'
-      - 'src/**/*.cpp'
-      - 'test/**'
-      - 'plugin.json'
-      - 'CMakeLists.txt'
-      - 'Justfile'
   pull_request:
-    branches: [main]
+    branches: [main]   # CI runs on all PRs
+  push:
+    branches: [main]   # Deploy to Pages after merge
 ```
+
+**All development uses feature branches.** Direct pushes to main are blocked.
+
+## Branch Protection
+
+The `main` branch should be protected with these rules:
+
+**To configure (GitHub → Settings → Branches → Add rule):**
+
+| Setting | Value |
+|---------|-------|
+| Branch name pattern | `main` |
+| Require PR before merging | ✓ |
+| Require status checks | ✓ |
+| Required checks | `Stage 1: Verify Manifest`, `Stage 3: Verify Build`, `Stage 4: Validate Audio Quality` |
+| Require branches to be up to date | ✓ |
+| Do not allow bypassing | ✓ (recommended) |
 
 ## Required Secrets
 

@@ -70,4 +70,20 @@ You will receive verification results from the Verifier agent.
 - **DSP source:** `src/modules/{MODULE_NAME}/{lowercase}.dsp`
 - **Test config:** `src/modules/{MODULE_NAME}/test_config.json`
 
+## Auto-Fix Classification
+
+For each issue, classify whether it can be auto-fixed:
+
+| Issue Pattern | Auto-Fix Type | Target |
+|--------------|---------------|--------|
+| Clipping (severe) | `add_limiter` | .dsp |
+| Clipping (moderate) | `reduce_gain` | .dsp |
+| DC offset | `add_dc_blocker` | .dsp |
+| Clicks/pops | `smooth_gate` | .dsp |
+| High THD (intentional) | `adjust_threshold` | test_config.json |
+| Parameter silent | `adjust_threshold` | test_config.json |
+| Complex DSP issue | None (manual) | - |
+
+When generating fix instructions, include `auto_fix_type` field if the issue matches a template.
+
 Do NOT apply fixes - generate instructions only.

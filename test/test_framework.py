@@ -84,12 +84,18 @@ class ModuleTestConfig:
     thresholds: dict = field(default_factory=lambda: DEFAULT_THRESHOLDS.copy())
     test_scenarios: list = field(default_factory=list)
     parameter_sweeps: dict = field(default_factory=dict)
+    skip_tests: list = field(default_factory=list)  # List of test names to skip
+    skip_tests_reason: str = ""  # Reason for skipping tests
 
     def get_clipping_threshold(self) -> float:
         """Get effective clipping threshold (higher for hot signal modules)."""
         if self.thresholds.get("allow_hot_signal", False):
             return 0.15  # 15% for wavefolders, saturators, etc.
         return self.thresholds.get("clipping_max_percent", 1.0) / 100.0
+
+    def get_dc_offset_threshold(self) -> float:
+        """Get DC offset threshold from config or use default."""
+        return self.thresholds.get("dc_offset_max", DC_OFFSET_THRESHOLD)
 
 
 def load_module_config(module_name: str) -> ModuleTestConfig:
@@ -104,6 +110,9 @@ def load_module_config(module_name: str) -> ModuleTestConfig:
     config.description = config_dict.get("description", "")
     config.thresholds = config_dict.get("thresholds", DEFAULT_THRESHOLDS.copy())
     config.test_scenarios = config_dict.get("test_scenarios", [{"name": "default", "duration": 2.0}])
+    config.parameter_sweeps = config_dict.get("parameter_sweeps", {})
+    config.skip_tests = config_dict.get("skip_tests", [])
+    config.skip_tests_reason = config_dict.get("skip_tests_reason", "")
 
     return config
 
@@ -283,9 +292,10 @@ def test_audio_stability(module_name: str, tmp_dir: Path) -> TestResult:
     stats = extract_audio_stats(audio)
     issues = []
 
-    # Check DC offset
-    if abs(stats["dc_offset"]) > DC_OFFSET_THRESHOLD:
-        issues.append(f"High DC offset: {stats['dc_offset']:.4f}")
+    # Check DC offset - use config threshold
+    dc_offset_limit = config.get_dc_offset_threshold()
+    if abs(stats["dc_offset"]) > dc_offset_limit:
+        issues.append(f"High DC offset: {stats['dc_offset']:.4f} (threshold: {dc_offset_limit:.4f})")
 
     # Check clipping - use config threshold
     clipping_limit = config.get_clipping_threshold()
@@ -342,13 +352,20 @@ def test_gate_response(module_name: str, tmp_dir: Path) -> TestResult:
                      f"Gate affects output (RMS diff: {rms_diff:.4f})")
 
 
-def test_parameter_sensitivity(module_name: str, tmp_dir: Path) -> TestResult:
+def test_parameter_sensitivity(module_name: str, tmp_dir: Path, exclude_params: list[str] | None = None) -> TestResult:
     """Test that parameters actually affect the output."""
     params = get_module_params(module_name)
 
-    # Filter out control parameters
+    # Default control parameters to exclude
+    default_exclude = {"gate", "trigger", "velocity", "volts", "freq", "pitch"}
+
+    # Add module-specific exclusions
+    if exclude_params:
+        default_exclude.update(p.lower() for p in exclude_params)
+
+    # Filter out control parameters and module-specific exclusions
     test_params = [p for p in params
-                   if p["name"].lower() not in ["gate", "trigger", "velocity", "volts", "freq", "pitch"]]
+                   if p["name"].lower() not in default_exclude]
 
     if not test_params:
         return TestResult("parameter_sensitivity", True, "No testable parameters")
@@ -812,22 +829,44 @@ def run_module_tests(module_name: str, tmp_dir: Path,
 
     result = ModuleTestResults(module_name=module_name, passed=True)
 
+    # Load module config for test customization
+    config = load_module_config(module_name)
+
+    # Get parameter exclusion list from config
+    param_sweeps = config.parameter_sweeps or {}
+    exclude_params = param_sweeps.get("exclude", [])
+
+    # Get list of tests to skip
+    skip_tests = set(config.skip_tests)
+    skip_reason = config.skip_tests_reason or "per test_config.json"
+
+    def should_skip(test_name: str) -> bool:
+        """Check if a test should be skipped."""
+        return test_name in skip_tests
+
+    def add_or_skip(test_name: str, test_func, *args, **kwargs):
+        """Run test or add skip result if test is in skip list."""
+        if should_skip(test_name):
+            result.add(TestResult(test_name, True, f"Skipped ({skip_reason})"))
+        else:
+            result.add(test_func(*args, **kwargs))
+
     # Run core tests
-    result.add(test_compilation(module_name))
-    result.add(test_basic_render(module_name, tmp_dir))
-    result.add(test_audio_stability(module_name, tmp_dir))
-    result.add(test_gate_response(module_name, tmp_dir))
-    result.add(test_pitch_tracking(module_name, tmp_dir))
-    result.add(test_parameter_sensitivity(module_name, tmp_dir))
-    result.add(test_regression(module_name, tmp_dir, baseline_dir))
+    add_or_skip("compilation", test_compilation, module_name)
+    add_or_skip("basic_render", test_basic_render, module_name, tmp_dir)
+    add_or_skip("audio_stability", test_audio_stability, module_name, tmp_dir)
+    add_or_skip("gate_response", test_gate_response, module_name, tmp_dir)
+    add_or_skip("pitch_tracking", test_pitch_tracking, module_name, tmp_dir)
+    add_or_skip("parameter_sensitivity", test_parameter_sensitivity, module_name, tmp_dir, exclude_params)
+    add_or_skip("regression", test_regression, module_name, tmp_dir, baseline_dir)
 
     # Run audio quality tests
     if include_quality_tests and HAS_AUDIO_QUALITY:
-        result.add(test_thd(module_name, tmp_dir))
-        result.add(test_aliasing(module_name, tmp_dir))
-        result.add(test_harmonic_character(module_name, tmp_dir))
-        result.add(test_spectral_richness(module_name, tmp_dir))
-        result.add(test_envelope(module_name, tmp_dir))
+        add_or_skip("thd", test_thd, module_name, tmp_dir)
+        add_or_skip("aliasing", test_aliasing, module_name, tmp_dir)
+        add_or_skip("harmonic_character", test_harmonic_character, module_name, tmp_dir)
+        add_or_skip("spectral_richness", test_spectral_richness, module_name, tmp_dir)
+        add_or_skip("envelope", test_envelope, module_name, tmp_dir)
 
     result.duration_ms = (time.time() - start) * 1000
     return result

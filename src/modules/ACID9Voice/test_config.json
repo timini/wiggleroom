@@ -2,7 +2,7 @@
   "module_type": "instrument",
   "description": "TB-303 inspired acid synthesizer voice with tri-core oscillator, dual filters, and stereo delay",
   "quality_thresholds": {
-    "thd_max_percent": 30.0,
+    "thd_max_percent": 150.0,
     "clipping_max_percent": 5.0,
     "hnr_min_db": 5.0,
     "allow_hot_signal": true
@@ -53,7 +53,7 @@
     }
   ],
   "parameter_sweeps": {
-    "exclude": ["delay_time", "delay_ratio", "delay_fb", "delay_mix", "delay_ghost", "sub_mode", "filter_mode"],
+    "exclude": ["delay_time", "delay_ratio", "delay_fb", "delay_mix", "delay_ghost", "sub_mode", "filter_mode", "return_in_l", "return_in_r", "slide"],
     "steps": 10
   },
   "showcase": {

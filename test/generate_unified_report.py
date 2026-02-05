@@ -1,40 +1,21 @@
 #!/usr/bin/env python3
 """
-Generate Showcase Report for VCV Rack Modules
+Unified Audio Report Generator for VCV Rack Modules
 
-DEPRECATED: This script is deprecated. Use generate_unified_report.py instead.
+Generates a comprehensive report for PR reviewers to perform final audio quality checks.
+Combines showcase audio, quality metrics, and optional AI analysis in a single report.
 
-The unified report combines showcase audio, quality metrics, and AI analysis
-in a single comprehensive report suitable for PR reviews.
+Modes:
+    --fast:   Showcase + quality metrics only (no AI, fast CI mode)
+    default:  Showcase + quality + CLAP analysis (standard PR review)
+    --full:   Everything including param grid and Gemini analysis (deep dive)
 
-New usage:
-    python generate_unified_report.py              # All modules, standard mode
+Usage:
+    python generate_unified_report.py              # All modules, default mode
     python generate_unified_report.py --fast       # Fast mode (no AI)
     python generate_unified_report.py --full       # Full mode with Gemini
     python generate_unified_report.py -m ChaosFlute  # Specific module
-
----
-
-Renders comprehensive showcase audio for each module with multiple notes and
-parameter sweeps, then generates a consolidated HTML report with:
-- Audio player for each module
-- Spectrogram visualization
-- Quality metrics (THD, HNR, clipping, peak)
-- AI analysis (CLAP scores, character)
-- Pass/fail status
-
-Usage:
-    python generate_showcase_report.py              # All modules
-    python generate_showcase_report.py --module ChaosFlute
-    python generate_showcase_report.py --skip-ai    # Skip AI analysis
 """
-
-import warnings
-warnings.warn(
-    "generate_showcase_report.py is deprecated. Use generate_unified_report.py instead.",
-    DeprecationWarning,
-    stacklevel=2
-)
 
 import argparse
 import base64
@@ -43,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -51,10 +33,18 @@ from typing import Any
 
 import numpy as np
 
+# Import shared utilities
+sys.path.insert(0, str(Path(__file__).parent))
+from utils import (
+    get_project_root, get_render_executable, load_module_config,
+    get_module_params, load_audio, format_value, generate_param_bar_html,
+    volts_to_note_name, SAMPLE_RATE, DEFAULT_QUALITY_THRESHOLDS
+)
+
 # Load .env file if present
 def load_dotenv():
     """Load environment variables from .env file."""
-    env_path = Path(__file__).parent.parent / ".env"
+    env_path = get_project_root() / ".env"
     if env_path.exists():
         with open(env_path) as f:
             for line in f:
@@ -74,12 +64,6 @@ except ImportError:
     HAS_SCIPY = False
 
 try:
-    import librosa
-    HAS_LIBROSA = True
-except ImportError:
-    HAS_LIBROSA = False
-
-try:
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -89,7 +73,6 @@ except ImportError:
 
 
 # Configuration
-SAMPLE_RATE = 48000
 OUTPUT_DIR = Path(__file__).parent / "output"
 
 
@@ -145,6 +128,15 @@ class ShowcaseConfig:
 
 
 @dataclass
+class ParamPermutation:
+    """A single parameter permutation render."""
+    params: dict[str, float] = field(default_factory=dict)
+    wav_path: Path | None = None
+    spectrogram_path: Path | None = None
+    quality: QualityMetrics = field(default_factory=QualityMetrics)
+
+
+@dataclass
 class ModuleReport:
     """Complete report for a single module."""
     module_name: str
@@ -159,9 +151,10 @@ class ModuleReport:
     quality: QualityMetrics = field(default_factory=QualityMetrics)
     ai: AIAnalysis = field(default_factory=AIAnalysis)
     gemini_analysis: str = ""
-    status: str = "pending"  # pass, needs_work, skip
+    status: str = "pending"  # pass, needs_work, skip, error
     issues: list[str] = field(default_factory=list)
     duration: float = 0.0
+    param_permutations: list[ParamPermutation] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         result = {
@@ -188,35 +181,49 @@ class ModuleReport:
         return result
 
 
+@dataclass
+class ReportConfig:
+    """Configuration for report generation."""
+    skip_clap: bool = False
+    skip_gemini: bool = True
+    include_param_grid: bool = False
+    parallel_workers: int = 4
+    verbose: bool = False
+    output_path: Path = OUTPUT_DIR / "unified_report.html"
+
+
 # =============================================================================
 # Utility Functions
 # =============================================================================
 
-def get_project_root() -> Path:
-    return Path(__file__).parent.parent
-
-
-def get_render_executable() -> Path:
-    project_root = get_project_root()
-    exe = project_root / "build" / "test" / "faust_render"
+def get_available_modules() -> list[str]:
+    """Get list of available modules from faust_render."""
+    exe = get_render_executable()
     if not exe.exists():
-        exe = project_root / "build" / "faust_render"
-    return exe
-
-
-def load_module_config(module_name: str) -> dict:
-    """Load test configuration for a module."""
-    project_root = get_project_root()
-    config_path = project_root / "src" / "modules" / module_name / "test_config.json"
-
-    if not config_path.exists():
-        return {"module_type": "instrument", "description": ""}
+        return []
 
     try:
-        with open(config_path) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        return {"module_type": "instrument", "description": ""}
+        result = subprocess.run(
+            [str(exe), "--list-modules"],
+            capture_output=True, text=True, timeout=10
+        )
+        modules = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line and not line.startswith("Available"):
+                modules.append(line)
+        return modules
+    except Exception:
+        return []
+
+
+def get_panel_svg(module_name: str) -> Path | None:
+    """Get path to module's SVG panel."""
+    project_root = get_project_root()
+    svg_path = project_root / "res" / f"{module_name}.svg"
+    if svg_path.exists():
+        return svg_path
+    return None
 
 
 def parse_showcase_config(config: dict, module_type: str) -> ShowcaseConfig:
@@ -289,157 +296,6 @@ def get_default_showcase_config(module_type: str) -> ShowcaseConfig:
     return showcase
 
 
-def get_available_modules() -> list[str]:
-    """Get list of available modules from faust_render."""
-    exe = get_render_executable()
-    if not exe.exists():
-        return []
-
-    try:
-        result = subprocess.run(
-            [str(exe), "--list-modules"],
-            capture_output=True, text=True, timeout=10
-        )
-        modules = []
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if line and not line.startswith("Available"):
-                modules.append(line)
-        return modules
-    except Exception:
-        return []
-
-
-def get_panel_svg(module_name: str) -> Path | None:
-    """Get path to module's SVG panel."""
-    project_root = get_project_root()
-    svg_path = project_root / "res" / f"{module_name}.svg"
-    if svg_path.exists():
-        return svg_path
-    return None
-
-
-def generate_systematic_showcase(module_name: str, module_type: str,
-                                  base_duration: float = 20.0) -> ShowcaseConfig:
-    """Generate systematic showcase config that covers all parameter permutations.
-
-    Strategy:
-    1. Get all sweepable parameters
-    2. Divide time into segments for individual sweeps
-    3. Each param gets swept low->high then high->low
-    4. Add combination segments where 2 params change together
-    5. For instruments, distribute notes across the duration
-    """
-    params = get_module_params(module_name)
-
-    # Filter out control signals
-    exclude = {'gate', 'trigger', 'volts', 'velocity'}
-    sweep_params = [p for p in params if p.name not in exclude]
-
-    if not sweep_params:
-        return get_default_showcase_config(module_type)
-
-    n_params = len(sweep_params)
-
-    # Calculate duration based on number of params (more params = longer showcase)
-    # Each param gets ~4s for up/down sweep, plus time for combinations
-    individual_time = n_params * 4.0
-    combo_time = min(n_params * 2.0, 8.0)  # Time for combination sweeps
-    duration = max(base_duration, individual_time + combo_time)
-
-    automations = []
-    current_time = 0.0
-    segment_duration = duration / (n_params * 2 + 2)  # Time per segment
-
-    # Phase 1: Sweep each parameter individually (low->high, then high->low)
-    for i, param in enumerate(sweep_params):
-        # Low to high sweep
-        automations.append(ShowcaseAutomation(
-            param=param.name,
-            start_time=current_time,
-            end_time=current_time + segment_duration,
-            start_value=0.1,
-            end_value=0.9
-        ))
-        current_time += segment_duration
-
-        # High to low sweep
-        automations.append(ShowcaseAutomation(
-            param=param.name,
-            start_time=current_time,
-            end_time=current_time + segment_duration,
-            start_value=0.9,
-            end_value=0.2
-        ))
-        current_time += segment_duration
-
-    # Phase 2: Combination sweeps (pairs of params moving together/opposite)
-    if n_params >= 2:
-        remaining_time = duration - current_time
-        combo_segment = remaining_time / 2
-
-        # First two params moving together
-        automations.append(ShowcaseAutomation(
-            param=sweep_params[0].name,
-            start_time=current_time,
-            end_time=current_time + combo_segment,
-            start_value=0.2,
-            end_value=0.8
-        ))
-        automations.append(ShowcaseAutomation(
-            param=sweep_params[1].name,
-            start_time=current_time,
-            end_time=current_time + combo_segment,
-            start_value=0.2,
-            end_value=0.8
-        ))
-        current_time += combo_segment
-
-        # First two params moving opposite
-        automations.append(ShowcaseAutomation(
-            param=sweep_params[0].name,
-            start_time=current_time,
-            end_time=duration,
-            start_value=0.8,
-            end_value=0.2
-        ))
-        automations.append(ShowcaseAutomation(
-            param=sweep_params[1].name,
-            start_time=current_time,
-            end_time=duration,
-            start_value=0.2,
-            end_value=0.8
-        ))
-
-    # Generate notes for instruments
-    notes = []
-    if module_type == "instrument":
-        # Distribute notes across duration, covering pitch range
-        n_notes = max(8, int(duration / 2))  # One note every ~2 seconds
-        note_duration = 1.5
-
-        # Pitch sequence covering range: C2, G2, C3, E3, G3, C4, E4, G4, C5...
-        pitch_sequence = [-2.0, -1.42, -1.0, -0.67, -0.42, 0.0, 0.33, 0.58, 1.0, 0.25, -0.25, 0.5]
-
-        for i in range(n_notes):
-            start = i * (duration / n_notes)
-            volts = pitch_sequence[i % len(pitch_sequence)]
-            velocity = 0.8 + 0.2 * ((i % 3) / 2)  # Vary velocity slightly
-
-            notes.append(ShowcaseNote(
-                start=start,
-                duration=note_duration,
-                volts=volts,
-                velocity=velocity
-            ))
-
-    return ShowcaseConfig(
-        duration=duration,
-        notes=notes,
-        automations=automations
-    )
-
-
 def format_showcase_context(showcase: ShowcaseConfig, module_type: str) -> str:
     """Format showcase configuration as text for AI analysis."""
     lines = []
@@ -464,23 +320,19 @@ def format_showcase_context(showcase: ShowcaseConfig, module_type: str) -> str:
             lines.append(f"  - {auto.param}: {auto.start_value:.0%} -> {auto.end_value:.0%} "
                         f"({direction}, {auto.start_time:.1f}s-{auto.end_time:.1f}s)")
 
-    lines.append("\n**Listen for:**")
-    if showcase.notes:
-        lines.append("- How does each note sound across the pitch range?")
-        lines.append("- Are there any problematic notes or registers?")
-    if showcase.automations:
-        params = set(a.param for a in showcase.automations)
-        lines.append(f"- How do the parameters ({', '.join(params)}) affect the sound?")
-        lines.append("- Are there any problematic parameter values or transitions?")
-
     return "\n".join(lines)
 
+
+# =============================================================================
+# Audio Rendering
+# =============================================================================
 
 def render_showcase(module_name: str, output_path: Path, verbose: bool = False) -> bool:
     """Render showcase audio for a module."""
     exe = get_render_executable()
     if not exe.exists():
-        print(f"Error: faust_render not found at {exe}")
+        if verbose:
+            print(f"Error: faust_render not found at {exe}")
         return False
 
     args = [
@@ -493,137 +345,21 @@ def render_showcase(module_name: str, output_path: Path, verbose: bool = False) 
 
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=120)
-        if verbose:
+        if verbose and result.stdout:
             print(result.stdout)
         if result.returncode != 0:
-            print(f"Error rendering {module_name}: {result.stderr}")
+            if verbose:
+                print(f"Error rendering {module_name}: {result.stderr}")
             return False
         return True
     except subprocess.TimeoutExpired:
-        print(f"Timeout rendering {module_name}")
-        return False
-    except Exception as e:
-        print(f"Error rendering {module_name}: {e}")
-        return False
-
-
-def render_showcase_with_config(module_name: str, output_path: Path,
-                                 showcase: ShowcaseConfig, verbose: bool = False) -> bool:
-    """Render showcase audio using a custom ShowcaseConfig.
-
-    Writes a temporary config file for faust_render to use.
-    """
-    import tempfile
-
-    # Create temp config file with showcase config
-    config = load_module_config(module_name)
-
-    # Convert ShowcaseConfig to dict format expected by faust_render
-    config["showcase"] = {
-        "duration": showcase.duration,
-        "notes": [
-            {"start": n.start, "duration": n.duration, "volts": n.volts, "velocity": n.velocity}
-            for n in showcase.notes
-        ],
-        "automations": [
-            {"param": a.param, "start_time": a.start_time, "end_time": a.end_time,
-             "start_value": a.start_value, "end_value": a.end_value}
-            for a in showcase.automations
-        ]
-    }
-
-    # Write to temp file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-        json.dump(config, f)
-        temp_config_path = f.name
-
-    try:
-        exe = get_render_executable()
-        if not exe.exists():
-            return False
-
-        args = [
-            str(exe),
-            "--module", module_name,
-            "--showcase",
-            "--showcase-config", temp_config_path,
-            "--output", str(output_path),
-            "--sample-rate", str(SAMPLE_RATE),
-        ]
-
-        result = subprocess.run(args, capture_output=True, text=True, timeout=180)
         if verbose:
-            print(result.stdout)
-        if result.returncode != 0:
-            print(f"Error rendering {module_name}: {result.stderr}")
-            return False
-        return True
-    except Exception as e:
-        print(f"Error rendering {module_name}: {e}")
+            print(f"Timeout rendering {module_name}")
         return False
-    finally:
-        # Clean up temp file
-        Path(temp_config_path).unlink(missing_ok=True)
-
-
-@dataclass
-class ModuleParam:
-    """Module parameter information."""
-    name: str
-    min_val: float
-    max_val: float
-    init_val: float
-
-
-def get_module_params(module_name: str) -> list[ModuleParam]:
-    """Get all parameters for a module from faust_render."""
-    exe = get_render_executable()
-    if not exe.exists():
-        return []
-
-    try:
-        result = subprocess.run(
-            [str(exe), "--module", module_name, "--list-params"],
-            capture_output=True, text=True, timeout=10
-        )
-        params = []
-        import re
-        for line in result.stdout.splitlines():
-            # Parse: [0] /Module/param (min=0, max=1, init=0.5)
-            match = re.search(r'/[^/]+/(\w+)\s+\(min=([^,]+),\s*max=([^,]+),\s*init=([^)]+)\)', line)
-            if match:
-                params.append(ModuleParam(
-                    name=match.group(1),
-                    min_val=float(match.group(2)),
-                    max_val=float(match.group(3)),
-                    init_val=float(match.group(4))
-                ))
-        return params
-    except Exception:
-        return []
-
-
-def load_audio(path: Path) -> np.ndarray | None:
-    """Load audio file as numpy array."""
-    if HAS_LIBROSA:
-        try:
-            y, sr = librosa.load(str(path), sr=SAMPLE_RATE, mono=True)
-            return y
-        except Exception:
-            pass
-
-    if HAS_SCIPY:
-        try:
-            sr, data = wavfile.read(str(path))
-            if data.dtype == np.int16:
-                data = data.astype(np.float32) / 32768.0
-            if data.ndim > 1:
-                data = data.mean(axis=1)
-            return data
-        except Exception:
-            pass
-
-    return None
+    except Exception as e:
+        if verbose:
+            print(f"Error rendering {module_name}: {e}")
+        return False
 
 
 # =============================================================================
@@ -687,7 +423,7 @@ def analyze_quality(audio: np.ndarray) -> QualityMetrics:
 
 
 # =============================================================================
-# Spectrogram Generation
+# Visualization Generation
 # =============================================================================
 
 def generate_spectrogram(audio: np.ndarray, output_path: Path, title: str = "") -> bool:
@@ -720,24 +456,13 @@ def generate_spectrogram(audio: np.ndarray, output_path: Path, title: str = "") 
         plt.close(fig)
         return True
     except Exception as e:
-        print(f"Error generating spectrogram: {e}")
+        warnings.warn(f"Error generating spectrogram: {e}")
         return False
 
 
-# =============================================================================
-# Parameter Automation Graph
-# =============================================================================
-
 def generate_automation_graph(showcase: ShowcaseConfig, output_path: Path,
-                               module_params: list[ModuleParam] = None, title: str = "") -> bool:
-    """Generate parameter values graph showing all parameters over time.
-
-    Args:
-        showcase: Showcase config with automations
-        output_path: Output image path
-        module_params: All module parameters (to show non-automated ones)
-        title: Graph title
-    """
+                               module_params: list[dict] = None, title: str = "") -> bool:
+    """Generate parameter values graph showing all parameters over time."""
     if not HAS_MATPLOTLIB:
         return False
 
@@ -765,22 +490,32 @@ def generate_automation_graph(showcase: ShowcaseConfig, output_path: Path,
             # Exclude gate/trigger/volts which are control signals
             exclude = {'gate', 'trigger', 'volts', 'velocity'}
             for param in module_params:
-                if param.name in exclude or param.name in automated_params:
+                param_name = param.get('name', '')
+                if param_name in exclude or param_name in automated_params:
                     continue
 
+                min_val = param.get('min', 0)
+                max_val = param.get('max', 1)
+                init_val = param.get('init', 0.5)
+
                 # Normalize to 0-1 range
-                if param.max_val > param.min_val:
-                    norm_value = (param.init_val - param.min_val) / (param.max_val - param.min_val)
+                if max_val > min_val:
+                    norm_value = (init_val - min_val) / (max_val - min_val)
                 else:
                     norm_value = 0.5
 
                 color = colors[param_idx % len(colors)]
                 ax.plot(t_full, np.full_like(t_full, norm_value), color=color,
-                       linewidth=1, alpha=0.4, linestyle='--', label=f"{param.name} (fixed)")
+                       linewidth=1, alpha=0.4, linestyle='--', label=f"{param_name} (fixed)")
                 param_idx += 1
 
         # Then, plot automated parameters with their sweeps
+        processed_params = set()
         for auto in showcase.automations:
+            if auto.param in processed_params:
+                continue
+            processed_params.add(auto.param)
+
             color = colors[param_idx % len(colors)]
 
             # Build the full timeline for this parameter
@@ -789,16 +524,15 @@ def generate_automation_graph(showcase: ShowcaseConfig, output_path: Path,
             # Find automations for this param
             param_autos = [a for a in showcase.automations if a.param == auto.param]
 
-            # Only process once per param
-            if auto != param_autos[0]:
-                continue
-
             # Get initial value from module_params if available
             init_val = 0.5
             if module_params:
                 for p in module_params:
-                    if p.name == auto.param and p.max_val > p.min_val:
-                        init_val = (p.init_val - p.min_val) / (p.max_val - p.min_val)
+                    if p.get('name') == auto.param:
+                        min_v = p.get('min', 0)
+                        max_v = p.get('max', 1)
+                        if max_v > min_v:
+                            init_val = (p.get('init', 0.5) - min_v) / (max_v - min_v)
                         break
 
             # Build value array
@@ -846,26 +580,8 @@ def generate_automation_graph(showcase: ShowcaseConfig, output_path: Path,
         plt.close(fig)
         return True
     except Exception as e:
-        print(f"Error generating automation graph: {e}")
-        import traceback
-        traceback.print_exc()
+        warnings.warn(f"Error generating automation graph: {e}")
         return False
-
-
-# =============================================================================
-# Note Score Visualization
-# =============================================================================
-
-def volts_to_note_name(volts: float) -> str:
-    """Convert V/Oct voltage to note name."""
-    # 0V = C4 (MIDI 60)
-    semitones = round(volts * 12)
-    midi_note = 60 + semitones
-
-    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-    octave = (midi_note // 12) - 1
-    note = note_names[midi_note % 12]
-    return f"{note}{octave}"
 
 
 def generate_note_score(showcase: ShowcaseConfig, output_path: Path, title: str = "") -> bool:
@@ -935,7 +651,7 @@ def generate_note_score(showcase: ShowcaseConfig, output_path: Path, title: str 
         plt.close(fig)
         return True
     except Exception as e:
-        print(f"Error generating note score: {e}")
+        warnings.warn(f"Error generating note score: {e}")
         return False
 
 
@@ -945,7 +661,7 @@ def generate_note_score(showcase: ShowcaseConfig, output_path: Path, title: str 
 
 def run_ai_analysis(wav_path: Path, module_name: str, showcase_context: str,
                     verbose: bool = False, use_clap: bool = True,
-                    use_gemini: bool = True) -> tuple[AIAnalysis, str]:
+                    use_gemini: bool = False) -> tuple[AIAnalysis, str]:
     """Run AI analysis on audio file.
 
     Args:
@@ -960,7 +676,6 @@ def run_ai_analysis(wav_path: Path, module_name: str, showcase_context: str,
 
     try:
         # Lazy import to avoid loading torch/transformers when not needed
-        sys.path.insert(0, str(Path(__file__).parent))
         from ai_audio_analysis import HAS_CLAP, HAS_GEMINI, analyze_module
 
         # Check capabilities and requested options
@@ -1004,11 +719,12 @@ def run_ai_analysis(wav_path: Path, module_name: str, showcase_context: str,
         if ai_result.gemini_analysis:
             gemini_text = ai_result.gemini_analysis
 
+    except ImportError:
+        if verbose:
+            print("    AI analysis not available (missing dependencies)")
     except Exception as e:
         if verbose:
             print(f"AI analysis error: {e}")
-            import traceback
-            traceback.print_exc()
 
     return result, gemini_text
 
@@ -1027,7 +743,8 @@ def get_status_badge(status: str) -> str:
         "error": "#dc3545",
     }
     color = colors.get(status, "#6c757d")
-    return f'<span style="background:{color};color:white;padding:2px 8px;border-radius:4px;font-size:12px;">{status.upper()}</span>'
+    label = status.upper().replace("_", " ")
+    return f'<span class="status-badge" style="background:{color};">{label}</span>'
 
 
 def get_metric_badge(value: float, good_threshold: float, bad_threshold: float,
@@ -1071,7 +788,8 @@ def encode_image_base64(img_path: Path) -> str | None:
         return None
 
 
-def generate_html_report(reports: list[ModuleReport], output_path: Path):
+def generate_html_report(reports: list[ModuleReport], output_path: Path,
+                         config: ReportConfig):
     """Generate consolidated HTML report."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1079,6 +797,14 @@ def generate_html_report(reports: list[ModuleReport], output_path: Path):
     status_counts = {"pass": 0, "needs_work": 0, "skip": 0, "error": 0}
     for r in reports:
         status_counts[r.status] = status_counts.get(r.status, 0) + 1
+
+    # Determine mode label
+    if config.skip_clap and config.skip_gemini:
+        mode_label = "Fast Mode (no AI)"
+    elif not config.skip_gemini:
+        mode_label = "Full Mode (CLAP + Gemini)"
+    else:
+        mode_label = "Standard Mode (CLAP)"
 
     # Build table of contents
     toc_items = []
@@ -1091,186 +817,30 @@ def generate_html_report(reports: list[ModuleReport], output_path: Path):
         )
     toc_html = "\n".join(toc_items)
 
+    # Generate CSS
+    css = generate_report_css()
+
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WiggleRoom Showcase Report</title>
-    <style>
-        * {{ box-sizing: border-box; }}
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: #1a1a2e;
-            color: #eee;
-        }}
-        .header {{
-            text-align: center;
-            padding: 20px;
-            border-bottom: 1px solid #333;
-            margin-bottom: 30px;
-        }}
-        .header h1 {{ margin: 0; color: #fff; }}
-        .header .stats {{ margin-top: 10px; font-size: 14px; color: #aaa; }}
-        .stats span {{ margin: 0 10px; }}
-        .module-card {{
-            background: #16213e;
-            border-radius: 12px;
-            margin-bottom: 24px;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        }}
-        .module-header {{
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-            border-bottom: 1px solid #333;
-            padding-bottom: 12px;
-        }}
-        .module-header h2 {{ margin: 0; color: #fff; }}
-        .module-type {{ color: #888; font-size: 14px; }}
-        .module-content {{
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }}
-        @media (max-width: 900px) {{
-            .module-content {{ grid-template-columns: 1fr; }}
-        }}
-        .audio-section {{
-            background: #0f3460;
-            border-radius: 8px;
-            padding: 16px;
-        }}
-        .audio-section h3 {{ margin-top: 0; font-size: 14px; color: #aaa; }}
-        .audio-section audio {{ width: 100%; }}
-        .spectrogram {{ max-width: 100%; border-radius: 4px; margin-top: 10px; }}
-        .metrics-section {{
-            background: #0f3460;
-            border-radius: 8px;
-            padding: 16px;
-        }}
-        .metrics-section h3 {{ margin-top: 0; font-size: 14px; color: #aaa; }}
-        .metric-row {{
-            display: flex;
-            justify-content: space-between;
-            padding: 6px 0;
-            border-bottom: 1px solid #1a3a5e;
-        }}
-        .metric-row:last-child {{ border-bottom: none; }}
-        .metric-label {{ color: #888; }}
-        .ai-section {{ margin-top: 16px; }}
-        .ai-section h4 {{ margin: 0 0 8px 0; font-size: 13px; color: #aaa; }}
-        .character-tags {{ display: flex; flex-wrap: wrap; gap: 4px; }}
-        .character-tag {{
-            background: #1a3a5e;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-        }}
-        .issues {{ margin-top: 10px; padding: 10px; background: #3a1c1c; border-radius: 4px; }}
-        .issues ul {{ margin: 0; padding-left: 20px; }}
-        .issues li {{ color: #ff8888; font-size: 13px; }}
-        .panel-section {{
-            display: flex;
-            align-items: flex-start;
-            gap: 16px;
-            margin-bottom: 16px;
-        }}
-        .panel-svg {{
-            width: 120px;
-            min-width: 120px;
-            background: #1a1a2e;
-            border-radius: 8px;
-            padding: 8px;
-            border: 1px solid #333;
-        }}
-        .panel-svg svg {{
-            width: 100%;
-            height: auto;
-        }}
-        .gemini-section {{
-            margin-top: 16px;
-            padding: 16px;
-            background: #0a1628;
-            border-radius: 8px;
-            border-left: 3px solid #4ecdc4;
-        }}
-        .gemini-section h4 {{
-            margin: 0 0 12px 0;
-            font-size: 14px;
-            color: #4ecdc4;
-        }}
-        .gemini-content {{
-            color: #ccc;
-            font-size: 13px;
-            line-height: 1.6;
-            max-height: 400px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-        }}
-        .gemini-toggle {{
-            background: #1a3a5e;
-            border: none;
-            color: #aaa;
-            padding: 4px 12px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            margin-bottom: 8px;
-        }}
-        .gemini-toggle:hover {{ background: #2a4a6e; color: #fff; }}
-        .hidden {{ display: none; }}
-        .toc {{
-            background: #16213e;
-            border-radius: 12px;
-            padding: 16px 20px;
-            margin-bottom: 24px;
-        }}
-        .toc h3 {{
-            margin: 0 0 12px 0;
-            color: #fff;
-            font-size: 16px;
-        }}
-        .toc-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 8px;
-        }}
-        .toc-item {{
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 10px;
-            background: #0f3460;
-            border-radius: 6px;
-            color: #ccc;
-            text-decoration: none;
-            font-size: 13px;
-            transition: background 0.2s;
-        }}
-        .toc-item:hover {{ background: #1a4a7e; color: #fff; }}
-        .toc-status {{
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            flex-shrink: 0;
-        }}
-        .toc-type {{ color: #666; font-size: 11px; }}
-    </style>
+    <title>WiggleRoom Audio Report - PR Review</title>
+    <style>{css}</style>
 </head>
 <body>
     <div class="header">
-        <h1>WiggleRoom Showcase Report</h1>
+        <h1>WiggleRoom Audio Report</h1>
+        <p class="subtitle">PR Review</p>
         <p class="stats">
-            Generated: {timestamp} |
-            <span style="color:#28a745;">Pass: {status_counts['pass']}</span> |
-            <span style="color:#ffc107;">Needs Work: {status_counts['needs_work']}</span> |
-            <span style="color:#6c757d;">Skip: {status_counts['skip']}</span>
+            <span class="mode-badge">{mode_label}</span>
+            Generated: {timestamp}
         </p>
+        <div class="status-summary">
+            <span class="status-count pass">Pass: {status_counts['pass']}</span>
+            <span class="status-count needs-work">Needs Work: {status_counts['needs_work']}</span>
+            <span class="status-count skip">Skip: {status_counts['skip']}</span>
+        </div>
     </div>
     <div class="toc">
         <h3>Modules</h3>
@@ -1281,115 +851,413 @@ def generate_html_report(reports: list[ModuleReport], output_path: Path):
 """
 
     for report in reports:
-        # Encode audio and images as base64 for inline embedding
-        audio_b64 = ""
-        if report.showcase_wav and report.showcase_wav.exists():
-            audio_b64 = encode_audio_base64(report.showcase_wav) or ""
+        html_content += generate_module_card_html(report, config)
 
-        spectrogram_b64 = ""
-        if report.spectrogram and report.spectrogram.exists():
-            spectrogram_b64 = encode_image_base64(report.spectrogram) or ""
+    html_content += """
+    <script>
+    function loadAudio(button) {
+        const container = button.parentElement;
+        const audioWrapper = container.querySelector('.audio-wrapper');
+        const audio = audioWrapper.querySelector('audio');
+        const src = button.dataset.src;
 
-        automation_b64 = ""
-        if report.automation_graph and report.automation_graph.exists():
-            automation_b64 = encode_image_base64(report.automation_graph) or ""
+        button.classList.add('loading');
+        button.querySelector('.status-text').textContent = 'Loading...';
 
-        notes_b64 = ""
-        if report.note_score and report.note_score.exists():
-            notes_b64 = encode_image_base64(report.note_score) or ""
+        audio.oncanplaythrough = function() {
+            button.classList.add('loaded');
+            audioWrapper.classList.add('loaded');
+            audio.play();
+        };
 
-        # Load SVG panel content (not base64, just embed inline)
-        panel_svg_content = ""
-        if report.panel_svg and report.panel_svg.exists():
-            try:
-                panel_svg_content = report.panel_svg.read_text()
-                # Clean up SVG for embedding (remove XML declaration if present)
-                if panel_svg_content.startswith("<?xml"):
-                    panel_svg_content = panel_svg_content[panel_svg_content.index("?>") + 2:].strip()
-            except Exception:
-                pass
+        audio.onerror = function() {
+            button.classList.remove('loading');
+            button.querySelector('.status-text').textContent = 'Failed to load';
+            button.style.color = '#ff6b6b';
+        };
 
-        # Quality metrics badges
-        peak_badge = get_metric_badge(report.quality.peak_amplitude, 0.3, 0.1, higher_is_better=True)
-        rms_badge = get_metric_badge(report.quality.rms_level, 0.1, 0.01, higher_is_better=True)
-        thd_badge = get_metric_badge(report.quality.thd_percent, 15.0, 30.0, "%", higher_is_better=False)
-        hnr_badge = get_metric_badge(report.quality.hnr_db, 10.0, 5.0, " dB", higher_is_better=True)
-        clip_badge = get_metric_badge(report.quality.clipping_percent, 1.0, 5.0, "%", higher_is_better=False)
-        dc_badge = get_metric_badge(abs(report.quality.dc_offset), 0.01, 0.1, "", higher_is_better=False)
+        audio.src = src;
+        audio.load();
+    }
 
-        # AI section (CLAP)
-        ai_html = ""
-        if report.ai.clap_quality_score > 0 or report.ai.clap_character:
-            ai_html = f"""
-            <div class="ai-section">
-                <h4>CLAP Analysis</h4>
-                <div class="metric-row">
-                    <span class="metric-label">Quality Score</span>
-                    <span>{report.ai.clap_quality_score:.0f}/100</span>
-                </div>
-                <div class="character-tags">
-                    {"".join(f'<span class="character-tag">{html.escape(c)}</span>' for c in report.ai.clap_character[:5])}
-                </div>
+    function toggleSection(id) {
+        const section = document.getElementById(id);
+        if (section) {
+            section.classList.toggle('hidden');
+        }
+    }
+    </script>
+</body>
+</html>
+"""
+
+    output_path.write_text(html_content)
+    print(f"Report written to: {output_path}")
+
+
+def generate_report_css() -> str:
+    """Generate CSS for the report."""
+    return """
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        .header {
+            text-align: center;
+            padding: 20px;
+            border-bottom: 1px solid #333;
+            margin-bottom: 30px;
+        }
+        .header h1 { margin: 0; color: #fff; font-size: 2em; }
+        .header .subtitle { margin: 5px 0 15px 0; color: #888; font-size: 1.1em; }
+        .header .stats { font-size: 14px; color: #aaa; }
+        .mode-badge {
+            background: #16213e;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-right: 10px;
+        }
+        .status-summary {
+            margin-top: 15px;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+        .status-count {
+            padding: 6px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+        }
+        .status-count.pass { background: rgba(40, 167, 69, 0.2); color: #28a745; }
+        .status-count.needs-work { background: rgba(255, 193, 7, 0.2); color: #ffc107; }
+        .status-count.skip { background: rgba(108, 117, 125, 0.2); color: #6c757d; }
+        .status-badge {
+            color: white;
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .module-card {
+            background: #16213e;
+            border-radius: 12px;
+            margin-bottom: 24px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .module-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 12px;
+        }
+        .module-header h2 { margin: 0; color: #fff; }
+        .module-type { color: #888; font-size: 14px; }
+        .module-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 900px) {
+            .module-content { grid-template-columns: 1fr; }
+        }
+        .audio-section {
+            background: #0f3460;
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .audio-section h3 { margin-top: 0; font-size: 14px; color: #aaa; }
+        .audio-section audio { width: 100%; }
+        .spectrogram { max-width: 100%; border-radius: 4px; margin-top: 10px; }
+        .metrics-section {
+            background: #0f3460;
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .metrics-section h3 { margin-top: 0; font-size: 14px; color: #aaa; }
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid #1a3a5e;
+        }
+        .metric-row:last-child { border-bottom: none; }
+        .metric-label { color: #888; }
+        .ai-section { margin-top: 16px; }
+        .ai-section h4 { margin: 0 0 8px 0; font-size: 13px; color: #aaa; }
+        .character-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+        .character-tag {
+            background: #1a3a5e;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .issues { margin-top: 10px; padding: 10px; background: #3a1c1c; border-radius: 4px; }
+        .issues ul { margin: 0; padding-left: 20px; }
+        .issues li { color: #ff8888; font-size: 13px; }
+        .panel-section {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .panel-svg {
+            width: 120px;
+            min-width: 120px;
+            background: #1a1a2e;
+            border-radius: 8px;
+            padding: 8px;
+            border: 1px solid #333;
+        }
+        .panel-svg svg {
+            width: 100%;
+            height: auto;
+        }
+        .gemini-section {
+            margin-top: 16px;
+            padding: 16px;
+            background: #0a1628;
+            border-radius: 8px;
+            border-left: 3px solid #4ecdc4;
+        }
+        .gemini-section h4 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            color: #4ecdc4;
+        }
+        .gemini-content {
+            color: #ccc;
+            font-size: 13px;
+            line-height: 1.6;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .toggle-btn {
+            background: #1a3a5e;
+            border: none;
+            color: #aaa;
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-bottom: 8px;
+        }
+        .toggle-btn:hover { background: #2a4a6e; color: #fff; }
+        .hidden { display: none; }
+        .toc {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin-bottom: 24px;
+        }
+        .toc h3 {
+            margin: 0 0 12px 0;
+            color: #fff;
+            font-size: 16px;
+        }
+        .toc-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 8px;
+        }
+        .toc-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: #0f3460;
+            border-radius: 6px;
+            color: #ccc;
+            text-decoration: none;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+        .toc-item:hover { background: #1a4a7e; color: #fff; }
+        .toc-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .toc-type { color: #666; font-size: 11px; }
+        .param-grid-section {
+            margin-top: 16px;
+            padding: 16px;
+            background: #0a1628;
+            border-radius: 8px;
+            border-left: 3px solid #74b9ff;
+        }
+        .param-grid-section h4 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            color: #74b9ff;
+        }
+        .params-container { margin-top: 12px; padding: 10px; background: #151528; border-radius: 6px; }
+        .param-row { display: flex; align-items: center; margin-bottom: 8px; font-size: 11px; }
+        .param-row:last-child { margin-bottom: 0; }
+        .param-name { width: 70px; color: #888; flex-shrink: 0; text-transform: lowercase; }
+        .param-min { width: 45px; text-align: right; color: #666; font-family: 'Monaco', 'Consolas', monospace; flex-shrink: 0; font-size: 10px; }
+        .param-max { width: 45px; text-align: left; color: #666; font-family: 'Monaco', 'Consolas', monospace; flex-shrink: 0; font-size: 10px; }
+        .param-bar-container { flex: 1; height: 8px; background: #252540; border-radius: 4px; margin: 0 8px; position: relative; overflow: visible; }
+        .param-bar { height: 100%; background: linear-gradient(90deg, #4a4a8a, #7a7aff); border-radius: 4px; }
+        .param-marker { position: absolute; top: -2px; width: 4px; height: 12px; background: #fff; border-radius: 2px; transform: translateX(-50%); box-shadow: 0 0 4px rgba(255,255,255,0.5); }
+        .zero-marker { position: absolute; top: -1px; width: 2px; height: 10px; background: #ff8800; border-radius: 1px; transform: translateX(-50%); opacity: 0.8; }
+        .param-value { width: 55px; text-align: right; color: #aaf; font-family: 'Monaco', 'Consolas', monospace; flex-shrink: 0; font-weight: bold; padding-left: 8px; border-left: 1px solid #333; }
+        .audio-container { margin-top: 12px; position: relative; }
+        .audio-placeholder {
+            width: 100%; height: 40px;
+            background: linear-gradient(135deg, #2a2a4a, #1e1e35);
+            border: 1px solid #444; border-radius: 20px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.2s;
+            font-size: 12px; color: #888; gap: 8px;
+        }
+        .audio-placeholder:hover { background: linear-gradient(135deg, #3a3a5a, #2e2e45); color: #aaf; border-color: #666; }
+        .audio-placeholder.loading { cursor: wait; color: #aaf; }
+        .audio-placeholder.loaded { display: none; }
+        .audio-placeholder .play-icon { font-size: 16px; }
+        .audio-placeholder .spinner {
+            width: 16px; height: 16px;
+            border: 2px solid #444; border-top-color: #aaf;
+            border-radius: 50%; animation: spin 0.8s linear infinite;
+            display: none;
+        }
+        .audio-placeholder.loading .spinner { display: block; }
+        .audio-placeholder.loading .play-icon { display: none; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .audio-wrapper { display: none; }
+        .audio-wrapper.loaded { display: block; }
+        .audio-wrapper audio { width: 100%; border-radius: 20px; }
+    """
+
+
+def generate_module_card_html(report: ModuleReport, config: ReportConfig) -> str:
+    """Generate HTML for a single module card."""
+    # Encode audio and images as base64 for inline embedding
+    audio_b64 = ""
+    if report.showcase_wav and report.showcase_wav.exists():
+        audio_b64 = encode_audio_base64(report.showcase_wav) or ""
+
+    spectrogram_b64 = ""
+    if report.spectrogram and report.spectrogram.exists():
+        spectrogram_b64 = encode_image_base64(report.spectrogram) or ""
+
+    automation_b64 = ""
+    if report.automation_graph and report.automation_graph.exists():
+        automation_b64 = encode_image_base64(report.automation_graph) or ""
+
+    notes_b64 = ""
+    if report.note_score and report.note_score.exists():
+        notes_b64 = encode_image_base64(report.note_score) or ""
+
+    # Load SVG panel content (not base64, just embed inline)
+    panel_svg_content = ""
+    if report.panel_svg and report.panel_svg.exists():
+        try:
+            panel_svg_content = report.panel_svg.read_text()
+            # Clean up SVG for embedding (remove XML declaration if present)
+            if panel_svg_content.startswith("<?xml"):
+                panel_svg_content = panel_svg_content[panel_svg_content.index("?>") + 2:].strip()
+        except Exception:
+            pass
+
+    # Quality metrics badges
+    peak_badge = get_metric_badge(report.quality.peak_amplitude, 0.3, 0.1, higher_is_better=True)
+    rms_badge = get_metric_badge(report.quality.rms_level, 0.1, 0.01, higher_is_better=True)
+    thd_badge = get_metric_badge(report.quality.thd_percent, 15.0, 30.0, "%", higher_is_better=False)
+    hnr_badge = get_metric_badge(report.quality.hnr_db, 10.0, 5.0, " dB", higher_is_better=True)
+    clip_badge = get_metric_badge(report.quality.clipping_percent, 1.0, 5.0, "%", higher_is_better=False)
+    dc_badge = get_metric_badge(abs(report.quality.dc_offset), 0.01, 0.1, "", higher_is_better=False)
+
+    # AI section (CLAP)
+    ai_html = ""
+    if report.ai.clap_quality_score > 0 or report.ai.clap_character:
+        ai_html = f"""
+        <div class="ai-section">
+            <h4>CLAP Analysis</h4>
+            <div class="metric-row">
+                <span class="metric-label">Quality Score</span>
+                <span>{report.ai.clap_quality_score:.0f}/100</span>
             </div>
-            """
+            <div class="character-tags">
+                {"".join(f'<span class="character-tag">{html.escape(c)}</span>' for c in report.ai.clap_character[:5])}
+            </div>
+        </div>
+        """
 
-        # Gemini section
-        gemini_html = ""
-        if report.gemini_analysis:
-            module_id = report.module_name.replace(" ", "_").lower()
-            gemini_html = f"""
-            <div class="gemini-section">
-                <h4>Gemini Analysis</h4>
-                <button class="gemini-toggle" onclick="document.getElementById('gemini-{module_id}').classList.toggle('hidden')">
-                    Toggle Details
-                </button>
-                <div id="gemini-{module_id}" class="gemini-content">
+    # Gemini section
+    gemini_html = ""
+    if report.gemini_analysis:
+        module_id = report.module_name.replace(" ", "_").lower()
+        gemini_html = f"""
+        <div class="gemini-section">
+            <h4>Gemini Analysis</h4>
+            <button class="toggle-btn" onclick="toggleSection('gemini-{module_id}')">
+                Toggle Details
+            </button>
+            <div id="gemini-{module_id}" class="gemini-content">
 {html.escape(report.gemini_analysis)}
-                </div>
             </div>
-            """
+        </div>
+        """
 
-        # Panel SVG section
-        panel_html = ""
-        if panel_svg_content:
-            panel_html = f"""<div class="panel-svg">{panel_svg_content}</div>"""
+    # Panel SVG section
+    panel_html = ""
+    if panel_svg_content:
+        panel_html = f"""<div class="panel-svg">{panel_svg_content}</div>"""
 
-        # Issues section
-        issues_html = ""
-        if report.issues:
-            issues_html = f"""
-            <div class="issues">
-                <ul>
-                    {"".join(f'<li>{html.escape(issue)}</li>' for issue in report.issues)}
-                </ul>
+    # Issues section
+    issues_html = ""
+    if report.issues:
+        issues_html = f"""
+        <div class="issues">
+            <ul>
+                {"".join(f'<li>{html.escape(issue)}</li>' for issue in report.issues)}
+            </ul>
+        </div>
+        """
+
+    # Parameter grid section (if full mode)
+    param_grid_html = ""
+    if config.include_param_grid and report.param_permutations:
+        module_id = report.module_name.replace(" ", "_").lower()
+        param_grid_html = f"""
+        <div class="param-grid-section">
+            <h4>Parameter Grid ({len(report.param_permutations)} permutations)</h4>
+            <button class="toggle-btn" onclick="toggleSection('param-grid-{module_id}')">
+                Toggle Grid
+            </button>
+            <div id="param-grid-{module_id}" class="hidden">
+                {generate_param_grid_content(report)}
             </div>
-            """
+        </div>
+        """
 
-        # Parameter grid link (if exists)
-        grid_link_html = ""
-        grid_report_path = OUTPUT_DIR / "param_grids" / f"{report.module_name}.html"
-        if grid_report_path.exists():
-            # Count clips from directory
-            grid_dir = OUTPUT_DIR / "param_grids" / report.module_name
-            clip_count = len(list(grid_dir.glob("perm_*.wav"))) if grid_dir.exists() else 0
-            grid_link_html = f"""
-            <div style="margin-top:12px;padding:10px;background:#0a1628;border-radius:6px;border-left:3px solid #4ecdc4;">
-                <a href="param_grids/{report.module_name}.html" style="color:#4ecdc4;text-decoration:none;font-size:13px;">
-                    📊 Parameter Grid Analysis ({clip_count} permutations)
-                </a>
-            </div>
-            """
+    # Build visualizations HTML
+    vis_html = ""
+    if spectrogram_b64:
+        vis_html += f"<img class='spectrogram' src='data:image/png;base64,{spectrogram_b64}' alt='Spectrogram'>"
+    if notes_b64:
+        vis_html += f"<img class='spectrogram' src='data:image/png;base64,{notes_b64}' alt='Note Score' style='margin-top:8px;'>"
+    if automation_b64:
+        vis_html += f"<img class='spectrogram' src='data:image/png;base64,{automation_b64}' alt='Parameter Automation' style='margin-top:8px;'>"
 
-        # Build visualizations HTML
-        vis_html = ""
-        if spectrogram_b64:
-            vis_html += f"<img class='spectrogram' src='data:image/png;base64,{spectrogram_b64}' alt='Spectrogram'>"
-        if notes_b64:
-            vis_html += f"<img class='spectrogram' src='data:image/png;base64,{notes_b64}' alt='Note Score' style='margin-top:8px;'>"
-        if automation_b64:
-            vis_html += f"<img class='spectrogram' src='data:image/png;base64,{automation_b64}' alt='Parameter Automation' style='margin-top:8px;'>"
+    # Audio player
+    audio_html = ""
+    if audio_b64:
+        audio_html = f"<audio controls><source src='data:audio/wav;base64,{audio_b64}' type='audio/wav'></audio>"
+    else:
+        audio_html = "<p style='color:#888;'>No audio available</p>"
 
-        html_content += f"""
+    return f"""
     <div class="module-card" id="module-{report.module_name}">
         <div class="module-header">
             <div>
@@ -1406,9 +1274,9 @@ def generate_html_report(reports: list[ModuleReport], output_path: Path):
         </div>
         <div class="module-content">
             <div class="audio-section">
-                <h3>Audio & Visualizations</h3>
-                {"<audio controls><source src='data:audio/wav;base64," + audio_b64 + "' type='audio/wav'></audio>" if audio_b64 else "<p>No audio available</p>"}
-                {vis_html if vis_html else "<p>No visualizations available</p>"}
+                <h3>Showcase Audio</h3>
+                {audio_html}
+                {vis_html if vis_html else "<p style='color:#888;'>No visualizations available</p>"}
             </div>
             <div class="metrics-section">
                 <h3>Quality Metrics</h3>
@@ -1438,20 +1306,41 @@ def generate_html_report(reports: list[ModuleReport], output_path: Path):
                 </div>
                 {ai_html}
                 {issues_html}
-                {grid_link_html}
             </div>
         </div>
+        {param_grid_html}
         {gemini_html}
     </div>
 """
 
-    html_content += """
-</body>
-</html>
-"""
 
-    output_path.write_text(html_content)
-    print(f"Report written to: {output_path}")
+def generate_param_grid_content(report: ModuleReport) -> str:
+    """Generate HTML content for parameter grid section."""
+    if not report.param_permutations:
+        return "<p>No parameter permutations available</p>"
+
+    # Get parameter ranges for visualization
+    module_params = get_module_params(report.module_name)
+    param_ranges = {p["name"]: (p["min"], p["max"]) for p in module_params}
+
+    items_html = []
+    for idx, perm in enumerate(report.param_permutations[:20], 1):  # Limit to 20
+        # Generate parameter bars
+        param_bars = ""
+        for param_name in sorted(perm.params.keys()):
+            if param_name.lower() not in ["gate", "trigger", "velocity", "volts", "freq", "pitch"]:
+                value = perm.params[param_name]
+                min_val, max_val = param_ranges.get(param_name, (0, 1))
+                param_bars += generate_param_bar_html(param_name, value, min_val, max_val)
+
+        items_html.append(f"""
+        <div style="background:#1e1e35;padding:10px;border-radius:6px;margin-bottom:8px;">
+            <div style="font-size:11px;color:#666;margin-bottom:6px;">#{idx}</div>
+            <div class="params-container">{param_bars}</div>
+        </div>
+        """)
+
+    return "".join(items_html)
 
 
 # =============================================================================
@@ -1459,14 +1348,14 @@ def generate_html_report(reports: list[ModuleReport], output_path: Path):
 # =============================================================================
 
 def process_module(module_name: str, output_dir: Path,
-                   skip_ai: bool = False, verbose: bool = False) -> ModuleReport:
+                   config: ReportConfig) -> ModuleReport:
     """Process a single module and generate its report."""
 
     # Load module config
-    config = load_module_config(module_name)
-    module_type = config.get("module_type", "instrument")
-    description = config.get("description", "")
-    skip_audio = config.get("skip_audio_tests", False)
+    module_config = load_module_config(module_name)
+    module_type = module_config.get("module_type", "instrument")
+    description = module_config.get("description", "")
+    skip_audio = module_config.get("skip_audio_tests", False)
 
     report = ModuleReport(
         module_name=module_name,
@@ -1477,18 +1366,18 @@ def process_module(module_name: str, output_dir: Path,
     # Skip utility modules
     if skip_audio:
         report.status = "skip"
-        skip_reason = config.get("skip_reason", "Audio tests skipped")
+        skip_reason = module_config.get("skip_reason", "Audio tests skipped")
         report.issues.append(skip_reason)
-        if verbose:
+        if config.verbose:
             print(f"  Skipping {module_name}: {skip_reason}")
         return report
 
     # Render showcase audio
     wav_path = output_dir / f"{module_name}_showcase.wav"
-    if verbose:
+    if config.verbose:
         print(f"  Rendering showcase for {module_name}...")
 
-    if not render_showcase(module_name, wav_path, verbose):
+    if not render_showcase(module_name, wav_path, config.verbose):
         report.status = "error"
         report.issues.append("Failed to render showcase audio")
         return report
@@ -1505,7 +1394,7 @@ def process_module(module_name: str, output_dir: Path,
     report.duration = len(audio) / SAMPLE_RATE
 
     # Parse showcase config for visualizations
-    showcase = parse_showcase_config(config, module_type)
+    showcase = parse_showcase_config(module_config, module_type)
     report.showcase_config = showcase
 
     # Get panel SVG
@@ -1533,25 +1422,28 @@ def process_module(module_name: str, output_dir: Path,
             report.note_score = note_path
 
     # Analyze quality
-    if verbose:
+    if config.verbose:
         print(f"  Analyzing quality for {module_name}...")
     report.quality = analyze_quality(audio)
 
-    # AI analysis (CLAP + Gemini)
-    if not skip_ai:
-        if verbose:
+    # AI analysis (CLAP + optional Gemini)
+    use_clap = not config.skip_clap
+    use_gemini = not config.skip_gemini
+
+    if use_clap or use_gemini:
+        if config.verbose:
             print(f"  Running AI analysis for {module_name}...")
-        # Format showcase context for AI
         showcase_context = format_showcase_context(showcase, module_type)
         report.ai, report.gemini_analysis = run_ai_analysis(
-            wav_path, module_name, showcase_context, verbose
+            wav_path, module_name, showcase_context, config.verbose,
+            use_clap=use_clap, use_gemini=use_gemini
         )
 
     # Determine status based on quality metrics
     issues = []
 
     # Check quality thresholds
-    thresholds = config.get("quality_thresholds", {})
+    thresholds = module_config.get("quality_thresholds", DEFAULT_QUALITY_THRESHOLDS)
     thd_max = thresholds.get("thd_max_percent", 15.0)
     clipping_max = thresholds.get("clipping_max_percent", 1.0)
     if thresholds.get("allow_hot_signal", False):
@@ -1575,209 +1467,127 @@ def process_module(module_name: str, output_dir: Path,
     return report
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Generate showcase report for VCV modules")
+def parse_args(args: list[str] | None = None) -> ReportConfig:
+    """Parse command line arguments and return configuration."""
+    parser = argparse.ArgumentParser(
+        description="Generate unified audio report for VCV modules",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Modes:
+  --fast     No AI analysis (fastest, for CI)
+  (default)  CLAP analysis only (standard PR review)
+  --full     CLAP + Gemini + parameter grid (deep dive)
+        """
+    )
     parser.add_argument("--module", "-m", help="Process specific module only")
-    parser.add_argument("--skip-ai", action="store_true", help="Skip AI analysis")
-    parser.add_argument("--output", "-o", default=str(OUTPUT_DIR / "showcase_report.html"),
+    parser.add_argument("--fast", action="store_true",
+                        help="Fast mode: skip all AI analysis")
+    parser.add_argument("--full", action="store_true",
+                        help="Full mode: include Gemini and parameter grid")
+    parser.add_argument("--gemini", action="store_true",
+                        help="Enable Gemini analysis (requires GEMINI_API_KEY)")
+    parser.add_argument("--no-clap", action="store_true",
+                        help="Skip CLAP analysis")
+    parser.add_argument("--output", "-o", default=str(OUTPUT_DIR / "unified_report.html"),
                         help="Output HTML file path")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument("--json", action="store_true", help="Also output JSON report")
     parser.add_argument("--parallel", "-p", type=int, default=4,
                         help="Number of parallel workers (default: 4)")
-    parser.add_argument("--systematic", "-s", action="store_true",
-                        help="Use systematic parameter sweeps (auto-generated)")
-    parser.add_argument("--no-clap", action="store_true",
-                        help="Skip CLAP analysis (faster)")
-    parser.add_argument("--no-gemini", action="store_true",
-                        help="Skip Gemini analysis")
-    args = parser.parse_args()
+
+    parsed = parser.parse_args(args)
+
+    config = ReportConfig()
+    config.verbose = parsed.verbose
+    config.parallel_workers = parsed.parallel
+    config.output_path = Path(parsed.output)
+
+    # Mode configuration
+    if parsed.fast:
+        config.skip_clap = True
+        config.skip_gemini = True
+        config.include_param_grid = False
+    elif parsed.full:
+        config.skip_clap = False
+        config.skip_gemini = False
+        config.include_param_grid = True
+    else:
+        # Default mode
+        config.skip_clap = parsed.no_clap
+        config.skip_gemini = not parsed.gemini
+        config.include_param_grid = False
+
+    # Store parsed args for module filtering
+    config._module = parsed.module
+    config._json = parsed.json
+
+    return config
+
+
+def main():
+    config = parse_args()
 
     # Ensure output directory exists
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Get modules to process
-    if args.module:
-        modules = [args.module]
+    if config._module:
+        modules = [config._module]
     else:
         modules = get_available_modules()
         if not modules:
             print("No modules found. Ensure faust_render is built.")
             sys.exit(1)
 
-    print(f"Processing {len(modules)} module(s) with {args.parallel} workers...")
+    # Determine mode for display
+    if config.skip_clap and config.skip_gemini:
+        mode_str = "fast (no AI)"
+    elif not config.skip_gemini:
+        mode_str = "full (CLAP + Gemini)"
+    else:
+        mode_str = "standard (CLAP)"
 
-    # Generate systematic configs if requested
-    systematic_configs = {}
-    if args.systematic:
-        print("\n=== Generating systematic parameter sweeps ===")
-        for module in modules:
-            config = load_module_config(module)
-            module_type = config.get("module_type", "instrument")
-            systematic_configs[module] = generate_systematic_showcase(module, module_type)
-            n_params = len([a.param for a in systematic_configs[module].automations])
-            n_notes = len(systematic_configs[module].notes)
-            print(f"  {module}: {systematic_configs[module].duration:.0f}s, "
-                  f"{n_params} param sweeps, {n_notes} notes")
+    print(f"Processing {len(modules)} module(s) in {mode_str} mode...")
 
-    # Phase 1: Render all audio in parallel
-    print("\n=== Phase 1: Rendering audio ===")
-    wav_paths = {}
-
-    def render_module(module: str) -> tuple[str, Path, bool]:
-        wav_path = OUTPUT_DIR / f"{module}_showcase.wav"
-        if module in systematic_configs:
-            # Use systematic config - write temp config for faust_render
-            success = render_showcase_with_config(
-                module, wav_path, systematic_configs[module], args.verbose
-            )
-        else:
-            success = render_showcase(module, wav_path, args.verbose)
-        return module, wav_path, success
-
-    with ThreadPoolExecutor(max_workers=args.parallel) as executor:
-        futures = [executor.submit(render_module, m) for m in modules]
-
-        for future in as_completed(futures):
-            try:
-                module, wav_path, success = future.result()
-                if success:
-                    wav_paths[module] = wav_path
-                    print(f"  ✓ {module}")
-                else:
-                    print(f"  ✗ {module} (render failed)")
-            except Exception as e:
-                print(f"  ✗ (error: {e})")
-
-    # Phase 2: Process analysis in parallel (quality, visualizations)
-    print("\n=== Phase 2: Analyzing audio ===")
+    # Process modules
     reports = []
 
-    def analyze_module(module_name: str) -> ModuleReport:
-        """Analyze a single module (called in parallel)."""
-        config = load_module_config(module_name)
-        module_type = config.get("module_type", "instrument")
-        description = config.get("description", "")
-        skip_audio = config.get("skip_audio_tests", False)
-
-        report = ModuleReport(
-            module_name=module_name,
-            module_type=module_type,
-            description=description,
-        )
-
-        if skip_audio:
-            report.status = "skip"
-            report.issues.append(config.get("skip_reason", "Audio tests skipped"))
-            return report
-
-        wav_path = wav_paths.get(module_name)
-        if not wav_path or not wav_path.exists():
-            report.status = "error"
-            report.issues.append("Audio file not found")
-            return report
-
-        report.showcase_wav = wav_path
-
-        # Load audio
-        audio = load_audio(wav_path)
-        if audio is None:
-            report.status = "error"
-            report.issues.append("Failed to load audio")
-            return report
-
-        report.duration = len(audio) / SAMPLE_RATE
-
-        # Use systematic config if available, otherwise parse from file
-        if module_name in systematic_configs:
-            showcase = systematic_configs[module_name]
-        else:
-            showcase = parse_showcase_config(config, module_type)
-        report.showcase_config = showcase
-
-        # Panel SVG
-        panel_svg = get_panel_svg(module_name)
-        if panel_svg:
-            report.panel_svg = panel_svg
-
-        # Generate visualizations
-        spectrogram_path = OUTPUT_DIR / f"{module_name}_spectrogram.png"
-        if generate_spectrogram(audio, spectrogram_path, module_name):
-            report.spectrogram = spectrogram_path
-
-        module_params = get_module_params(module_name)
-        automation_path = OUTPUT_DIR / f"{module_name}_automation.png"
-        if generate_automation_graph(showcase, automation_path, module_params, "Parameter Values"):
-            report.automation_graph = automation_path
-
-        if showcase.notes:
-            note_path = OUTPUT_DIR / f"{module_name}_notes.png"
-            if generate_note_score(showcase, note_path, "Note Sequence"):
-                report.note_score = note_path
-
-        # Quality analysis
-        report.quality = analyze_quality(audio)
-
-        # Determine status
-        thresholds = config.get("quality_thresholds", {})
-        thd_max = thresholds.get("thd_max_percent", 15.0)
-        clipping_max = thresholds.get("clipping_max_percent", 1.0)
-        if thresholds.get("allow_hot_signal", False):
-            clipping_max = 15.0
-
-        issues = []
-        if report.quality.thd_percent > thd_max:
-            issues.append(f"THD {report.quality.thd_percent:.1f}% exceeds threshold {thd_max}%")
-        if report.quality.clipping_percent > clipping_max:
-            issues.append(f"Clipping {report.quality.clipping_percent:.1f}% exceeds threshold {clipping_max}%")
-        if report.quality.peak_amplitude < 0.1:
-            issues.append("Very low output level (peak < 0.1)")
-        if abs(report.quality.dc_offset) > 0.1:
-            issues.append(f"Significant DC offset: {report.quality.dc_offset:.3f}")
-
-        report.issues = issues
-        report.status = "pass" if not issues else "needs_work"
-        return report
-
-    with ThreadPoolExecutor(max_workers=args.parallel) as executor:
-        futures = {executor.submit(analyze_module, m): m for m in modules}
-        for future in as_completed(futures):
-            module = futures[future]
+    if config.parallel_workers > 1 and len(modules) > 1:
+        # Parallel processing
+        with ThreadPoolExecutor(max_workers=config.parallel_workers) as executor:
+            futures = {
+                executor.submit(process_module, m, OUTPUT_DIR, config): m
+                for m in modules
+            }
+            for future in as_completed(futures):
+                module = futures[future]
+                try:
+                    report = future.result()
+                    reports.append(report)
+                    status_symbol = {"pass": "✓", "needs_work": "⚠", "skip": "○", "error": "✗"}.get(report.status, "?")
+                    print(f"  {status_symbol} {module} ({report.status})")
+                except Exception as e:
+                    print(f"  ✗ {module} (error: {e})")
+    else:
+        # Sequential processing
+        for module in modules:
             try:
-                report = future.result()
+                report = process_module(module, OUTPUT_DIR, config)
                 reports.append(report)
-                print(f"  ✓ {module} ({report.status})")
+                status_symbol = {"pass": "✓", "needs_work": "⚠", "skip": "○", "error": "✗"}.get(report.status, "?")
+                print(f"  {status_symbol} {module} ({report.status})")
             except Exception as e:
                 print(f"  ✗ {module} (error: {e})")
-                import traceback
-                traceback.print_exc()
-
-    # Phase 3: AI analysis
-    use_clap = not args.no_clap
-    use_gemini_opt = not args.no_gemini
-    if not args.skip_ai and (use_clap or use_gemini_opt):
-        print(f"\n=== Phase 3: AI analysis (CLAP: {use_clap}, Gemini: {use_gemini_opt}) ===")
-        for report in reports:
-            if report.status in ("skip", "error"):
-                continue
-            print(f"  Analyzing {report.module_name}...")
-            # Use the showcase config already stored in the report
-            showcase_context = format_showcase_context(report.showcase_config, report.module_type)
-            report.ai, report.gemini_analysis = run_ai_analysis(
-                report.showcase_wav, report.module_name, showcase_context, args.verbose,
-                use_clap=use_clap, use_gemini=use_gemini_opt
-            )
 
     # Sort reports by module name
     reports.sort(key=lambda r: r.module_name)
 
     # Generate HTML report
-    output_path = Path(args.output)
-    generate_html_report(reports, output_path)
+    generate_html_report(reports, config.output_path, config)
 
     # Optionally output JSON
-    if args.json:
-        json_path = output_path.with_suffix(".json")
+    if config._json:
+        json_path = config.output_path.with_suffix(".json")
         with open(json_path, "w") as f:
             json.dump([r.to_dict() for r in reports], f, indent=2)
         print(f"JSON report written to: {json_path}")

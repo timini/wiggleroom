@@ -37,6 +37,7 @@ class Issue:
     description: str
     fix_instruction: str
     faust_hint: str = ""  # Specific Faust code suggestion
+    auto_fix_type: str | None = None  # Auto-fixable template type, if applicable
 
 
 @dataclass
@@ -60,6 +61,58 @@ class JudgmentResult:
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent)
+
+
+def classify_fix_type(category: str, description: str, severity: Severity) -> str | None:
+    """
+    Classify an issue to an auto-fixable template.
+
+    Args:
+        category: Issue category (clipping, noise, etc.)
+        description: Full description of the issue
+        severity: Severity level
+
+    Returns:
+        Fix type name if auto-fixable, None otherwise
+    """
+    description_lower = description.lower()
+    category_lower = category.lower()
+
+    # Clipping -> add_limiter or reduce_gain
+    if "clipping" in category_lower or "clipping" in description_lower:
+        if severity in (Severity.CRITICAL, Severity.HIGH):
+            return "add_limiter"
+        return "reduce_gain"
+
+    # DC offset -> add_dc_blocker
+    if "dc" in category_lower or "dc offset" in description_lower:
+        return "add_dc_blocker"
+
+    # Clicks, pops, transients -> smooth_gate
+    if any(x in description_lower for x in ["click", "pop", "transient", "discontinuit"]):
+        return "smooth_gate"
+
+    # High THD that may be intentional -> adjust_threshold
+    if "thd" in category_lower:
+        if "intentional" in description_lower or "may be" in description_lower:
+            return "adjust_threshold"
+
+    # Parameter issues often need threshold adjustment
+    if category_lower == "parameter" and "silent" in description_lower:
+        return "adjust_threshold"
+
+    # AI quality issues are typically complex
+    if "ai_quality" in category_lower:
+        # Some AI issues map to simple fixes
+        if "harsh" in description_lower or "distortion" in description_lower:
+            return "add_limiter"
+        if "click" in description_lower or "pop" in description_lower:
+            return "smooth_gate"
+        # Most AI issues require manual review
+        return None
+
+    # Complex issues require manual intervention
+    return None
 
 
 class JudgeAgent:
@@ -160,21 +213,27 @@ class JudgeAgent:
 
         # Clipping
         if r.clipping_percent > 5.0:
-            issues.append(Issue(
-                severity=Severity.CRITICAL,
+            severity = Severity.CRITICAL
+            issue = Issue(
+                severity=severity,
                 category="clipping",
                 description=f"Severe clipping: {r.clipping_percent:.1f}% of samples",
                 fix_instruction="Reduce output gain or add limiting before output",
-                faust_hint="output_gain = current_gain * 0.5; // Reduce gain\n// Or add soft limiter: : ma.tanh"
-            ))
+                faust_hint="output_gain = current_gain * 0.5; // Reduce gain\n// Or add soft limiter: : ma.tanh",
+                auto_fix_type=classify_fix_type("clipping", "severe clipping", severity)
+            )
+            issues.append(issue)
         elif r.clipping_percent > self.THRESHOLDS['clipping_max']:
-            issues.append(Issue(
-                severity=Severity.HIGH,
+            severity = Severity.HIGH
+            issue = Issue(
+                severity=severity,
                 category="clipping",
                 description=f"Clipping detected: {r.clipping_percent:.1f}%",
                 fix_instruction="Add gain compensation or soft limiting",
-                faust_hint="// Add before output:\nsoft_limit = ma.tanh;\n// Reduce gain slightly"
-            ))
+                faust_hint="// Add before output:\nsoft_limit = ma.tanh;\n// Reduce gain slightly",
+                auto_fix_type=classify_fix_type("clipping", "clipping detected", severity)
+            )
+            issues.append(issue)
 
         # Silent
         if r.is_silent:
@@ -183,7 +242,8 @@ class JudgeAgent:
                 category="output",
                 description="Module produces no audible output",
                 fix_instruction="Check signal chain - excitation may not reach resonator",
-                faust_hint="// Verify signal flow:\n// 1. Check gate/trigger is working\n// 2. Check oscillator/exciter output\n// 3. Increase output_gain"
+                faust_hint="// Verify signal flow:\n// 1. Check gate/trigger is working\n// 2. Check oscillator/exciter output\n// 3. Increase output_gain",
+                auto_fix_type=None  # Requires manual investigation
             ))
         elif r.peak_amplitude < self.THRESHOLDS['peak_min']:
             issues.append(Issue(
@@ -191,7 +251,8 @@ class JudgeAgent:
                 category="output",
                 description=f"Output too quiet: peak={r.peak_amplitude:.3f}",
                 fix_instruction="Increase output gain",
-                faust_hint=f"output_gain = {max(2.0, 0.5/r.peak_amplitude):.1f};  // Boost output"
+                faust_hint=f"output_gain = {max(2.0, 0.5/r.peak_amplitude):.1f};  // Boost output",
+                auto_fix_type=None  # Requires manual investigation
             ))
 
         return issues
@@ -203,20 +264,26 @@ class JudgeAgent:
 
         # THD
         if q.thd_percent > self.THRESHOLDS['thd_very_high']:
+            severity = Severity.HIGH
+            description = f"Very high THD: {q.thd_percent:.1f}%"
             issues.append(Issue(
-                severity=Severity.HIGH,
+                severity=severity,
                 category="distortion",
-                description=f"Very high THD: {q.thd_percent:.1f}%",
+                description=description,
                 fix_instruction="Check for gain staging issues or unwanted saturation",
-                faust_hint="// Reduce internal gain before saturation stage\n// Or add lowpass filtering"
+                faust_hint="// Reduce internal gain before saturation stage\n// Or add lowpass filtering",
+                auto_fix_type=classify_fix_type("distortion", description, severity)
             ))
         elif q.thd_percent > self.THRESHOLDS['thd_high']:
+            severity = Severity.MEDIUM
+            description = f"High THD: {q.thd_percent:.1f}% (may be intentional)"
             issues.append(Issue(
-                severity=Severity.MEDIUM,
+                severity=severity,
                 category="distortion",
-                description=f"High THD: {q.thd_percent:.1f}% (may be intentional)",
+                description=description,
                 fix_instruction="Review if distortion is intentional for this module type",
-                faust_hint="// If unintentional, reduce excitation or feedback"
+                faust_hint="// If unintentional, reduce excitation or feedback",
+                auto_fix_type=classify_fix_type("distortion", description, severity)
             ))
 
         # Low HNR (noisy)
@@ -226,7 +293,8 @@ class JudgeAgent:
                 category="noise",
                 description=f"Low harmonic-to-noise ratio: {q.hnr_db:.1f}dB",
                 fix_instruction="Reduce noise in signal chain or increase resonator feedback",
-                faust_hint="// For physical models, increase resonator feedback\n// Or reduce breath/noise component"
+                faust_hint="// For physical models, increase resonator feedback\n// Or reduce breath/noise component",
+                auto_fix_type=None  # Noise issues typically need manual review
             ))
 
         # Quality score issues
@@ -238,7 +306,8 @@ class JudgeAgent:
                 category="quality",
                 description=issue_text,
                 fix_instruction="Review and address as needed",
-                faust_hint=""
+                faust_hint="",
+                auto_fix_type=None
             ))
 
         return issues
@@ -248,22 +317,28 @@ class JudgeAgent:
         issues = []
 
         for p in v.parameter_issues:
+            description = f"Parameter {p.param}={p.value}: {p.issue}"
             if p.severity == "high" or "clipping" in p.issue.lower():
+                severity = Severity.HIGH
                 issues.append(Issue(
-                    severity=Severity.HIGH,
+                    severity=severity,
                     category="parameter",
-                    description=f"Parameter {p.param}={p.value}: {p.issue}",
+                    description=description,
                     fix_instruction=f"Add compensation or constrain {p.param} range",
-                    faust_hint=f"// Option 1: Fix the issue\n// Option 2: Constrain range:\n{p.param} = hslider(\"{p.param}\", init, {p.value + 0.1}, max, step);"
+                    faust_hint=f"// Option 1: Fix the issue\n// Option 2: Constrain range:\n{p.param} = hslider(\"{p.param}\", init, {p.value + 0.1}, max, step);",
+                    auto_fix_type=classify_fix_type("parameter", description, severity)
                 ))
             elif p.issue == "silent":
                 # Silent at zero is often expected (e.g., pressure=0)
+                severity = Severity.LOW
+                description = f"Parameter {p.param}={p.value} produces silence"
                 issues.append(Issue(
-                    severity=Severity.LOW,
+                    severity=severity,
                     category="parameter",
-                    description=f"Parameter {p.param}={p.value} produces silence",
+                    description=description,
                     fix_instruction=f"Consider constraining {p.param} minimum if silence is unwanted",
-                    faust_hint=f"// Constrain to audible range:\n{p.param} = hslider(\"{p.param}\", init, {p.value + 0.1}, max, step);"
+                    faust_hint=f"// Constrain to audible range:\n{p.param} = hslider(\"{p.param}\", init, {p.value + 0.1}, max, step);",
+                    auto_fix_type=classify_fix_type("parameter", description, severity)
                 ))
 
         return issues
@@ -283,24 +358,29 @@ class JudgeAgent:
                 neg_desc = ", ".join([f"{n[0]} ({n[1]:.2f})" for n in top_neg])
                 description += f" - detected: {neg_desc}"
 
+            severity = Severity.MEDIUM
             issues.append(Issue(
-                severity=Severity.MEDIUM,
+                severity=severity,
                 category="ai_quality",
                 description=description,
                 fix_instruction="Address detected quality issues (harshness, noise, artifacts)",
-                faust_hint="// Common fixes:\n// - Add filtering: fi.lowpass(2, 8000)\n// - Smooth transients: si.smooth(0.99)\n// - Add soft limiting: ma.tanh"
+                faust_hint="// Common fixes:\n// - Add filtering: fi.lowpass(2, 8000)\n// - Smooth transients: si.smooth(0.99)\n// - Add soft limiting: ma.tanh",
+                auto_fix_type=classify_fix_type("ai_quality", description, severity)
             ))
 
         # Specific negative matches
         for desc, score in ai.top_negative:
             if score > 0.2:  # Strong negative match
                 fix = self._get_fix_for_negative(desc)
+                severity = Severity.MEDIUM if score > 0.25 else Severity.LOW
+                ai_description = f"AI detected: {desc} (similarity: {score:.2f})"
                 issues.append(Issue(
-                    severity=Severity.MEDIUM if score > 0.25 else Severity.LOW,
+                    severity=severity,
                     category="ai_quality",
-                    description=f"AI detected: {desc} (similarity: {score:.2f})",
+                    description=ai_description,
                     fix_instruction=fix['instruction'],
-                    faust_hint=fix['hint']
+                    faust_hint=fix['hint'],
+                    auto_fix_type=classify_fix_type("ai_quality", ai_description, severity)
                 ))
 
         return issues

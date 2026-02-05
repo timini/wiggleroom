@@ -208,6 +208,9 @@ def analyze_parameter(
     if len(features_list) < 2:
         return {"skipped": True, "reason": "insufficient valid renders"}
 
+    # Extract the actual test values that had successful renders
+    actual_test_values = [f[0] for f in features_list]
+
     # Compute sensitivity
     sensitivities = compute_sensitivity(features_list)
 
@@ -236,7 +239,7 @@ def analyze_parameter(
         "skipped": False,
         "param_name": param_name,
         "param_range": [param["min"], param["max"]],
-        "test_values": test_values.tolist(),
+        "test_values": actual_test_values,  # Use only values with successful renders
         "sensitivities": sensitivities,
         "overall_score": overall_score,
         "wav_files": wav_files,
