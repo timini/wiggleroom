@@ -655,6 +655,19 @@ soft_limit = ma.tanh;
 
 ## Adding a New Module (Quick Reference)
 
+### Step 0: Choose Implementation Type
+
+**Before starting, determine whether the module should be Faust or native C++:**
+
+| Type | Use When | Examples |
+|------|----------|----------|
+| **Faust DSP** | Complex audio DSP, physical modeling, filters, effects | Filters, reverbs, synth voices, physical models |
+| **Native C++** | Simple utilities, CV processing, logic, sequencers | Crossfaders, mixers, gates, triggers, quantizers |
+
+**Rule of thumb:** If the module is primarily doing math on CV signals or simple routing, use native C++. If it involves audio-rate processing with feedback, filtering, or complex DSP, use Faust.
+
+### For Faust Modules
+
 1. **Create files:**
    - `src/modules/MyModule/my_module.dsp` (Faust DSP)
    - `src/modules/MyModule/MyModule.cpp` (VCV wrapper)
@@ -708,6 +721,36 @@ soft_limit = ma.tanh;
    python3 test/test_framework.py --module MyModule -v
    just install
    ```
+
+8. **Update README.md:**
+   - Add module to the appropriate category table (Physical Modeling, Filters & Effects, Synthesizers, Sequencers, or Utilities)
+   - Update the module count in the `## Modules (N)` heading
+
+### For Native C++ Modules
+
+1. **Create files:**
+   - `src/modules/MyModule/MyModule.cpp` (module implementation - inherits from `rack::Module`)
+   - `src/modules/MyModule/CMakeLists.txt` (simpler - no `add_faust_dsp()`)
+   - `res/MyModule.png` (panel)
+
+2. **Register module:**
+   - `src/plugin.cpp`: Add extern and addModel (with HAS_* guard)
+   - `CMakeLists.txt`: Add HAS_* compile definition
+   - `plugin.json`: Add module entry
+
+3. **Generate faceplate:**
+   ```bash
+   just faceplate MyModule
+   ```
+
+4. **Build and install:**
+   ```bash
+   just build && just install
+   ```
+
+5. **Update README.md** (same as Faust modules)
+
+**Note:** Native C++ modules don't need test_config.json or test infrastructure updates (the test framework is Faust-specific).
 
 **Full walkthrough: [DEVELOPMENT.md#adding-a-new-module](DEVELOPMENT.md#adding-a-new-module)**
 

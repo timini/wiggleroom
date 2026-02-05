@@ -1,6 +1,6 @@
 ---
 name: new-module
-description: Create a new Faust DSP module from a specification using architect → builder → verify/fix cycle
+description: Create a new VCV Rack module (Faust DSP or native C++) using architect → builder → verify/fix cycle
 argument-hint: <ModuleName> [description]
 ---
 
@@ -8,9 +8,33 @@ argument-hint: <ModuleName> [description]
 
 ## Workflow
 
-This skill creates a new Faust DSP module through a 3-phase agent cycle.
+This skill creates a new VCV Rack module through a multi-phase agent cycle.
 
-### Phase 1: Save Specification
+### Phase 0: Determine Implementation Type
+
+**IMPORTANT:** Before starting implementation, determine whether this module should be:
+
+| Type | Use When | Examples |
+|------|----------|----------|
+| **Faust DSP** | Complex audio DSP, physical modeling, filters, effects with many parameters | Filters, reverbs, synth voices, physical models |
+| **Native C++** | Simple utilities, CV processing, logic, sequencers, or when Faust adds unnecessary complexity | Crossfaders, mixers, gates, triggers, clock dividers |
+
+**Ask the user if unclear.** Simple CV utilities (mixing, crossfading, logic) should almost always be native C++. Complex audio processing benefits from Faust's DSP primitives and automatic parameter handling.
+
+For **native C++ modules**:
+- Skip the Faust-specific steps (no .dsp file, no test infrastructure updates)
+- No test_config.json needed (test framework is Faust-specific)
+- Simpler CMakeLists.txt (no `add_faust_dsp()`)
+
+### Phase 1: Create Feature Branch
+
+```bash
+git checkout -b feature/{module-name-lowercase}
+```
+
+This ensures all module development happens on an isolated branch.
+
+### Phase 2: Save Specification
 
 First, save the module specification to `specs/{ModuleName}.md`:
 
@@ -45,9 +69,9 @@ First, save the module specification to `specs/{ModuleName}.md`:
 {Any specific technical requirements}
 ```
 
-### Phase 2: Design (Architect)
+### Phase 3: Design (Architect) - Faust modules only
 
-Spawn the architect agent to create a detailed technical design:
+For Faust modules, spawn the architect agent:
 
 ```
 Task tool:
@@ -56,11 +80,11 @@ Task tool:
   prompt: "Read the specification at specs/{ModuleName}.md and create a detailed technical design for implementation."
 ```
 
-Review the design. If it needs changes, iterate with the architect.
+For native C++ modules, skip this phase and implement directly.
 
-### Phase 3: Build (Builder)
+### Phase 4: Build (Builder)
 
-Spawn the builder agent to create all files:
+For Faust modules, spawn the builder agent:
 
 ```
 Task tool:
@@ -69,7 +93,9 @@ Task tool:
   prompt: "Create all files for {ModuleName} based on this design:\n\n{ARCHITECT_OUTPUT}"
 ```
 
-### Phase 4: Verify/Fix Loop
+For native C++ modules, create the files directly (see File Checklist below).
+
+### Phase 5: Verify/Fix Loop (Faust modules only)
 
 Run the standard module-dev verification loop:
 
@@ -102,21 +128,28 @@ Then fix and repeat until PASS.
 
 ## File Checklist
 
-The builder must create/update these files:
-
-### New Files
-- [ ] `src/modules/{ModuleName}/{lowercase}.dsp` - Faust DSP
-- [ ] `src/modules/{ModuleName}/{ModuleName}.cpp` - VCV wrapper
+### All Modules (Faust and Native C++)
+**New Files:**
+- [ ] `src/modules/{ModuleName}/{ModuleName}.cpp` - Module implementation
 - [ ] `src/modules/{ModuleName}/CMakeLists.txt` - Build config
-- [ ] `src/modules/{ModuleName}/test_config.json` - Test config
+- [ ] `res/{ModuleName}.png` - Faceplate (generate with `just faceplate`)
 
-### Updated Files
-- [ ] `src/plugin.cpp` - extern + addModel
-- [ ] `CMakeLists.txt` - HAS_* definition
+**Updated Files:**
+- [ ] `src/plugin.cpp` - extern + addModel (with HAS_* guard)
+- [ ] `CMakeLists.txt` - HAS_* compile definition
 - [ ] `plugin.json` - module entry
+- [ ] `README.md` - add to module table and update count
+- [ ] `scripts/generate_faceplate.py` - HP width
+
+### Faust Modules Only (additional files)
+**New Files:**
+- [ ] `src/modules/{ModuleName}/{lowercase}.dsp` - Faust DSP code
+- [ ] `src/modules/{ModuleName}/test_config.json` - Test configuration
+
+**Updated Files:**
 - [ ] `test/faust_render.cpp` - factory declaration
 - [ ] `test/dsp_wrappers.cpp` - DSP wrapper
-- [ ] `scripts/generate_faceplate.py` - HP width (for faceplate)
+- [ ] `test/CMakeLists.txt` - module mapping
 
 ## Example Usage
 
@@ -125,10 +158,19 @@ The builder must create/update these files:
 ```
 
 This will:
-1. Save spec to `specs/ChaosSynth.md`
-2. Architect designs the module
-3. Builder creates all files
-4. Verifier/Judge/Dev loop until passing
+1. Create branch `feature/chaossynth`
+2. Save spec to `specs/ChaosSynth.md`
+3. Architect designs the module
+4. Builder creates all files
+5. Verifier/Judge/Dev loop until passing
+
+After module passes verification, you can create a PR:
+```bash
+git add .
+git commit -m "feat: Add ChaosSynth module"
+git push -u origin feature/chaossynth
+gh pr create --title "Add ChaosSynth module" --body "..."
+```
 
 ## Module Types Reference
 

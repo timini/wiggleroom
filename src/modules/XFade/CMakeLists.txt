@@ -1,0 +1,5 @@
+add_library(XFade_Module STATIC XFade.cpp)
+target_link_libraries(XFade_Module PRIVATE RackSDK)
+if(TARGET CommonLib)
+    target_link_libraries(XFade_Module PRIVATE CommonLib)
+endif()

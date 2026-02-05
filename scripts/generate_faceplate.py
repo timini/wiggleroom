@@ -63,6 +63,7 @@ MODULE_HP = {
     "NutShaker": 8,
     "PhysicalChoir": 8,
     "ChaosPad": 16,
+    "XFade": 4,
 }
 
 

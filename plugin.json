@@ -186,6 +186,12 @@
       "name": "Chaos Pad",
       "description": "XY pad controller with chaotic modulation sources",
       "tags": ["Controller", "Low-frequency oscillator", "Noise"]
+    },
+    {
+      "slug": "XFade",
+      "name": "XFade",
+      "description": "CV crossfader utility",
+      "tags": ["Mixer", "Utility"]
     }
   ]
 }
