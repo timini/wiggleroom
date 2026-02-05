@@ -93,6 +93,9 @@ extern Model* modelChaosPad;
 #ifdef HAS_LINKAGE
 extern Model* modelLinkage;
 #endif
+#ifdef HAS_XFADE
+extern Model* modelXFade;
+#endif
 
 void init(Plugin* p) {
     pluginInstance = p;
@@ -183,5 +186,8 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_LINKAGE
     p->addModel(modelLinkage);
+#endif
+#ifdef HAS_XFADE
+    p->addModel(modelXFade);
 #endif
 }

@@ -10,6 +10,22 @@ argument-hint: <ModuleName> [description]
 
 This skill creates a new Faust DSP module through a 3-phase agent cycle.
 
+### Phase 0: Create Feature Branch
+
+**IMPORTANT:** Before making any changes, create a new feature branch for this module:
+
+```bash
+# Create and switch to a new branch for this module
+git checkout -b feature/{module-name-lowercase}
+```
+
+For example, if creating a module called "ChaosSynth":
+```bash
+git checkout -b feature/chaossynth
+```
+
+This ensures all module development happens on an isolated branch, keeping `main` clean and allowing for proper PR review.
+
 ### Phase 1: Save Specification
 
 First, save the module specification to `specs/{ModuleName}.md`:
@@ -125,10 +141,19 @@ The builder must create/update these files:
 ```
 
 This will:
-1. Save spec to `specs/ChaosSynth.md`
-2. Architect designs the module
-3. Builder creates all files
-4. Verifier/Judge/Dev loop until passing
+1. Create branch `feature/chaossynth`
+2. Save spec to `specs/ChaosSynth.md`
+3. Architect designs the module
+4. Builder creates all files
+5. Verifier/Judge/Dev loop until passing
+
+After module passes verification, you can create a PR:
+```bash
+git add .
+git commit -m "feat: Add ChaosSynth module"
+git push -u origin feature/chaossynth
+gh pr create --title "Add ChaosSynth module" --body "..."
+```
 
 ## Module Types Reference
 
