@@ -71,7 +71,8 @@ static float generateLFOWave2(int channel, float phase) {
 // Simple 2-input truth table (4 states)
 struct TruthTable2 {
     std::array<uint8_t, 4> mapping = {0, 1, 2, 3};  // Default: pass-through
-    std::array<uint8_t, 4> undoMapping = {0, 1, 2, 3};
+    std::vector<std::array<uint8_t, 4>> undoHistory;
+    std::vector<std::array<uint8_t, 4>> redoHistory;
     std::mt19937 rng{std::random_device{}()};
 
     void randomize() {
@@ -92,11 +93,24 @@ struct TruthTable2 {
     }
 
     void pushUndo() {
-        undoMapping = mapping;
+        undoHistory.push_back(mapping);
+        redoHistory.clear();
     }
 
-    void undo() {
-        std::swap(mapping, undoMapping);
+    bool undo() {
+        if (undoHistory.empty()) return false;
+        redoHistory.push_back(mapping);
+        mapping = undoHistory.back();
+        undoHistory.pop_back();
+        return true;
+    }
+
+    bool redo() {
+        if (redoHistory.empty()) return false;
+        undoHistory.push_back(mapping);
+        mapping = redoHistory.back();
+        redoHistory.pop_back();
+        return true;
     }
 
     void toggleBit(int state, int bit) {
@@ -141,6 +155,7 @@ struct Euclogic2 : Module {
         RANDOM_PARAM,
         MUTATE_PARAM,
         UNDO_PARAM,
+        REDO_PARAM,
         ENUMS(STEPS_PARAM, NUM_CHANNELS),
         ENUMS(HITS_PARAM, NUM_CHANNELS),
         ENUMS(QUANT_PARAM, NUM_CHANNELS),
@@ -188,6 +203,7 @@ struct Euclogic2 : Module {
     dsp::SchmittTrigger randomTrigger;
     dsp::SchmittTrigger mutateTrigger;
     dsp::SchmittTrigger undoTrigger;
+    dsp::SchmittTrigger redoTrigger;
 
     float clockPeriod = DEFAULT_CLOCK_PERIOD;
     float timeSinceClock = 0.f;
@@ -216,6 +232,7 @@ struct Euclogic2 : Module {
         configButton(RANDOM_PARAM, "Random");
         configButton(MUTATE_PARAM, "Mutate");
         configButton(UNDO_PARAM, "Undo");
+        configButton(REDO_PARAM, "Redo");
 
         for (int i = 0; i < NUM_CHANNELS; i++) {
             std::string ch = "Ch " + std::to_string(i + 1);
@@ -307,6 +324,9 @@ struct Euclogic2 : Module {
         }
         if (undoTrigger.process(params[UNDO_PARAM].getValue())) {
             truthTable.undo();
+        }
+        if (redoTrigger.process(params[REDO_PARAM].getValue())) {
+            truthTable.redo();
         }
 
         timeSinceClock += dt;
@@ -797,6 +817,7 @@ struct Euclogic2Widget : ModuleWidget {
         addParam(createParamCentered<VCVButton>(mm2px(Vec(col1, yButtons)), module, Euclogic2::RANDOM_PARAM));
         addParam(createParamCentered<VCVButton>(mm2px(Vec(col2, yButtons)), module, Euclogic2::MUTATE_PARAM));
         addParam(createParamCentered<VCVButton>(mm2px(Vec(col3, yButtons)), module, Euclogic2::UNDO_PARAM));
+        addParam(createParamCentered<VCVButton>(mm2px(Vec(col4, yButtons)), module, Euclogic2::REDO_PARAM));
 
         // Outputs row (bottom)
         float yOutputs = 110.f;

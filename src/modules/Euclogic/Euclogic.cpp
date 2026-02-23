@@ -92,6 +92,7 @@ struct Euclogic : Module {
         RANDOM_PARAM,
         MUTATE_PARAM,
         UNDO_PARAM,
+        REDO_PARAM,
         ENUMS(STEPS_PARAM, NUM_CHANNELS),
         ENUMS(HITS_PARAM, NUM_CHANNELS),
         ENUMS(QUANT_PARAM, NUM_CHANNELS),
@@ -139,6 +140,7 @@ struct Euclogic : Module {
     dsp::SchmittTrigger randomTrigger;
     dsp::SchmittTrigger mutateTrigger;
     dsp::SchmittTrigger undoTrigger;
+    dsp::SchmittTrigger redoTrigger;
 
     float clockPeriod = DEFAULT_CLOCK_PERIOD;
     float timeSinceClock = 0.f;
@@ -179,6 +181,7 @@ struct Euclogic : Module {
         configButton(RANDOM_PARAM, "Random");
         configButton(MUTATE_PARAM, "Mutate");
         configButton(UNDO_PARAM, "Undo");
+        configButton(REDO_PARAM, "Redo");
 
         // Per-channel parameters
         for (int i = 0; i < NUM_CHANNELS; i++) {
@@ -269,6 +272,9 @@ struct Euclogic : Module {
         }
         if (undoTrigger.process(params[UNDO_PARAM].getValue())) {
             truthTable.undo();
+        }
+        if (redoTrigger.process(params[REDO_PARAM].getValue())) {
+            truthTable.redo();
         }
 
         // Clock handling - measure period
@@ -832,10 +838,11 @@ struct EuclogicWidget : ModuleWidget {
 
         addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(colBase + 68.f, yMaster)), module, Euclogic::SWING_PARAM));
 
-        // Row 2: Random, Mutate, Undo buttons
-        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 20.f, yMaster2)), module, Euclogic::RANDOM_PARAM));
-        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 44.f, yMaster2)), module, Euclogic::MUTATE_PARAM));
-        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 68.f, yMaster2)), module, Euclogic::UNDO_PARAM));
+        // Row 2: Random, Mutate, Undo, Redo buttons
+        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 8.f, yMaster2)), module, Euclogic::RANDOM_PARAM));
+        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 28.f, yMaster2)), module, Euclogic::MUTATE_PARAM));
+        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 48.f, yMaster2)), module, Euclogic::UNDO_PARAM));
+        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 68.f, yMaster2)), module, Euclogic::REDO_PARAM));
 
         // Row 3: Outputs (Gates + Triggers + LFOs)
         for (int i = 0; i < Euclogic::NUM_CHANNELS; i++) {
