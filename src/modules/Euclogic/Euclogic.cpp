@@ -54,23 +54,6 @@ static const std::vector<std::string> QUANT_LABELS = {
 // Forward declaration
 struct Euclogic;
 
-// Generate LFO waveform from phase [0, 1) - returns [-1, 1]
-// Fixed waveform per channel: Ch1=Sine, Ch2=SawUp, Ch3=SawDown, Ch4=Triangle
-static float generateLFOWave(int channel, float phase) {
-    switch (channel) {
-        case 0:  // Ch1: Sine
-            return std::sin(phase * 2.f * M_PI);
-        case 1:  // Ch2: Saw Up
-            return phase * 2.f - 1.f;
-        case 2:  // Ch3: Saw Down
-            return 1.f - phase * 2.f;
-        case 3:  // Ch4: Triangle
-            return (phase < 0.5f) ? (phase * 4.f - 1.f) : (3.f - phase * 4.f);
-        default:
-            return 0.f;
-    }
-}
-
 // Custom ParamQuantity that limits hits to current steps value
 struct HitsParamQuantity : ParamQuantity {
     int channel = 0;
@@ -432,13 +415,11 @@ struct Euclogic : Module {
             outputs[TRIG_OUTPUT + i].setVoltage(trigPulse[i].process(dt) ? 10.f : 0.f);
             lights[GATE_LIGHT + i].setBrightness(gate ? 1.f : 0.f);
 
-            // LFO output: phase derived from Euclidean pattern position
-            // One complete LFO cycle per pattern length
+            // LFO output: unipolar ramp 0-10V tracking step position
             int steps = engines[i].steps;
             int currentStep = engines[i].currentStep;
             float phase = (steps > 0) ? (float)currentStep / (float)steps : 0.f;
-            float lfoValue = generateLFOWave(i, phase);
-            outputs[LFO_OUTPUT + i].setVoltage(lfoValue * 5.f);  // ±5V bipolar
+            outputs[LFO_OUTPUT + i].setVoltage(phase * 10.f);
         }
 
         // Update LED matrix lights
