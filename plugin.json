@@ -164,6 +164,12 @@
       "tags": ["Clock modulator", "Sequencer"]
     },
     {
+      "slug": "Euclogic3",
+      "name": "Euclogic 3",
+      "description": "3-channel Euclidean rhythm generator with 8-state truth table logic",
+      "tags": ["Clock modulator", "Sequencer"]
+    },
+    {
       "slug": "TetanusCoil",
       "name": "Tetanus Coil",
       "description": "Chaotic oscillator based on coupled nonlinear systems",
