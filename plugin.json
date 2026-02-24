@@ -154,13 +154,13 @@
     {
       "slug": "Euclogic",
       "name": "Euclogic",
-      "description": "Euclidean rhythm generator with logic operations",
+      "description": "4-channel Euclidean rhythm generator with truth table logic and pre-logic gate outputs",
       "tags": ["Clock modulator", "Sequencer"]
     },
     {
       "slug": "Euclogic2",
       "name": "Euclogic 2",
-      "description": "Advanced Euclidean rhythm generator with expanded logic operations",
+      "description": "Compact 2-channel Euclidean rhythm generator with truth table logic and pre-logic gate outputs",
       "tags": ["Clock modulator", "Sequencer"]
     },
     {

@@ -99,6 +99,7 @@ struct Euclogic : Module {
         ENUMS(GATE_OUTPUT, NUM_CHANNELS),
         ENUMS(TRIG_OUTPUT, NUM_CHANNELS),
         ENUMS(LFO_OUTPUT, NUM_CHANNELS),
+        ENUMS(PRE_GATE_OUTPUT, NUM_CHANNELS),  // Pre-logic gate outputs
         OUTPUTS_LEN
     };
 
@@ -149,6 +150,7 @@ struct Euclogic : Module {
     // Current state for display
     std::atomic<uint8_t> currentInputState{0};
     std::atomic<bool> gateStates[NUM_CHANNELS];
+    std::atomic<bool> preGateStates[NUM_CHANNELS];
 
     Euclogic() {
         config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
@@ -202,6 +204,7 @@ struct Euclogic : Module {
             configOutput(GATE_OUTPUT + i, ch + " Gate");
             configOutput(TRIG_OUTPUT + i, ch + " Trigger");
             configOutput(LFO_OUTPUT + i, ch + " LFO");
+            configOutput(PRE_GATE_OUTPUT + i, ch + " Pre-Logic Gate");
         }
 
         configInput(CLOCK_INPUT, "Clock");
@@ -217,6 +220,7 @@ struct Euclogic : Module {
             engines[i].reset();
             quantCounter[i] = 0;
             gateStates[i].store(false);
+            preGateStates[i].store(false);
             prevGateHigh[i] = false;
             retrigGapTimer[i] = 0.f;
         }
@@ -370,6 +374,11 @@ struct Euclogic : Module {
                     }
                 }
 
+                // Store pre-logic gate states for output
+                for (int i = 0; i < NUM_CHANNELS; i++) {
+                    preGateStates[i].store(preLogicStates[i]);
+                }
+
                 // Build input state for truth table
                 uint8_t inputState = (preLogicStates[0] ? 1 : 0) |
                                      (preLogicStates[1] ? 2 : 0) |
@@ -426,6 +435,10 @@ struct Euclogic : Module {
             int currentStep = engines[i].currentStep;
             float phase = (steps > 0) ? (float)currentStep / (float)steps : 0.f;
             outputs[LFO_OUTPUT + i].setVoltage(phase * 10.f);
+
+            // Pre-logic gate output (before truth table)
+            bool preGate = preGateStates[i].load();
+            outputs[PRE_GATE_OUTPUT + i].setVoltage(preGate ? 10.f : 0.f);
         }
 
         // Update LED matrix lights
@@ -824,6 +837,12 @@ struct EuclogicWidget : ModuleWidget {
         addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 28.f, yMaster2)), module, Euclogic::MUTATE_PARAM));
         addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 48.f, yMaster2)), module, Euclogic::UNDO_PARAM));
         addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 68.f, yMaster2)), module, Euclogic::REDO_PARAM));
+
+        // Row: Pre-Logic Outputs (before truth table)
+        float yPreOutputs = yOutputs - 12.f;
+        for (int i = 0; i < Euclogic::NUM_CHANNELS; i++) {
+            addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(colBase + 50.f + i * 11.f, yPreOutputs)), module, Euclogic::PRE_GATE_OUTPUT + i));
+        }
 
         // Row 3: Outputs (Gates + Triggers + LFOs)
         for (int i = 0; i < Euclogic::NUM_CHANNELS; i++) {
