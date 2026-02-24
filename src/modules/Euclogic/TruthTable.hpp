@@ -17,8 +17,9 @@ struct TruthTable {
     // Each state is a 4-bit output mask
     std::array<uint8_t, 16> mapping{};
 
-    // Unlimited undo history
+    // Unlimited undo/redo history
     std::vector<std::array<uint8_t, 16>> undoHistory;
+    std::vector<std::array<uint8_t, 16>> redoHistory;
 
     // RNG for randomization (seeded for deterministic testing)
     std::mt19937 rng;
@@ -83,22 +84,34 @@ struct TruthTable {
         }
     }
 
-    // Save current state to undo history
+    // Save current state to undo history (clears redo stack)
     void pushUndo() {
         undoHistory.push_back(mapping);
+        redoHistory.clear();
     }
 
-    // Restore previous state from undo history
-    bool popUndo() {
+    // Undo last change - saves current state for redo
+    bool undo() {
         if (undoHistory.empty()) return false;
+        redoHistory.push_back(mapping);
         mapping = undoHistory.back();
         undoHistory.pop_back();
         return true;
     }
 
-    // Clear undo history
-    void clearUndo() {
+    // Redo last undone change - saves current state for undo
+    bool redo() {
+        if (redoHistory.empty()) return false;
+        undoHistory.push_back(mapping);
+        mapping = redoHistory.back();
+        redoHistory.pop_back();
+        return true;
+    }
+
+    // Clear all history
+    void clearHistory() {
         undoHistory.clear();
+        redoHistory.clear();
     }
 
     // Randomize entire truth table
@@ -123,11 +136,6 @@ struct TruthTable {
             int bit = bitDist(rng);
             mapping[entry] ^= (1 << bit);
         }
-    }
-
-    // Undo last change
-    void undo() {
-        popUndo();
     }
 
     // Load preset logic functions

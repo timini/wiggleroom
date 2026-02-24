@@ -169,6 +169,9 @@ endif()
 if(Linkage_Module IN_LIST ACTIVE_MODULES)
     target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_LINKAGE=1)
 endif()
+if(XFade_Module IN_LIST ACTIVE_MODULES)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_XFADE=1)
+endif()
 # Set output name without lib prefix
 set_target_properties(${PROJECT_NAME} PROPERTIES
     PREFIX ""
