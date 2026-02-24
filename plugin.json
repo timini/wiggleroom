@@ -130,7 +130,7 @@
     {
       "slug": "ACID9Voice",
       "name": "ACID9 Voice",
-      "description": "Acid synthesizer voice with tri-core morphing oscillator, dual filters, stereo delay with ghost mode, and accent/slide control",
+      "description": "Acid synthesizer voice with tri-core morphing oscillator, dual filters, stereo delay with ghost mode, accent/slide control, and CV inputs for shape, isotope, and decay",
       "tags": ["Synth voice", "Oscillator", "Filter"]
     },
     {
