@@ -55,23 +55,11 @@ static const std::vector<std::string> QUANT_LABELS_2 = {
 // Forward declaration
 struct Euclogic2;
 
-// Generate LFO waveform from phase [0, 1) - returns [-1, 1]
-// Fixed waveform per channel: Ch1=Sine, Ch2=Triangle
-static float generateLFOWave2(int channel, float phase) {
-    switch (channel) {
-        case 0:  // Ch1: Sine
-            return std::sin(phase * 2.f * M_PI);
-        case 1:  // Ch2: Triangle
-            return (phase < 0.5f) ? (phase * 4.f - 1.f) : (3.f - phase * 4.f);
-        default:
-            return 0.f;
-    }
-}
-
 // Simple 2-input truth table (4 states)
 struct TruthTable2 {
     std::array<uint8_t, 4> mapping = {0, 1, 2, 3};  // Default: pass-through
-    std::array<uint8_t, 4> undoMapping = {0, 1, 2, 3};
+    std::vector<std::array<uint8_t, 4>> undoHistory;
+    std::vector<std::array<uint8_t, 4>> redoHistory;
     std::mt19937 rng{std::random_device{}()};
 
     void randomize() {
@@ -92,11 +80,24 @@ struct TruthTable2 {
     }
 
     void pushUndo() {
-        undoMapping = mapping;
+        undoHistory.push_back(mapping);
+        redoHistory.clear();
     }
 
-    void undo() {
-        std::swap(mapping, undoMapping);
+    bool undo() {
+        if (undoHistory.empty()) return false;
+        redoHistory.push_back(mapping);
+        mapping = undoHistory.back();
+        undoHistory.pop_back();
+        return true;
+    }
+
+    bool redo() {
+        if (redoHistory.empty()) return false;
+        undoHistory.push_back(mapping);
+        mapping = redoHistory.back();
+        redoHistory.pop_back();
+        return true;
     }
 
     void toggleBit(int state, int bit) {
@@ -141,6 +142,7 @@ struct Euclogic2 : Module {
         RANDOM_PARAM,
         MUTATE_PARAM,
         UNDO_PARAM,
+        REDO_PARAM,
         ENUMS(STEPS_PARAM, NUM_CHANNELS),
         ENUMS(HITS_PARAM, NUM_CHANNELS),
         ENUMS(QUANT_PARAM, NUM_CHANNELS),
@@ -188,6 +190,7 @@ struct Euclogic2 : Module {
     dsp::SchmittTrigger randomTrigger;
     dsp::SchmittTrigger mutateTrigger;
     dsp::SchmittTrigger undoTrigger;
+    dsp::SchmittTrigger redoTrigger;
 
     float clockPeriod = DEFAULT_CLOCK_PERIOD;
     float timeSinceClock = 0.f;
@@ -216,6 +219,7 @@ struct Euclogic2 : Module {
         configButton(RANDOM_PARAM, "Random");
         configButton(MUTATE_PARAM, "Mutate");
         configButton(UNDO_PARAM, "Undo");
+        configButton(REDO_PARAM, "Redo");
 
         for (int i = 0; i < NUM_CHANNELS; i++) {
             std::string ch = "Ch " + std::to_string(i + 1);
@@ -307,6 +311,9 @@ struct Euclogic2 : Module {
         }
         if (undoTrigger.process(params[UNDO_PARAM].getValue())) {
             truthTable.undo();
+        }
+        if (redoTrigger.process(params[REDO_PARAM].getValue())) {
+            truthTable.redo();
         }
 
         timeSinceClock += dt;
@@ -440,12 +447,11 @@ struct Euclogic2 : Module {
             outputs[TRIG_OUTPUT + i].setVoltage(trigPulse[i].process(dt) ? 10.f : 0.f);
             lights[GATE_LIGHT + i].setBrightness(gate ? 1.f : 0.f);
 
-            // LFO output
+            // LFO output: unipolar ramp 0-10V tracking step position
             int steps = engines[i].steps;
             int currentStep = engines[i].currentStep;
             float phase = (steps > 0) ? (float)currentStep / (float)steps : 0.f;
-            float lfoValue = generateLFOWave2(i, phase);
-            outputs[LFO_OUTPUT + i].setVoltage(lfoValue * 5.f);
+            outputs[LFO_OUTPUT + i].setVoltage(phase * 10.f);
         }
 
         // Update LED matrix lights (4 states × 2 outputs)
@@ -797,6 +803,7 @@ struct Euclogic2Widget : ModuleWidget {
         addParam(createParamCentered<VCVButton>(mm2px(Vec(col1, yButtons)), module, Euclogic2::RANDOM_PARAM));
         addParam(createParamCentered<VCVButton>(mm2px(Vec(col2, yButtons)), module, Euclogic2::MUTATE_PARAM));
         addParam(createParamCentered<VCVButton>(mm2px(Vec(col3, yButtons)), module, Euclogic2::UNDO_PARAM));
+        addParam(createParamCentered<VCVButton>(mm2px(Vec(col4, yButtons)), module, Euclogic2::REDO_PARAM));
 
         // Outputs row (bottom)
         float yOutputs = 110.f;

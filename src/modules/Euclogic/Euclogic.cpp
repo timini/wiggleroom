@@ -54,23 +54,6 @@ static const std::vector<std::string> QUANT_LABELS = {
 // Forward declaration
 struct Euclogic;
 
-// Generate LFO waveform from phase [0, 1) - returns [-1, 1]
-// Fixed waveform per channel: Ch1=Sine, Ch2=SawUp, Ch3=SawDown, Ch4=Triangle
-static float generateLFOWave(int channel, float phase) {
-    switch (channel) {
-        case 0:  // Ch1: Sine
-            return std::sin(phase * 2.f * M_PI);
-        case 1:  // Ch2: Saw Up
-            return phase * 2.f - 1.f;
-        case 2:  // Ch3: Saw Down
-            return 1.f - phase * 2.f;
-        case 3:  // Ch4: Triangle
-            return (phase < 0.5f) ? (phase * 4.f - 1.f) : (3.f - phase * 4.f);
-        default:
-            return 0.f;
-    }
-}
-
 // Custom ParamQuantity that limits hits to current steps value
 struct HitsParamQuantity : ParamQuantity {
     int channel = 0;
@@ -92,6 +75,7 @@ struct Euclogic : Module {
         RANDOM_PARAM,
         MUTATE_PARAM,
         UNDO_PARAM,
+        REDO_PARAM,
         ENUMS(STEPS_PARAM, NUM_CHANNELS),
         ENUMS(HITS_PARAM, NUM_CHANNELS),
         ENUMS(QUANT_PARAM, NUM_CHANNELS),
@@ -139,6 +123,7 @@ struct Euclogic : Module {
     dsp::SchmittTrigger randomTrigger;
     dsp::SchmittTrigger mutateTrigger;
     dsp::SchmittTrigger undoTrigger;
+    dsp::SchmittTrigger redoTrigger;
 
     float clockPeriod = DEFAULT_CLOCK_PERIOD;
     float timeSinceClock = 0.f;
@@ -179,6 +164,7 @@ struct Euclogic : Module {
         configButton(RANDOM_PARAM, "Random");
         configButton(MUTATE_PARAM, "Mutate");
         configButton(UNDO_PARAM, "Undo");
+        configButton(REDO_PARAM, "Redo");
 
         // Per-channel parameters
         for (int i = 0; i < NUM_CHANNELS; i++) {
@@ -269,6 +255,9 @@ struct Euclogic : Module {
         }
         if (undoTrigger.process(params[UNDO_PARAM].getValue())) {
             truthTable.undo();
+        }
+        if (redoTrigger.process(params[REDO_PARAM].getValue())) {
+            truthTable.redo();
         }
 
         // Clock handling - measure period
@@ -432,13 +421,11 @@ struct Euclogic : Module {
             outputs[TRIG_OUTPUT + i].setVoltage(trigPulse[i].process(dt) ? 10.f : 0.f);
             lights[GATE_LIGHT + i].setBrightness(gate ? 1.f : 0.f);
 
-            // LFO output: phase derived from Euclidean pattern position
-            // One complete LFO cycle per pattern length
+            // LFO output: unipolar ramp 0-10V tracking step position
             int steps = engines[i].steps;
             int currentStep = engines[i].currentStep;
             float phase = (steps > 0) ? (float)currentStep / (float)steps : 0.f;
-            float lfoValue = generateLFOWave(i, phase);
-            outputs[LFO_OUTPUT + i].setVoltage(lfoValue * 5.f);  // ±5V bipolar
+            outputs[LFO_OUTPUT + i].setVoltage(phase * 10.f);
         }
 
         // Update LED matrix lights
@@ -832,10 +819,11 @@ struct EuclogicWidget : ModuleWidget {
 
         addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(colBase + 68.f, yMaster)), module, Euclogic::SWING_PARAM));
 
-        // Row 2: Random, Mutate, Undo buttons
-        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 20.f, yMaster2)), module, Euclogic::RANDOM_PARAM));
-        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 44.f, yMaster2)), module, Euclogic::MUTATE_PARAM));
-        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 68.f, yMaster2)), module, Euclogic::UNDO_PARAM));
+        // Row 2: Random, Mutate, Undo, Redo buttons
+        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 8.f, yMaster2)), module, Euclogic::RANDOM_PARAM));
+        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 28.f, yMaster2)), module, Euclogic::MUTATE_PARAM));
+        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 48.f, yMaster2)), module, Euclogic::UNDO_PARAM));
+        addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 68.f, yMaster2)), module, Euclogic::REDO_PARAM));
 
         // Row 3: Outputs (Gates + Triggers + LFOs)
         for (int i = 0; i < Euclogic::NUM_CHANNELS; i++) {
