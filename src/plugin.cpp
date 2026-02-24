@@ -27,6 +27,9 @@ extern Model* modelEuclogic;
 #ifdef HAS_EUCLOGIC2
 extern Model* modelEuclogic2;
 #endif
+#ifdef HAS_EUCLOGIC3
+extern Model* modelEuclogic3;
+#endif
 #ifdef HAS_LADDERLPF
 extern Model* modelLadderLPF;
 #endif
@@ -120,6 +123,9 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_EUCLOGIC2
     p->addModel(modelEuclogic2);
+#endif
+#ifdef HAS_EUCLOGIC3
+    p->addModel(modelEuclogic3);
 #endif
 #ifdef HAS_LADDERLPF
     p->addModel(modelLadderLPF);
