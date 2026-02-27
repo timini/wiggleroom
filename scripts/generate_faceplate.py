@@ -64,6 +64,7 @@ MODULE_HP = {
     "PhysicalChoir": 8,
     "ChaosPad": 16,
     "XFade": 4,
+    "SpectraHenge": 16,
 }
 
 

@@ -198,6 +198,12 @@
       "name": "XFade",
       "description": "CV crossfader utility",
       "tags": ["Mixer", "Utility"]
+    },
+    {
+      "slug": "SpectraHenge",
+      "name": "SpectraHenge",
+      "description": "4-channel spatial/spectral mixer - place audio on X/Y grid with SVF filter morphing and equal-power panning",
+      "tags": ["Mixer", "Filter", "Panning", "Effect", "Visual"]
     }
   ]
 }

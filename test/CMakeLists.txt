@@ -31,6 +31,7 @@ set(FAUST_MODULES
     PhysicalChoir
     ChaosPad
     Linkage
+    SpectraHenge
 )
 
 # Generate Faust headers for the test executable
@@ -100,6 +101,9 @@ foreach(MODULE ${FAUST_MODULES})
     elseif(MODULE STREQUAL "Linkage")
         set(DSP_FILE "linkage.dsp")
         set(HPP_FILE "linkage.hpp")
+    elseif(MODULE STREQUAL "SpectraHenge")
+        set(DSP_FILE "spectra_henge.dsp")
+        set(HPP_FILE "spectra_henge.hpp")
     endif()
 
     set(DSP_PATH "${CMAKE_SOURCE_DIR}/src/modules/${MODULE}/${DSP_FILE}")
