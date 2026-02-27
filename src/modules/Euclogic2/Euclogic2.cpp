@@ -460,7 +460,7 @@ struct Euclogic2 : Module {
             // LFO output: unipolar ramp 0-10V tracking step position
             int steps = engines[i].steps;
             int currentStep = engines[i].currentStep;
-            float phase = (steps > 0) ? (float)currentStep / (float)steps : 0.f;
+            float phase = (steps > 1) ? (float)currentStep / (float)(steps - 1) : 0.f;
             outputs[LFO_OUTPUT + i].setVoltage(phase * 10.f);
 
             // Pre-logic gate output (before truth table)
