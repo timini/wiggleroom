@@ -166,7 +166,7 @@
     {
       "slug": "Euclogic3",
       "name": "Euclogic 3",
-      "description": "3-channel Euclidean rhythm generator with 8-state truth table logic",
+      "description": "3-channel Euclidean rhythm generator with 8-state truth table logic and pre-logic gate outputs",
       "tags": ["Clock modulator", "Sequencer"]
     },
     {
