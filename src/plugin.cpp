@@ -99,6 +99,9 @@ extern Model* modelLinkage;
 #ifdef HAS_XFADE
 extern Model* modelXFade;
 #endif
+#ifdef HAS_SPECTRAHENGE
+extern Model* modelSpectraHenge;
+#endif
 
 void init(Plugin* p) {
     pluginInstance = p;
@@ -195,5 +198,8 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_XFADE
     p->addModel(modelXFade);
+#endif
+#ifdef HAS_SPECTRAHENGE
+    p->addModel(modelSpectraHenge);
 #endif
 }

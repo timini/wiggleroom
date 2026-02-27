@@ -221,3 +221,12 @@ std::unique_ptr<AbstractDSP> createChaosPad() {
 std::unique_ptr<AbstractDSP> createLinkage() {
     return std::make_unique<DSPWrapper<FaustGenerated::NS_Linkage::VCVRackDSP>>();
 }
+
+#undef __mydsp_H__
+
+// ==== SpectraHenge ====
+#define FAUST_MODULE_NAME SpectraHenge
+#include "spectra_henge.hpp"
+std::unique_ptr<AbstractDSP> createSpectraHenge() {
+    return std::make_unique<DSPWrapper<FaustGenerated::NS_SpectraHenge::VCVRackDSP>>();
+}
