@@ -204,6 +204,12 @@
       "name": "SpectraHenge",
       "description": "4-channel spatial/spectral mixer - place audio on X/Y grid with SVF filter morphing and equal-power panning",
       "tags": ["Mixer", "Filter", "Panning", "Effect", "Visual"]
+    },
+    {
+      "slug": "PreFlightClock",
+      "name": "PreFlight Clock",
+      "description": "Master clock with Ableton-style count-in sequence - fires reset, plays 4 metronome beeps, then starts run on the downbeat",
+      "tags": ["Clock modulator", "Utility"]
     }
   ]
 }

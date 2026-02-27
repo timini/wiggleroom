@@ -65,6 +65,7 @@ MODULE_HP = {
     "ChaosPad": 16,
     "XFade": 4,
     "SpectraHenge": 16,
+    "PreFlightClock": 10,
 }
 
 

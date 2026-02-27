@@ -1,0 +1,6 @@
+{
+  "module_type": "utility",
+  "skip_audio_tests": true,
+  "skip_reason": "Clock/utility module - outputs are gates/triggers, not audio",
+  "description": "Master clock with count-in sequence, multipliers, and dividers"
+}
