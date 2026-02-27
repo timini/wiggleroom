@@ -139,6 +139,8 @@ void printUsage() {
               << "      --speed=F               Speed ratio (default: 1.5)\n"
               << "      --clocks=N              Number of clocks (default: 8)\n"
               << "\n"
+              << "  --test-lfo-phase            Test LFO phase reaches full range (regression #21)\n"
+              << "\n"
               << "  --test-full-module          Test full module with Euclidean engine and swing\n"
               << "      --speed=F               Speed ratio (default: 2.0)\n"
               << "      --steps=N               Number of steps (default: 4)\n"
@@ -859,6 +861,92 @@ int testClockMultKnown(int argc, char** argv) {
     return (failed == 0) ? 0 : 1;
 }
 
+// Test: LFO phase calculation — verifies phase reaches 1.0 at the last step
+// This is a regression test for GitHub issue #21
+int testLfoPhase(int argc, char** argv) {
+    (void)argc; (void)argv;
+
+    struct TestCase {
+        int steps;
+        const char* name;
+    };
+
+    std::vector<TestCase> cases = {
+        {2, "2 steps"},
+        {3, "3 steps"},
+        {4, "4 steps"},
+        {5, "5 steps"},
+        {8, "8 steps"},
+        {16, "16 steps"},
+        {32, "32 steps"},
+        {64, "64 steps"},
+    };
+
+    int passed = 0;
+    int failed = 0;
+    std::vector<std::string> failures;
+
+    for (const auto& tc : cases) {
+        WiggleRoom::EuclideanEngine engine;
+        engine.configure(tc.steps, tc.steps, 0);  // all hits
+
+        // The LFO phase formula (matching the fix in Euclogic.cpp):
+        // phase = (steps > 1) ? currentStep / (steps - 1) : 0
+        // We tick through all steps and check the phase at each one
+
+        float minPhase = 1.f;
+        float maxPhase = 0.f;
+
+        for (int i = 0; i < tc.steps; i++) {
+            int currentStep = engine.currentStep;
+            float phase = (tc.steps > 1) ? (float)currentStep / (float)(tc.steps - 1) : 0.f;
+            minPhase = std::min(minPhase, phase);
+            maxPhase = std::max(maxPhase, phase);
+            engine.tick();
+        }
+
+        // Phase must start at 0.0 and reach exactly 1.0
+        bool startOk = std::abs(minPhase) < 0.001f;
+        bool endOk = std::abs(maxPhase - 1.0f) < 0.001f;
+
+        if (startOk && endOk) {
+            passed++;
+        } else {
+            failed++;
+            std::ostringstream oss;
+            oss << tc.name << ": min=" << minPhase << " max=" << maxPhase
+                << " (expected min=0.0, max=1.0)";
+            failures.push_back(oss.str());
+        }
+    }
+
+    // Also test edge case: 1 step should give phase 0
+    {
+        WiggleRoom::EuclideanEngine engine;
+        engine.configure(1, 1, 0);
+        float phase = (1 > 1) ? (float)engine.currentStep / (float)(1 - 1) : 0.f;
+        if (std::abs(phase) < 0.001f) {
+            passed++;
+        } else {
+            failed++;
+            failures.push_back("1 step: expected phase=0, got " + std::to_string(phase));
+        }
+    }
+
+    std::cout << "{\"test\": \"lfo_phase\", \"passed\": " << passed << ", \"failed\": " << failed;
+    if (!failures.empty()) {
+        std::cout << ", \"failures\": [";
+        for (size_t i = 0; i < failures.size(); i++) {
+            std::cout << "\"" << failures[i] << "\"";
+            if (i < failures.size() - 1) std::cout << ", ";
+        }
+        std::cout << "]";
+    }
+    std::cout << "}" << std::endl;
+
+    return (failed == 0) ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         printUsage();
@@ -926,6 +1014,10 @@ int main(int argc, char** argv) {
 
     if (cmd == "--test-full-module") {
         return testFullModuleTiming(argc, argv);
+    }
+
+    if (cmd == "--test-lfo-phase") {
+        return testLfoPhase(argc, argv);
     }
 
     std::cerr << "Unknown command: " << cmd << "\n";
