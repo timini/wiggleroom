@@ -74,18 +74,19 @@ gain(1) = min(1.0, 0.5 + sin(position * ma.PI));
 gain(2) = position;
 gain(3) = position * position;
 
-// Q factor based on decay
-q = 40 * decay;
+// Q factor based on decay (reduced max Q to prevent resonant buildup)
+q = 25 * decay;
 
 // Safe resonant bandpass
 safe_resonbp(freq, q_val, g) = fi.resonbp(freq, max(1, q_val), g);
 
-// The modal bank: 4 parallel resonators
+// The modal bank: 4 parallel resonators with normalized gains
+// Total gain budget ~1.0 to prevent summation overload
 block_sound = mallet <:
-    safe_resonbp(f(0), q, gain(0)),
-    safe_resonbp(f(1), q * 0.8, gain(1) * 0.7),
-    safe_resonbp(f(2), q * 0.6, gain(2) * 0.5),
-    safe_resonbp(f(3), q * 0.4, gain(3) * 0.3)
+    safe_resonbp(f(0), q, gain(0) * 0.4),
+    safe_resonbp(f(1), q * 0.8, gain(1) * 0.28),
+    safe_resonbp(f(2), q * 0.6, gain(2) * 0.2),
+    safe_resonbp(f(3), q * 0.4, gain(3) * 0.12)
     :> _;
 
 // ==========================================================
@@ -96,8 +97,8 @@ block_sound = mallet <:
 tube_freq = freq_base * tube_len;
 tube_samps = max(2, min(4000, ma.SR / tube_freq));
 
-// Simple waveguide: delay with lowpass feedback
-tube_algo = (+ : de.fdelay(4096, tube_samps) : fi.lowpass(1, 3000)) ~ *(0.9);
+// Simple waveguide: delay with lowpass feedback (reduced feedback to prevent energy buildup)
+tube_algo = (+ : de.fdelay(4096, tube_samps) : fi.lowpass(1, 3000)) ~ *(0.85);
 
 // ==========================================================
 // OUTPUT
