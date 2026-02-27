@@ -149,6 +149,27 @@ class TestEuclideanRhythms:
 
 
 # =============================================================================
+# LFO Phase Tests (Regression: GitHub Issue #21)
+# =============================================================================
+
+class TestLfoPhase:
+    """Test LFO phase calculation reaches full 0-10V range."""
+
+    def test_lfo_phase_full_range(self):
+        """LFO phase should reach 1.0 (10V) at the last step for all step counts."""
+        result = run_test(["--test-lfo-phase"])
+        assert result["failed"] == 0, f"LFO phase failures: {result.get('failures', [])}"
+
+    def test_lfo_phase_5_steps(self):
+        """Specific regression: 5 steps should reach 10V (was only reaching 8V)."""
+        # This is the exact scenario from issue #21
+        result = run_test(["--test-lfo-phase"])
+        assert result["failed"] == 0, (
+            f"LFO phase regression (issue #21): {result.get('failures', [])}"
+        )
+
+
+# =============================================================================
 # Truth Table Tests
 # =============================================================================
 
@@ -281,6 +302,7 @@ def run_all_tests():
     """Run all tests and report results."""
     test_classes = [
         TestEuclideanRhythms,
+        TestLfoPhase,
         TestTruthTable,
         TestProbabilityGate,
     ]
