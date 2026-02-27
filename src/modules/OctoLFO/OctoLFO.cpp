@@ -128,7 +128,7 @@ struct OctoLFO : Module {
 
     enum ParamId {
         MASTER_RATE_PARAM,  // Master mult/div
-        BIPOLAR_PARAM,      // Bipolar (0) / Unipolar (1) switch
+        ENUMS(BIPOLAR_PARAM, NUM_LFOS),  // Per-LFO Bipolar (0) / Unipolar (1) switch
         ENUMS(RATE_PARAM, NUM_LFOS),      // Per-LFO mult/div
         ENUMS(WAVE_PARAM, NUM_LFOS),      // Wave type selector
         ENUMS(SKEW_PARAM, NUM_LFOS),      // Time warping
@@ -174,11 +174,11 @@ struct OctoLFO : Module {
         configSwitch(MASTER_RATE_PARAM, 0.f, MASTER_RATE_VALUES.size() - 1, 11.f,
             "Master Rate", MASTER_RATE_LABELS);
 
-        // Bipolar/Unipolar switch (0 = bipolar ±5V, 1 = unipolar 0-10V)
-        configSwitch(BIPOLAR_PARAM, 0.f, 1.f, 0.f, "Output Mode", {"Bipolar (±5V)", "Unipolar (0-10V)"});
-
         for (int i = 0; i < NUM_LFOS; i++) {
             std::string label = "LFO " + std::to_string(i + 1);
+
+            // Per-LFO Bipolar/Unipolar switch (0 = bipolar ±5V, 1 = unipolar 0-10V)
+            configSwitch(BIPOLAR_PARAM + i, 0.f, 1.f, 0.f, label + " Output Mode", {"Bipolar (±5V)", "Unipolar (0-10V)"});
 
             // Per-LFO rate: snapped to musical divisions/multiplications
             // Default to index 11 which is "x1" (array includes prime/odd divisions)
@@ -283,9 +283,6 @@ struct OctoLFO : Module {
         masterRateIndex = clamp(masterRateIndex, 0, (int)MASTER_RATE_VALUES.size() - 1);
         float masterRate = MASTER_RATE_VALUES[masterRateIndex];
 
-        // Output mode: 0 = bipolar (±5V), 1 = unipolar (0-10V)
-        bool unipolar = params[BIPOLAR_PARAM].getValue() > 0.5f;
-
         // Update scope downsample counter
         scopeDownsample++;
         bool updateScope = (scopeDownsample >= SCOPE_DOWNSAMPLE_RATE);
@@ -318,6 +315,9 @@ struct OctoLFO : Module {
 
             output = applyFold(output, foldIndex);
             output = clamp(output, -1.f, 1.f);
+
+            // Per-LFO output mode: 0 = bipolar (±5V), 1 = unipolar (0-10V)
+            bool unipolar = params[BIPOLAR_PARAM + i].getValue() > 0.5f;
 
             // Apply output mode (after folding to preserve wave shape)
             float voltage;
@@ -433,11 +433,10 @@ struct OctoLFOWidget : ModuleWidget {
         // Use mm2px for consistent positioning (VCV uses mm internally)
         float panelWidth = box.size.x;  // 101.6mm for 20HP
 
-        // Top section: Clock input, Reset, Master rate, Bipolar switch
+        // Top section: Clock input, Reset, Master rate
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(8, 12)), module, OctoLFO::CLOCK_INPUT));
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(20, 12)), module, OctoLFO::RESET_INPUT));
         addParam(createParamCentered<RoundBlackKnob>(mm2px(Vec(35, 12)), module, OctoLFO::MASTER_RATE_PARAM));
-        addParam(createParamCentered<CKSS>(mm2px(Vec(50, 12)), module, OctoLFO::BIPOLAR_PARAM));
         addChild(createLightCentered<SmallLight<GreenLight>>(mm2px(Vec(58, 8)), module, OctoLFO::CLOCK_LIGHT));
 
         // LFO rows - 8 rows from y=22mm to y=118mm (96mm / 8 = 12mm per row)
@@ -451,6 +450,7 @@ struct OctoLFOWidget : ModuleWidget {
         float colCurve = 38.f;
         float colFold = 48.f;
         float colScope = 62.f;  // Center of scope
+        float colBipolar = 82.f;  // Bipolar/Unipolar switch per LFO
         float colOut = 92.f;
 
         for (int i = 0; i < OctoLFO::NUM_LFOS; i++) {
@@ -478,6 +478,9 @@ struct OctoLFOWidget : ModuleWidget {
             scope->box.size = Vec(mm2px(18), mm2px(8));
             scope->box.pos = mm2px(Vec(colScope - 9, y - 4));
             addChild(scope);
+
+            // Bipolar/Unipolar switch
+            addParam(createParamCentered<CKSS>(mm2px(Vec(colBipolar, y)), module, OctoLFO::BIPOLAR_PARAM + i));
 
             // Output jack
             addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(colOut, y)), module, OctoLFO::LFO_OUTPUT + i));
