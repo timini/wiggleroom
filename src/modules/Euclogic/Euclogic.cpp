@@ -3,75 +3,31 @@
  * 4-channel Euclidean drum sequencer with truth table logic
  *
  * Signal flow:
- *   Clock → Master Speed → 4x Euclidean Engines → Prob A → Truth Table → Prob B → Outputs
+ *   Clock -> Master Speed -> 4x Euclidean Engines -> Prob A -> Truth Table -> Prob B -> Outputs
  *
  * Features:
  *   - 4 independent Euclidean rhythm generators
  *   - Per-channel: Steps (1-64), Hits (0-Steps), Quant ratio
- *   - Probability A: Pre-logic probability gate (×4)
+ *   - Probability A: Pre-logic probability gate (x4)
  *   - Truth Table: 16-state logic engine with LED matrix display
- *   - Probability B: Post-logic probability gate (×4)
+ *   - Probability B: Post-logic probability gate (x4)
  *   - Random/Mutate/Undo buttons for truth table
- *   - 4x Gate + 4x Trigger outputs
+ *   - 4x Gate + 4x Trigger + 4x LFO + 4x Pre-Gate outputs
  ******************************************************************************/
 
-#include "rack.hpp"
-#include "DSP.hpp"
+#include "EuclogicCore.hpp"
 #include "ImagePanel.hpp"
-#include "EuclideanEngine.hpp"
-#include "TruthTable.hpp"
-#include "ProbabilityGate.hpp"
-#include <atomic>
-
-using namespace rack;
 
 extern Plugin* pluginInstance;
 
 namespace WiggleRoom {
 
-// Speed ratio values (/16 to x16)
-static const std::vector<float> SPEED_RATIOS = {
-    1.f/16, 1.f/12, 1.f/8, 1.f/6, 1.f/4, 1.f/3, 1.f/2, 2.f/3,
-    1.f,  // x1 (index 8)
-    3.f/2, 2.f, 3.f, 4.f, 6.f, 8.f, 12.f, 16.f
-};
-
-static const std::vector<std::string> SPEED_LABELS = {
-    "/16", "/12", "/8", "/6", "/4", "/3", "/2", "/1.5",
-    "x1",
-    "x1.5", "x2", "x3", "x4", "x6", "x8", "x12", "x16"
-};
-
-// Quant ratio values (per-channel clock division)
-static const std::vector<float> QUANT_RATIOS = {
-    1.f, 1.f/2, 1.f/4, 1.f/8, 1.f/16
-};
-
-static const std::vector<std::string> QUANT_LABELS = {
-    "x1", "/2", "/4", "/8", "/16"
-};
-
-// Forward declaration
-struct Euclogic;
-
-// Custom ParamQuantity that limits hits to current steps value
-struct HitsParamQuantity : ParamQuantity {
-    int channel = 0;
-    float getMaxValue() override;
-    void setValue(float value) override;
-};
-
 struct Euclogic : Module {
     static constexpr int NUM_CHANNELS = 4;
-    static constexpr float TRIGGER_PULSE_DURATION = 1e-3f;  // 1ms
-    static constexpr float RETRIG_GAP_DURATION = 0.5e-3f;   // 0.5ms gap for retrigger
-    static constexpr float SCHMITT_LOW = 0.1f;
-    static constexpr float SCHMITT_HIGH = 1.0f;
-    static constexpr float DEFAULT_CLOCK_PERIOD = 0.5f;  // 120 BPM
 
     enum ParamId {
         MASTER_SPEED_PARAM,
-        SWING_PARAM,  // Swing amount: 50% = even, 66% = triplet shuffle
+        SWING_PARAM,
         RANDOM_PARAM,
         MUTATE_PARAM,
         UNDO_PARAM,
@@ -81,7 +37,7 @@ struct Euclogic : Module {
         ENUMS(QUANT_PARAM, NUM_CHANNELS),
         ENUMS(PROB_A_PARAM, NUM_CHANNELS),
         ENUMS(PROB_B_PARAM, NUM_CHANNELS),
-        ENUMS(RETRIG_PARAM, NUM_CHANNELS),  // Per-channel retrigger switch
+        ENUMS(RETRIG_PARAM, NUM_CHANNELS),
         PARAMS_LEN
     };
 
@@ -99,7 +55,7 @@ struct Euclogic : Module {
         ENUMS(GATE_OUTPUT, NUM_CHANNELS),
         ENUMS(TRIG_OUTPUT, NUM_CHANNELS),
         ENUMS(LFO_OUTPUT, NUM_CHANNELS),
-        ENUMS(PRE_GATE_OUTPUT, NUM_CHANNELS),  // Pre-logic gate outputs
+        ENUMS(PRE_GATE_OUTPUT, NUM_CHANNELS),
         OUTPUTS_LEN
     };
 
@@ -107,412 +63,45 @@ struct Euclogic : Module {
         CLOCK_LIGHT,
         RUN_LIGHT,
         ENUMS(GATE_LIGHT, NUM_CHANNELS),
-        ENUMS(LED_MATRIX_LIGHT, 64),  // 16 input states × 4 output bits
+        ENUMS(LED_MATRIX_LIGHT, 64),  // 16 input states x 4 output bits
         LIGHTS_LEN
     };
 
-    // Core components
-    EuclideanEngine engines[NUM_CHANNELS];
-    ProbabilityGate probA[NUM_CHANNELS];
-    ProbabilityGate probB[NUM_CHANNELS];
-    TruthTable truthTable;
-
-    // Clock state
-    dsp::SchmittTrigger clockTrigger;
-    dsp::SchmittTrigger resetTrigger;
-    dsp::SchmittTrigger runTrigger;
-    dsp::SchmittTrigger randomTrigger;
-    dsp::SchmittTrigger mutateTrigger;
-    dsp::SchmittTrigger undoTrigger;
-    dsp::SchmittTrigger redoTrigger;
-
-    float clockPeriod = DEFAULT_CLOCK_PERIOD;
-    float timeSinceClock = 0.f;
-    float internalTickPhase = 0.f;  // Phase accumulator for internal tick timing
-    bool clockLocked = false;
-    bool running = true;
-    bool hadFirstTick = false;  // Track if we've had first tick
-    int prevSpeedIdx = 8;  // Track previous speed to detect changes (8 = x1)
-    bool swingLong = true;  // Alternates between long and short intervals for swing
-
-    // Per-channel clock division counters
-    int quantCounter[NUM_CHANNELS] = {0};
-
-    // Trigger pulse generators
-    dsp::PulseGenerator trigPulse[NUM_CHANNELS];
-
-    // Previous gate states for retrigger detection
-    bool prevGateHigh[NUM_CHANNELS] = {false};
-
-    // Retrigger gap timer - forces gate low briefly between consecutive hits
-    float retrigGapTimer[NUM_CHANNELS] = {0.f};
-
-    // Current state for display
-    std::atomic<uint8_t> currentInputState{0};
-    std::atomic<bool> gateStates[NUM_CHANNELS];
-    std::atomic<bool> preGateStates[NUM_CHANNELS];
+    EuclogicCore<4, true> core;
 
     Euclogic() {
         config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
-
-        // Master speed
-        configSwitch(MASTER_SPEED_PARAM, 0.f, SPEED_RATIOS.size() - 1, 8.f,
-            "Master Speed", SPEED_LABELS);
-
-        // Swing amount: 50% = even timing, 66% = triplet shuffle, 75% = hard swing
-        configParam(SWING_PARAM, 50.f, 75.f, 50.f, "Swing", "%");
-
-        // Buttons
-        configButton(RANDOM_PARAM, "Random");
-        configButton(MUTATE_PARAM, "Mutate");
-        configButton(UNDO_PARAM, "Undo");
-        configButton(REDO_PARAM, "Redo");
-
-        // Per-channel parameters
-        for (int i = 0; i < NUM_CHANNELS; i++) {
-            std::string ch = "Ch " + std::to_string(i + 1);
-
-            configParam(STEPS_PARAM + i, 1.f, 64.f, 16.f, ch + " Steps");
-            paramQuantities[STEPS_PARAM + i]->snapEnabled = true;
-
-            configParam(HITS_PARAM + i, 0.f, 64.f, 8.f, ch + " Hits");
-            paramQuantities[HITS_PARAM + i]->snapEnabled = true;
-            // Replace with custom quantity that limits to steps
-            HitsParamQuantity* hitsQ = new HitsParamQuantity();
-            hitsQ->channel = i;
-            hitsQ->module = this;
-            hitsQ->paramId = HITS_PARAM + i;
-            hitsQ->minValue = 0.f;
-            hitsQ->maxValue = 64.f;
-            hitsQ->defaultValue = 8.f;
-            hitsQ->name = ch + " Hits";
-            hitsQ->snapEnabled = true;
-            delete paramQuantities[HITS_PARAM + i];
-            paramQuantities[HITS_PARAM + i] = hitsQ;
-
-            configSwitch(QUANT_PARAM + i, 0.f, QUANT_RATIOS.size() - 1, 0.f,
-                ch + " Quant", QUANT_LABELS);
-
-            configParam(PROB_A_PARAM + i, 0.f, 1.f, 1.f, ch + " Prob A", "%", 0.f, 100.f);
-            configParam(PROB_B_PARAM + i, 0.f, 1.f, 1.f, ch + " Prob B", "%", 0.f, 100.f);
-            configSwitch(RETRIG_PARAM + i, 0.f, 1.f, 1.f, ch + " Retrigger", {"Off", "On"});
-
-            configInput(HITS_CV_INPUT + i, ch + " Hits CV");
-            configInput(PROB_A_CV_INPUT + i, ch + " Prob A CV");
-            configInput(PROB_B_CV_INPUT + i, ch + " Prob B CV");
-
-            configOutput(GATE_OUTPUT + i, ch + " Gate");
-            configOutput(TRIG_OUTPUT + i, ch + " Trigger");
-            configOutput(LFO_OUTPUT + i, ch + " LFO");
-            configOutput(PRE_GATE_OUTPUT + i, ch + " Pre-Logic Gate");
-        }
-
-        configInput(CLOCK_INPUT, "Clock");
-        configInput(RESET_INPUT, "Reset");
-        configInput(RUN_INPUT, "Run");
-
-        configLight(CLOCK_LIGHT, "Clock Lock");
-        configLight(RUN_LIGHT, "Running");
+        core.configureParams(this);
     }
 
     void onReset() override {
-        for (int i = 0; i < NUM_CHANNELS; i++) {
-            engines[i].reset();
-            quantCounter[i] = 0;
-            gateStates[i].store(false);
-            preGateStates[i].store(false);
-            prevGateHigh[i] = false;
-            retrigGapTimer[i] = 0.f;
-        }
-        timeSinceClock = 0.f;
-        internalTickPhase = 0.f;
-        clockPeriod = DEFAULT_CLOCK_PERIOD;
-        running = true;
-        hadFirstTick = false;
-        prevSpeedIdx = 8;  // x1
-        swingLong = true;
-        currentInputState.store(0);
+        core.resetState();
     }
 
     void process(const ProcessArgs& args) override {
-        float dt = args.sampleTime;
-
-        // Handle reset
-        if (resetTrigger.process(inputs[RESET_INPUT].getVoltage(), SCHMITT_LOW, SCHMITT_HIGH)) {
-            onReset();
-        }
-
-        // Handle run gate
-        if (inputs[RUN_INPUT].isConnected()) {
-            running = inputs[RUN_INPUT].getVoltage() > SCHMITT_HIGH;
-        } else {
-            running = true;
-        }
-        lights[RUN_LIGHT].setBrightness(running ? 1.f : 0.2f);
-
-        // Handle buttons
-        if (randomTrigger.process(params[RANDOM_PARAM].getValue())) {
-            truthTable.randomize();
-        }
-        if (mutateTrigger.process(params[MUTATE_PARAM].getValue())) {
-            truthTable.mutate();
-        }
-        if (undoTrigger.process(params[UNDO_PARAM].getValue())) {
-            truthTable.undo();
-        }
-        if (redoTrigger.process(params[REDO_PARAM].getValue())) {
-            truthTable.redo();
-        }
-
-        // Clock handling - measure period
-        timeSinceClock += dt;
-
-        bool clockEdge = false;
-        if (clockTrigger.process(inputs[CLOCK_INPUT].getVoltage(), SCHMITT_LOW, SCHMITT_HIGH)) {
-            if (timeSinceClock > 0.001f) {
-                clockPeriod = timeSinceClock;
-                clockLocked = true;
-            }
-            timeSinceClock = 0.f;
-            clockEdge = true;
-            // Phase reset happens in mode-specific code below
-        }
-
-        // Clock timeout
-        if (timeSinceClock > 2.f) {
-            clockLocked = false;
-            hadFirstTick = false;
-        }
-        lights[CLOCK_LIGHT].setBrightness(clockLocked ? 1.f : 0.2f);
-
-        // Get master speed ratio
-        int speedIdx = static_cast<int>(params[MASTER_SPEED_PARAM].getValue());
-        speedIdx = DSP::clamp(speedIdx, 0, (int)SPEED_RATIOS.size() - 1);
-        float masterSpeed = SPEED_RATIOS[speedIdx];
-
-        // Detect speed change - resync on next clock edge
-        if (speedIdx != prevSpeedIdx) {
-            hadFirstTick = false;
-            internalTickPhase = 0.f;
-            prevSpeedIdx = speedIdx;
-        }
-
-        // Get swing amount (50% = even, 66% = triplet, 75% = hard swing)
-        float swingPercent = params[SWING_PARAM].getValue();
-        float swingRatio = swingPercent / 100.f;  // 0.5 to 0.75
-
-        // Musical swing: downbeats stay locked to clock, only offbeats get pushed
-        // At x2: beat 1 on clock, beat 2 delayed by swing
-        // At x4: beats 1,3 on grid, beats 2,4 delayed
-        bool shouldTick = false;
-        if (running && clockLocked) {
-            float baseInterval = clockPeriod / masterSpeed;
-
-            // Swing only affects pairs: long interval before offbeat, short after
-            // swingLong=true means we just had a downbeat, next is offbeat (long wait)
-            // swingLong=false means we just had offbeat, next is downbeat (short wait)
-            float longInterval = 2.f * baseInterval * swingRatio;
-            float shortInterval = 2.f * baseInterval * (1.f - swingRatio);
-            float currentInterval = swingLong ? longInterval : shortInterval;
-
-            // On clock edge: always tick (downbeat locked to clock)
-            if (clockEdge) {
-                shouldTick = true;
-                hadFirstTick = true;
-                swingLong = true;  // Next interval is long (waiting for offbeat)
-                internalTickPhase = 0.f;
-            } else if (hadFirstTick) {
-                // Between clock edges: subdivisions with swing
-                internalTickPhase += dt;
-                if (internalTickPhase >= currentInterval) {
-                    internalTickPhase -= currentInterval;
-                    shouldTick = true;
-                    swingLong = !swingLong;  // Alternate for next tick
-                }
-            }
-        }
-
-        // Process tick
-        if (shouldTick) {
-                bool preLogicStates[NUM_CHANNELS] = {false};
-
-                // Process each Euclidean channel
-                for (int i = 0; i < NUM_CHANNELS; i++) {
-                    // Get quant ratio (per-channel division)
-                    int quantIdx = static_cast<int>(params[QUANT_PARAM + i].getValue());
-                    quantIdx = DSP::clamp(quantIdx, 0, (int)QUANT_RATIOS.size() - 1);
-                    float quantRatio = QUANT_RATIOS[quantIdx];
-
-                    // Calculate effective clock division for this channel
-                    int divAmount = static_cast<int>(1.f / quantRatio);
-                    if (divAmount < 1) divAmount = 1;
-
-                    // Check if this channel should tick
-                    quantCounter[i]++;
-                    if (quantCounter[i] >= divAmount) {
-                        quantCounter[i] = 0;
-
-                        // Get steps and hits (with CV modulation)
-                        int steps = static_cast<int>(params[STEPS_PARAM + i].getValue());
-                        float hitsBase = params[HITS_PARAM + i].getValue();
-                        float hitsCV = inputs[HITS_CV_INPUT + i].getVoltage() / 5.f * 12.f;  // ±5V = ±12 hits
-                        int hits = static_cast<int>(hitsBase + hitsCV);
-                        hits = DSP::clamp(hits, 0, steps);
-
-                        // Configure and tick engine
-                        engines[i].configure(steps, hits, 0);
-                        bool euclideanHit = engines[i].tick();
-
-                        // Apply Probability A (CV: ±5V = ±50% modulation)
-                        float probABase = params[PROB_A_PARAM + i].getValue();
-                        float probACV = inputs[PROB_A_CV_INPUT + i].getVoltage() / 10.f;
-                        float probAVal = DSP::clamp(probABase + probACV, 0.f, 1.f);
-
-                        preLogicStates[i] = euclideanHit && probA[i].process(true, probAVal);
-                    } else {
-                        preLogicStates[i] = false;
-                    }
-                }
-
-                // Store pre-logic gate states for output
-                for (int i = 0; i < NUM_CHANNELS; i++) {
-                    preGateStates[i].store(preLogicStates[i]);
-                }
-
-                // Build input state for truth table
-                uint8_t inputState = (preLogicStates[0] ? 1 : 0) |
-                                     (preLogicStates[1] ? 2 : 0) |
-                                     (preLogicStates[2] ? 4 : 0) |
-                                     (preLogicStates[3] ? 8 : 0);
-                currentInputState.store(inputState);
-
-                // Apply truth table
-                bool postLogicStates[NUM_CHANNELS];
-                truthTable.evaluate(preLogicStates, postLogicStates);
-
-                // Apply Probability B and generate outputs (CV: ±5V = ±50% modulation)
-                for (int i = 0; i < NUM_CHANNELS; i++) {
-                    float probBBase = params[PROB_B_PARAM + i].getValue();
-                    float probBCV = inputs[PROB_B_CV_INPUT + i].getVoltage() / 10.f;
-                    float probBVal = DSP::clamp(probBBase + probBCV, 0.f, 1.f);
-
-                    bool finalOutput = postLogicStates[i] && probB[i].process(true, probBVal);
-                    bool retrigger = params[RETRIG_PARAM + i].getValue() > 0.5f;
-
-                    // Trigger on rising edge or retrigger
-                    bool shouldTrigger = finalOutput && (!prevGateHigh[i] || retrigger);
-                    if (shouldTrigger) {
-                        trigPulse[i].trigger(TRIGGER_PULSE_DURATION);
-                    }
-
-                    // Start retrigger gap if we have consecutive hits with retrigger on
-                    if (finalOutput && prevGateHigh[i] && retrigger) {
-                        retrigGapTimer[i] = RETRIG_GAP_DURATION;
-                    }
-
-                    gateStates[i].store(finalOutput);
-                    prevGateHigh[i] = finalOutput;
-                }
-        }
-
-        // Output voltages
-        for (int i = 0; i < NUM_CHANNELS; i++) {
-            bool gate = gateStates[i].load();
-
-            // Handle retrigger gap - force gate low briefly for envelope retrigger
-            if (retrigGapTimer[i] > 0.f) {
-                retrigGapTimer[i] -= dt;
-                outputs[GATE_OUTPUT + i].setVoltage(0.f);
-            } else {
-                outputs[GATE_OUTPUT + i].setVoltage(gate ? 10.f : 0.f);
-            }
-
-            outputs[TRIG_OUTPUT + i].setVoltage(trigPulse[i].process(dt) ? 10.f : 0.f);
-            lights[GATE_LIGHT + i].setBrightness(gate ? 1.f : 0.f);
-
-            // LFO output: unipolar ramp 0-10V tracking step position
-            int steps = engines[i].steps;
-            int currentStep = engines[i].currentStep;
-            float phase = (steps > 1) ? (float)currentStep / (float)(steps - 1) : 0.f;
-            outputs[LFO_OUTPUT + i].setVoltage(phase * 10.f);
-
-            // Pre-logic gate output (before truth table)
-            bool preGate = preGateStates[i].load();
-            outputs[PRE_GATE_OUTPUT + i].setVoltage(preGate ? 10.f : 0.f);
-        }
-
-        // Update LED matrix lights
-        uint8_t currentState = currentInputState.load();
-        for (int state = 0; state < 16; state++) {
-            uint8_t outputMask = truthTable.getMapping(state);
-            bool isCurrentState = (state == currentState);
-            for (int bit = 0; bit < 4; bit++) {
-                bool isSet = (outputMask >> bit) & 1;
-                float brightness = isSet ? (isCurrentState ? 1.f : 0.5f) : (isCurrentState ? 0.2f : 0.05f);
-                lights[LED_MATRIX_LIGHT + state * 4 + bit].setBrightness(brightness);
-            }
-        }
+        core.process(this, args.sampleTime);
     }
 
     json_t* dataToJson() override {
-        json_t* rootJ = json_object();
-        json_object_set_new(rootJ, "clockPeriod", json_real(clockPeriod));
-
-        // Save truth table
-        json_t* mappingJ = json_array();
-        auto mapping = truthTable.serialize();
-        for (int i = 0; i < 16; i++) {
-            json_array_append_new(mappingJ, json_integer(mapping[i]));
-        }
-        json_object_set_new(rootJ, "truthTable", mappingJ);
-
-        return rootJ;
+        return core.dataToJson();
     }
 
     void dataFromJson(json_t* rootJ) override {
-        json_t* periodJ = json_object_get(rootJ, "clockPeriod");
-        if (periodJ) {
-            clockPeriod = json_real_value(periodJ);
-        }
-
-        json_t* mappingJ = json_object_get(rootJ, "truthTable");
-        if (mappingJ && json_is_array(mappingJ)) {
-            std::array<uint8_t, 16> mapping;
-            for (int i = 0; i < 16 && i < (int)json_array_size(mappingJ); i++) {
-                mapping[i] = json_integer_value(json_array_get(mappingJ, i));
-            }
-            truthTable.deserialize(mapping);
-        }
+        core.dataFromJson(rootJ);
     }
 };
-
-// HitsParamQuantity implementation - limits hits to current steps value
-float HitsParamQuantity::getMaxValue() {
-    Euclogic* euclogic = dynamic_cast<Euclogic*>(module);
-    if (euclogic) {
-        int steps = static_cast<int>(euclogic->params[Euclogic::STEPS_PARAM + channel].getValue());
-        return static_cast<float>(steps);
-    }
-    return 64.f;  // Default max
-}
-
-void HitsParamQuantity::setValue(float value) {
-    value = math::clamp(value, getMinValue(), getMaxValue());
-    ParamQuantity::setValue(value);
-}
 
 // Euclidean Pattern Display - shows 4 channels of rhythm patterns
 struct EuclideanDisplay : LightWidget {
     Euclogic* module = nullptr;
 
     EuclideanDisplay() {
-        box.size = Vec(200.f, 40.f);  // Will be resized in widget
+        box.size = Vec(200.f, 40.f);
     }
 
     void drawLayer(const DrawArgs& args, int layer) override {
         if (layer != 1) return;
 
-        // Translucent background (Cycloid style)
         nvgBeginPath(args.vg);
         nvgRoundedRect(args.vg, 0, 0, box.size.x, box.size.y, 4.f);
         nvgFillColor(args.vg, nvgRGBA(15, 15, 25, 160));
@@ -521,7 +110,6 @@ struct EuclideanDisplay : LightWidget {
         float rowHeight = box.size.y / 4.f;
 
         if (!module) {
-            // Preview mode
             nvgFillColor(args.vg, nvgRGBA(80, 100, 140, 200));
             nvgFontSize(args.vg, 10);
             nvgTextAlign(args.vg, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
@@ -529,16 +117,14 @@ struct EuclideanDisplay : LightWidget {
             return;
         }
 
-        // Draw 4 channel patterns
         for (int ch = 0; ch < 4; ch++) {
-            const auto& engine = module->engines[ch];
+            const auto& engine = module->core.engines[ch];
             float y = ch * rowHeight;
             int steps = engine.steps;
             int currentStep = engine.currentStep;
 
             if (steps <= 0) continue;
 
-            // Calculate step width (max 32 visible steps)
             int visibleSteps = std::min(steps, 32);
             float stepW = (box.size.x - 4.f) / visibleSteps;
             float stepH = rowHeight - 2.f;
@@ -548,28 +134,24 @@ struct EuclideanDisplay : LightWidget {
                 bool isHit = engine.getHit(s);
                 bool isCurrent = (s == currentStep);
 
-                // Step background
                 nvgBeginPath(args.vg);
                 nvgRoundedRect(args.vg, x + 0.5f, y + 1.f, stepW - 1.f, stepH, 2.f);
 
                 if (isCurrent) {
-                    // Current step - bright highlight
                     if (isHit) {
-                        nvgFillColor(args.vg, nvgRGBA(100, 200, 255, 255));  // Bright cyan
+                        nvgFillColor(args.vg, nvgRGBA(100, 200, 255, 255));
                     } else {
-                        nvgFillColor(args.vg, nvgRGBA(180, 140, 255, 220));  // Purple for current non-hit
+                        nvgFillColor(args.vg, nvgRGBA(180, 140, 255, 220));
                     }
                 } else {
-                    // Other steps
                     if (isHit) {
-                        nvgFillColor(args.vg, nvgRGBA(60, 120, 180, 200));  // Medium blue
+                        nvgFillColor(args.vg, nvgRGBA(60, 120, 180, 200));
                     } else {
-                        nvgFillColor(args.vg, nvgRGBA(30, 35, 50, 120));  // Dark translucent
+                        nvgFillColor(args.vg, nvgRGBA(30, 35, 50, 120));
                     }
                 }
                 nvgFill(args.vg);
 
-                // Border
                 nvgBeginPath(args.vg);
                 nvgRoundedRect(args.vg, x + 0.5f, y + 1.f, stepW - 1.f, stepH, 2.f);
                 if (isCurrent) {
@@ -583,7 +165,6 @@ struct EuclideanDisplay : LightWidget {
             }
         }
 
-        // Outer border
         nvgBeginPath(args.vg);
         nvgRoundedRect(args.vg, 0, 0, box.size.x, box.size.y, 4.f);
         nvgStrokeColor(args.vg, nvgRGBA(80, 100, 140, 150));
@@ -592,37 +173,34 @@ struct EuclideanDisplay : LightWidget {
     }
 };
 
-// Truth Table Display - 16 rows showing all states (Cycloid style)
+// Truth Table Display - 16 rows showing all states
 struct TruthTableDisplay : LightWidget {
     Euclogic* module = nullptr;
 
     TruthTableDisplay() {
-        box.size = Vec(280.f, 160.f);  // Will be resized
+        box.size = Vec(280.f, 160.f);
     }
 
     void drawLayer(const DrawArgs& args, int layer) override {
         if (layer != 1) return;
 
         float rowH = box.size.y / 16.f;
-        float inputColW = box.size.x * 0.4f;  // Input columns (A B C D)
-        float outputColW = box.size.x * 0.6f; // Output columns (1 2 3 4)
+        float inputColW = box.size.x * 0.4f;
+        float outputColW = box.size.x * 0.6f;
         float singleInputW = inputColW / 4.f;
         float singleOutputW = outputColW / 4.f;
 
-        // Translucent background (Cycloid style)
         nvgBeginPath(args.vg);
         nvgRoundedRect(args.vg, 0, 0, box.size.x, box.size.y, 4.f);
         nvgFillColor(args.vg, nvgRGBA(15, 15, 25, 160));
         nvgFill(args.vg);
 
-        uint8_t currentState = module ? module->currentInputState.load() : 0;
+        uint8_t currentState = module ? module->core.currentInputState.load() : 0;
 
-        // Draw 16 rows
         for (int state = 0; state < 16; state++) {
             float y = state * rowH;
             bool isActive = module && (state == currentState);
 
-            // Row background - highlight active row
             if (isActive) {
                 nvgBeginPath(args.vg);
                 nvgRect(args.vg, 0, y, box.size.x, rowH);
@@ -630,19 +208,16 @@ struct TruthTableDisplay : LightWidget {
                 nvgFill(args.vg);
             }
 
-            // Input columns (A B C D) - show T/F for this state's binary
             for (int bit = 0; bit < 4; bit++) {
-                bool bitValue = (state >> (3 - bit)) & 1;  // MSB first (A B C D)
+                bool bitValue = (state >> (3 - bit)) & 1;
                 float x = bit * singleInputW;
 
-                // Draw T or F
                 nvgFillColor(args.vg, bitValue ? nvgRGBA(100, 180, 255, 220) : nvgRGBA(80, 80, 120, 150));
                 nvgFontSize(args.vg, rowH * 0.7f);
                 nvgTextAlign(args.vg, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
                 nvgText(args.vg, x + singleInputW / 2.f, y + rowH / 2.f, bitValue ? "T" : "F", nullptr);
             }
 
-            // Separator line
             nvgBeginPath(args.vg);
             nvgMoveTo(args.vg, inputColW, y);
             nvgLineTo(args.vg, inputColW, y + rowH);
@@ -650,13 +225,11 @@ struct TruthTableDisplay : LightWidget {
             nvgStrokeWidth(args.vg, 1.f);
             nvgStroke(args.vg);
 
-            // Output columns (1 2 3 4) - toggleable buttons
-            uint8_t outputMask = module ? module->truthTable.getMapping(state) : 0;
+            uint8_t outputMask = module ? module->core.truthTable.getMapping(state) : 0;
             for (int outBit = 0; outBit < 4; outBit++) {
                 bool isSet = (outputMask >> outBit) & 1;
                 float x = inputColW + outBit * singleOutputW;
 
-                // Draw toggle button
                 float btnSize = std::min(singleOutputW, rowH) * 0.7f;
                 float btnX = x + (singleOutputW - btnSize) / 2.f;
                 float btnY = y + (rowH - btnSize) / 2.f;
@@ -665,19 +238,16 @@ struct TruthTableDisplay : LightWidget {
                 nvgRoundedRect(args.vg, btnX, btnY, btnSize, btnSize, 2.f);
 
                 if (isSet) {
-                    // ON state - cyan/blue
                     if (isActive) {
-                        nvgFillColor(args.vg, nvgRGBA(100, 200, 255, 255));  // Bright cyan when active
+                        nvgFillColor(args.vg, nvgRGBA(100, 200, 255, 255));
                     } else {
-                        nvgFillColor(args.vg, nvgRGBA(60, 140, 200, 200));   // Medium blue
+                        nvgFillColor(args.vg, nvgRGBA(60, 140, 200, 200));
                     }
                 } else {
-                    // OFF state - dark translucent
                     nvgFillColor(args.vg, nvgRGBA(30, 35, 50, 120));
                 }
                 nvgFill(args.vg);
 
-                // Button border
                 nvgBeginPath(args.vg);
                 nvgRoundedRect(args.vg, btnX, btnY, btnSize, btnSize, 2.f);
                 nvgStrokeColor(args.vg, isSet ? nvgRGBA(120, 180, 255, 180) : nvgRGBA(50, 60, 80, 100));
@@ -685,7 +255,6 @@ struct TruthTableDisplay : LightWidget {
                 nvgStroke(args.vg);
             }
 
-            // Row separator
             if (state < 15) {
                 nvgBeginPath(args.vg);
                 nvgMoveTo(args.vg, 0, y + rowH);
@@ -696,7 +265,6 @@ struct TruthTableDisplay : LightWidget {
             }
         }
 
-        // Outer border
         nvgBeginPath(args.vg);
         nvgRoundedRect(args.vg, 0, 0, box.size.x, box.size.y, 4.f);
         nvgStrokeColor(args.vg, nvgRGBA(80, 100, 140, 150));
@@ -713,24 +281,16 @@ struct TruthTableDisplay : LightWidget {
         float inputColW = box.size.x * 0.4f;
         float singleOutputW = (box.size.x - inputColW) / 4.f;
 
-        // Check if click is in output columns
-        if (e.pos.x < inputColW) return;  // Clicked on input columns
+        if (e.pos.x < inputColW) return;
 
         int row = static_cast<int>(e.pos.y / rowH);
         int outBit = static_cast<int>((e.pos.x - inputColW) / singleOutputW);
 
         if (row >= 0 && row < 16 && outBit >= 0 && outBit < 4) {
-            module->truthTable.pushUndo();
-            module->truthTable.toggleBit(row, outBit);
+            module->core.truthTable.pushUndo();
+            module->core.truthTable.toggleBit(row, outBit);
             e.consume(this);
         }
-    }
-};
-
-// Snap knob for discrete switch parameters
-struct RoundBlackSnapKnob : RoundBlackKnob {
-    RoundBlackSnapKnob() {
-        snap = true;
     }
 };
 
@@ -741,16 +301,10 @@ struct EuclogicWidget : ModuleWidget {
         addChild(new WiggleRoom::ImagePanel(
             asset::plugin(pluginInstance, "res/Euclogic.png"), box.size));
 
-        // Screws
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));
         addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, 0)));
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
         addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
-
-        // Layout constants (mm) - 40HP = 203.2mm wide, 128.5mm tall
-        // Left half: Visuals (Euclidean display top, Truth table bottom)
-        // Right half: Controls (Channel knobs top, Master controls bottom)
-        // Vertically centered to show header (~15mm) and logo (~15mm)
 
         float panelWidth = 203.2f;
         float halfWidth = panelWidth / 2.f;
@@ -759,7 +313,7 @@ struct EuclogicWidget : ModuleWidget {
         float eucDisplayX = 4.f;
         float eucDisplayWidth = halfWidth - 8.f;
         float eucDisplayHeight = 32.f;
-        float yEucDisplay = 22.f;  // Below title
+        float yEucDisplay = 22.f;
 
         EuclideanDisplay* eucDisplay = createWidget<EuclideanDisplay>(mm2px(Vec(eucDisplayX, yEucDisplay)));
         eucDisplay->module = module;
@@ -778,39 +332,31 @@ struct EuclogicWidget : ModuleWidget {
         addChild(truthTable);
 
         // ============== TOP RIGHT: CHANNEL KNOBS (compact) ==============
-        float yChannelStart = 24.f;  // Below title
-        float yChannelSpacing = 10.f;  // Compact spacing
+        float yChannelStart = 24.f;
+        float yChannelSpacing = 10.f;
 
-        // Column positions for right half (offset by halfWidth)
         float colBase = halfWidth + 4.f;
-        float col1 = colBase + 0.f;    // Steps
-        float col2 = colBase + 11.f;   // Hits
-        float col3 = colBase + 22.f;   // Hits CV
-        float col4 = colBase + 33.f;   // Quant
-        float col5 = colBase + 44.f;   // Prob A
-        float col6 = colBase + 55.f;   // Prob A CV
-        float col7 = colBase + 66.f;   // Prob B
-        float col8 = colBase + 77.f;   // Prob B CV
-        float col9 = colBase + 88.f;   // Retrig
+        float col1 = colBase + 0.f;
+        float col2 = colBase + 11.f;
+        float col3 = colBase + 22.f;
+        float col4 = colBase + 33.f;
+        float col5 = colBase + 44.f;
+        float col6 = colBase + 55.f;
+        float col7 = colBase + 66.f;
+        float col8 = colBase + 77.f;
+        float col9 = colBase + 88.f;
 
         for (int i = 0; i < Euclogic::NUM_CHANNELS; i++) {
             float y = yChannelStart + i * yChannelSpacing;
 
-            // Euclidean: Steps, Hits, HitsCV, Quant
             addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(col1, y)), module, Euclogic::STEPS_PARAM + i));
             addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(col2, y)), module, Euclogic::HITS_PARAM + i));
             addInput(createInputCentered<PJ301MPort>(mm2px(Vec(col3, y)), module, Euclogic::HITS_CV_INPUT + i));
             addParam(createParamCentered<Trimpot>(mm2px(Vec(col4, y)), module, Euclogic::QUANT_PARAM + i));
-
-            // Prob A: knob + CV input
             addParam(createParamCentered<Trimpot>(mm2px(Vec(col5, y)), module, Euclogic::PROB_A_PARAM + i));
             addInput(createInputCentered<PJ301MPort>(mm2px(Vec(col6, y)), module, Euclogic::PROB_A_CV_INPUT + i));
-
-            // Prob B: knob + CV input
             addParam(createParamCentered<Trimpot>(mm2px(Vec(col7, y)), module, Euclogic::PROB_B_PARAM + i));
             addInput(createInputCentered<PJ301MPort>(mm2px(Vec(col8, y)), module, Euclogic::PROB_B_CV_INPUT + i));
-
-            // Retrigger switch
             addParam(createParamCentered<CKSS>(mm2px(Vec(col9, y)), module, Euclogic::RETRIG_PARAM + i));
         }
 
@@ -819,7 +365,6 @@ struct EuclogicWidget : ModuleWidget {
         float yMaster2 = 84.f;
         float yOutputs = 102.f;
 
-        // Row 1: Clock, Reset, Run, Speed, Swing
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(colBase + 6.f, yMaster)), module, Euclogic::CLOCK_INPUT));
         addChild(createLightCentered<SmallLight<GreenLight>>(mm2px(Vec(colBase + 6.f, yMaster - 6)), module, Euclogic::CLOCK_LIGHT));
 
@@ -828,33 +373,26 @@ struct EuclogicWidget : ModuleWidget {
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(colBase + 34.f, yMaster)), module, Euclogic::RUN_INPUT));
         addChild(createLightCentered<SmallLight<GreenLight>>(mm2px(Vec(colBase + 34.f, yMaster - 6)), module, Euclogic::RUN_LIGHT));
 
-        addParam(createParamCentered<RoundBlackSnapKnob>(mm2px(Vec(colBase + 52.f, yMaster)), module, Euclogic::MASTER_SPEED_PARAM));
+        addParam(createParamCentered<EuclogicSnapKnob>(mm2px(Vec(colBase + 52.f, yMaster)), module, Euclogic::MASTER_SPEED_PARAM));
 
         addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(colBase + 68.f, yMaster)), module, Euclogic::SWING_PARAM));
 
-        // Row 2: Random, Mutate, Undo, Redo buttons
         addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 8.f, yMaster2)), module, Euclogic::RANDOM_PARAM));
         addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 28.f, yMaster2)), module, Euclogic::MUTATE_PARAM));
         addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 48.f, yMaster2)), module, Euclogic::UNDO_PARAM));
         addParam(createParamCentered<VCVButton>(mm2px(Vec(colBase + 68.f, yMaster2)), module, Euclogic::REDO_PARAM));
 
-        // Row: Pre-Logic Outputs (before truth table)
         float yPreOutputs = yOutputs - 12.f;
         for (int i = 0; i < Euclogic::NUM_CHANNELS; i++) {
             addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(colBase + 50.f + i * 11.f, yPreOutputs)), module, Euclogic::PRE_GATE_OUTPUT + i));
         }
 
-        // Row 3: Outputs (Gates + Triggers + LFOs)
         for (int i = 0; i < Euclogic::NUM_CHANNELS; i++) {
-            // Gates
             addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(colBase + 6.f + i * 11.f, yOutputs)), module, Euclogic::GATE_OUTPUT + i));
             addChild(createLightCentered<SmallLight<GreenLight>>(mm2px(Vec(colBase + 6.f + i * 11.f, yOutputs - 6)), module, Euclogic::GATE_LIGHT + i));
-
-            // Triggers
             addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(colBase + 50.f + i * 11.f, yOutputs)), module, Euclogic::TRIG_OUTPUT + i));
         }
 
-        // Row 4: LFO Outputs (below gates/triggers)
         float yLFO = yOutputs + 12.f;
         for (int i = 0; i < Euclogic::NUM_CHANNELS; i++) {
             addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(colBase + 6.f + i * 11.f, yLFO)), module, Euclogic::LFO_OUTPUT + i));
