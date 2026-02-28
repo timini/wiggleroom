@@ -1,5 +1,6 @@
 // SpectraHenge - 4-Channel Spatial/Spectral Mixer
 // Each channel: input → SVF morph (LP/BP/HP) → equal-power pan → stereo bus
+// Note: tanh soft limiter is applied in C++ (after send/return mixing)
 //
 // Parameters (alphabetical = Faust index order):
 //   0: pan1   - Channel 1 stereo position (0=L, 1=R)
@@ -105,22 +106,16 @@ channel_r(tilt, pan, sig) = svf_morph(tilt, sig) * sin(pan * ma.PI / 2.0);
 // MAIN PROCESS: 4 inputs → stereo output
 // ==========================================================
 
-process(in1, in2, in3, in4) = out_l, out_r
+process(in1, in2, in3, in4) = sum_l * gain, sum_r * gain
 with {
-    // Sum left channels
     gain = 0.5;
     sum_l = channel_l(tilt1, pan1, in1)
           + channel_l(tilt2, pan2, in2)
           + channel_l(tilt3, pan3, in3)
           + channel_l(tilt4, pan4, in4);
 
-    // Sum right channels
     sum_r = channel_r(tilt1, pan1, in1)
           + channel_r(tilt2, pan2, in2)
           + channel_r(tilt3, pan3, in3)
           + channel_r(tilt4, pan4, in4);
-
-    // Apply gain and soft limiter
-    out_l = ma.tanh(sum_l * gain);
-    out_r = ma.tanh(sum_r * gain);
 };
