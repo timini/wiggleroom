@@ -102,6 +102,9 @@ extern Model* modelXFade;
 #ifdef HAS_SPECTRAHENGE
 extern Model* modelSpectraHenge;
 #endif
+#ifdef HAS_PREFLIGHTCLOCK
+extern Model* modelPreFlightClock;
+#endif
 
 void init(Plugin* p) {
     pluginInstance = p;
@@ -201,5 +204,8 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_SPECTRAHENGE
     p->addModel(modelSpectraHenge);
+#endif
+#ifdef HAS_PREFLIGHTCLOCK
+    p->addModel(modelPreFlightClock);
 #endif
 }
