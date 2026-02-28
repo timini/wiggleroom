@@ -106,7 +106,7 @@
     {
       "slug": "OctoLFO",
       "name": "Octo LFO",
-      "description": "Clock-synced 8-channel LFO with wave shaping - Skew, Curve, and Fold modifiers with mini scope per channel",
+      "description": "Clock-synced 8-channel LFO with wave shaping - Skew, Curve, Fold, Scale, and Phase (NSEW) modifiers with mini scope per channel",
       "tags": ["Low-frequency oscillator", "Clock modulator", "Polyphonic"]
     },
     {
