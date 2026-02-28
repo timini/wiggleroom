@@ -202,7 +202,7 @@
     {
       "slug": "SpectraHenge",
       "name": "SpectraHenge",
-      "description": "4-channel spatial/spectral mixer - place audio on X/Y grid with SVF filter morphing and equal-power panning",
+      "description": "4-channel spatial/spectral mixer - stereo inputs, SVF filter morphing, equal-power panning on X/Y grid, with stereo send/return effects loop",
       "tags": ["Mixer", "Filter", "Panning", "Effect", "Visual"]
     },
     {
