@@ -23,9 +23,9 @@
 #include <iomanip>
 
 // Include the pure logic headers
-#include "modules/Euclogic/EuclideanEngine.hpp"
-#include "modules/Euclogic/TruthTable.hpp"
-#include "modules/Euclogic/ProbabilityGate.hpp"
+#include "common/euclogic/EuclideanEngine.hpp"
+#include "common/euclogic/TruthTable.hpp"
+#include "common/euclogic/ProbabilityGate.hpp"
 
 // JSON output helpers
 void printJsonArrayBool(const std::string& name, const std::vector<bool>& values) {
