@@ -7,6 +7,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <algorithm>
 
 namespace WiggleRoom {
 
@@ -34,11 +35,8 @@ struct EuclideanEngine {
             return;
         }
 
-        // Bjorklund's algorithm - properly implemented
-        // Uses two sequences that get interleaved
         std::vector<std::vector<bool>> first, second;
 
-        // Initialize: 'hits' sequences of [1], 'steps-hits' sequences of [0]
         for (int i = 0; i < hits; i++) {
             first.push_back({true});
         }
@@ -46,25 +44,19 @@ struct EuclideanEngine {
             second.push_back({false});
         }
 
-        // Recursively interleave until second is empty or has 1 element
         while (second.size() > 1) {
-            // Distribute second onto first
             size_t minSize = std::min(first.size(), second.size());
 
-            // Concatenate each element of second onto first
             for (size_t i = 0; i < minSize; i++) {
                 first[i].insert(first[i].end(), second[i].begin(), second[i].end());
             }
 
-            // Remainder becomes new second
             std::vector<std::vector<bool>> newSecond;
             if (second.size() > first.size()) {
-                // More second elements than first - extras become new second
                 for (size_t i = first.size(); i < second.size(); i++) {
                     newSecond.push_back(std::move(second[i]));
                 }
             } else if (first.size() > second.size()) {
-                // More first elements than second - extras become new second
                 for (size_t i = second.size(); i < first.size(); i++) {
                     newSecond.push_back(std::move(first[i]));
                 }
@@ -73,7 +65,6 @@ struct EuclideanEngine {
             second = std::move(newSecond);
         }
 
-        // Flatten sequences into result
         std::vector<bool> result;
         result.reserve(steps);
         for (const auto& seq : first) {
@@ -83,7 +74,6 @@ struct EuclideanEngine {
             result.insert(result.end(), seq.begin(), seq.end());
         }
 
-        // Apply rotation
         pattern.resize(steps);
         for (int i = 0; i < steps; i++) {
             int srcIdx = (i + rotation) % steps;
@@ -91,13 +81,11 @@ struct EuclideanEngine {
         }
     }
 
-    // Configure and regenerate pattern (only if changed)
     void configure(int numSteps, int numHits, int rot = 0) {
         int newSteps = std::max(1, std::min(64, numSteps));
         int newHits = std::max(0, std::min(newSteps, numHits));
         int newRotation = std::max(0, std::min(newSteps - 1, rot));
 
-        // Only regenerate if parameters changed
         if (newSteps != steps || newHits != hits || newRotation != rotation) {
             bool stepsChanged = (newSteps != steps);
             steps = newSteps;
@@ -105,7 +93,6 @@ struct EuclideanEngine {
             rotation = newRotation;
             generate();
 
-            // Only reset position if step count changed
             if (stepsChanged) {
                 currentStep = 0;
             } else if (currentStep >= steps) {
@@ -114,7 +101,6 @@ struct EuclideanEngine {
         }
     }
 
-    // Advance to next step, return true if current step is a hit
     bool tick() {
         if (steps <= 0 || pattern.empty()) return false;
 
@@ -123,18 +109,15 @@ struct EuclideanEngine {
         return isHit;
     }
 
-    // Reset to step 0
     void reset() {
         currentStep = 0;
     }
 
-    // Query: check if step N is a hit (without advancing)
     bool getHit(int step) const {
         if (step < 0 || step >= (int)pattern.size()) return false;
         return pattern[step];
     }
 
-    // Get current step index
     int getCurrentStep() const {
         return currentStep;
     }

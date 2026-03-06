@@ -152,24 +152,6 @@
       "tags": ["Oscillator", "Synth voice"]
     },
     {
-      "slug": "Euclogic",
-      "name": "Euclogic",
-      "description": "4-channel Euclidean rhythm generator with truth table logic and pre-logic gate outputs",
-      "tags": ["Clock modulator", "Sequencer"]
-    },
-    {
-      "slug": "Euclogic2",
-      "name": "Euclogic 2",
-      "description": "Compact 2-channel Euclidean rhythm generator with truth table logic and pre-logic gate outputs",
-      "tags": ["Clock modulator", "Sequencer"]
-    },
-    {
-      "slug": "Euclogic3",
-      "name": "Euclogic 3",
-      "description": "3-channel Euclidean rhythm generator with 8-state truth table logic and pre-logic gate outputs",
-      "tags": ["Clock modulator", "Sequencer"]
-    },
-    {
       "slug": "TetanusCoil",
       "name": "Tetanus Coil",
       "description": "Chaotic oscillator based on coupled nonlinear systems",
@@ -210,6 +192,30 @@
       "name": "PreFlight Clock",
       "description": "Master clock with Ableton-style count-in sequence - fires reset, plays 4 metronome beeps, then starts run on the downbeat",
       "tags": ["Clock modulator", "Utility"]
+    },
+    {
+      "slug": "EucSeq",
+      "name": "EucSeq",
+      "description": "4-channel Euclidean sequencer with per-step CV values, probability gates, and expander output to LogicMangler",
+      "tags": ["Sequencer", "Clock modulator"]
+    },
+    {
+      "slug": "LogicMangler",
+      "name": "Logic Mangler",
+      "description": "4-input truth table logic processor with cell locking, density control, and row/column randomize - standalone or EucSeq expander",
+      "tags": ["Logic", "Sequencer", "Clock modulator"]
+    },
+    {
+      "slug": "EucBank",
+      "name": "EucBank",
+      "description": "16-slot pattern storage and recall for EucSeq + LogicMangler expander chain",
+      "tags": ["Sequencer", "Controller"]
+    },
+    {
+      "slug": "EucMix",
+      "name": "EucMix",
+      "description": "4x4 CV summing matrix - standalone or expander for EucSeq chain CV mixing",
+      "tags": ["Mixer", "Utility"]
     }
   ]
 }
