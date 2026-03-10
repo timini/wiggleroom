@@ -109,9 +109,15 @@ dc_block = fi.dcblocker;
 // Soft limiter
 soft_limit = ma.tanh;
 
-// Output gain - modal synthesis needs boost
-output_gain = 8.0;
+// Output gain - reduced from 8.0, early limiting prevents need for extreme boost
+output_gain = 4.0;
 
-// Mix dry block with tube, apply protection, split to stereo
-process = block_sound <: (_, tube_algo) :> _ * (1 - tube_mix * 0.5) + _ * tube_mix
+// Resonator normalization: prevent stacking from 4 parallel modes
+resonator_norm = *(0.35);
+
+// Block with early limiting to prevent overdrive into tube
+block_limited = block_sound : resonator_norm : soft_limit;
+
+// Mix dry block with tube, apply gain and protection, split to stereo
+process = block_limited <: (_, tube_algo) :> _ * (1 - tube_mix * 0.5) + _ * tube_mix
     : *(output_gain) : dc_block : soft_limit <: _, _;
