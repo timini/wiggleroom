@@ -2,15 +2,17 @@
 // Saturation, Intensity as CV. Native C++, no Faust DSP.
 //
 // Synthesizes Codex PRs #49 / #50 / #51 and addresses the inline Codex
-// review feedback from #49: persist loaded-image state (P2), draw the
-// probe marker at the actually-sampled coordinate (P2), and keep the
-// jack layout inside the panel bounds at 8 HP (P1).
+// review feedback from #49 (persist loaded-image state, draw the probe
+// marker at the actually-sampled coordinate, keep jacks inside the
+// panel bounds) and #52 (audio/UI race on image swap; nvgImage leak).
 
 #include "rack.hpp"
 #include <osdialog.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,6 +24,18 @@ using namespace rack;
 extern Plugin* pluginInstance;
 
 namespace WiggleRoom {
+
+// Immutable image snapshot. The audio thread holds a `shared_ptr<const
+// ImageData>` for the duration of a process() call so it never observes
+// a half-written buffer. New loads create a fresh ImageData and atomically
+// swap the module's shared_ptr — the audio thread either sees the old
+// snapshot or the new one, never a torn state.
+struct ImageData {
+    std::vector<unsigned char> pixels;  // RGBA8
+    int w = 0;
+    int h = 0;
+    std::string path;
+};
 
 struct PixelProbe : Module {
     enum ParamId {
@@ -44,16 +58,17 @@ struct PixelProbe : Module {
     };
     enum LightId { NUM_LIGHTS };
 
-    // Loaded RGBA8 image data.
-    std::vector<unsigned char> pixels;
-    int imgW = 0;
-    int imgH = 0;
-    std::string loadedPath;
-    bool textureDirty = true;  // widget re-uploads to GPU when set
+    // The current image. Accessed atomically (free-function shared_ptr
+    // atomics, C++17). All loads (audio thread / UI thread / widget) take
+    // a snapshot via atomic_load; loadMedia / clearMedia publish a new
+    // snapshot via atomic_store.
+    std::shared_ptr<const ImageData> currentImage = std::make_shared<ImageData>();
 
     // Last-sampled normalized canvas coordinate (within [0, 1]^2) after
     // pan/zoom. The widget reads these to draw the probe marker at the
     // actually-sampled location instead of the raw CV position.
+    // Updated only from the audio thread; widget reads it for display
+    // (single-writer / single-reader floats; tearing here is cosmetic).
     float sampledU = 0.5f;
     float sampledV = 0.5f;
 
@@ -71,17 +86,33 @@ struct PixelProbe : Module {
         configOutput(INT_OUTPUT, "Intensity");
     }
 
+    std::shared_ptr<const ImageData> snapshotImage() const {
+        return std::atomic_load(&currentImage);
+    }
+
+    void publishImage(std::shared_ptr<const ImageData> img) {
+        std::atomic_store(&currentImage, std::move(img));
+    }
+
     bool loadMedia(const std::string& path) {
-        int c = 0;
-        unsigned char* data = stbi_load(path.c_str(), &imgW, &imgH, &c, 4);
-        if (!data || imgW <= 0 || imgH <= 0) {
+        int w = 0, h = 0, c = 0;
+        unsigned char* data = stbi_load(path.c_str(), &w, &h, &c, 4);
+        if (!data || w <= 0 || h <= 0) {
+            if (data) stbi_image_free(data);
             return false;
         }
-        pixels.assign(data, data + (imgW * imgH * 4));
+        auto img = std::make_shared<ImageData>();
+        img->pixels.assign(data, data + (w * h * 4));
+        img->w = w;
+        img->h = h;
+        img->path = path;
         stbi_image_free(data);
-        loadedPath = path;
-        textureDirty = true;
+        publishImage(std::move(img));
         return true;
+    }
+
+    std::string loadedPath() const {
+        return snapshotImage()->path;
     }
 
     static void rgbToHsi(float r, float g, float b, float& h, float& s, float& i) {
@@ -98,6 +129,11 @@ struct PixelProbe : Module {
     }
 
     void process(const ProcessArgs& /*args*/) override {
+        // Pin the current image for the duration of this block — the UI
+        // thread can swap currentImage in mid-flight without invalidating
+        // the buffers we're reading.
+        std::shared_ptr<const ImageData> img = snapshotImage();
+
         float xCv = clamp(inputs[X_INPUT].getVoltage() / 5.f, -1.f, 1.f);
         float yCv = clamp(inputs[Y_INPUT].getVoltage() / 5.f, -1.f, 1.f);
         float panX = params[PAN_X_PARAM].getValue();
@@ -112,22 +148,22 @@ struct PixelProbe : Module {
         sampledU = u;
         sampledV = v;
 
-        if (pixels.empty() || imgW <= 0 || imgH <= 0) {
+        if (!img || img->pixels.empty() || img->w <= 0 || img->h <= 0) {
             outputs[HUE_OUTPUT].setVoltage(0.f);
             outputs[SAT_OUTPUT].setVoltage(0.f);
             outputs[INT_OUTPUT].setVoltage(0.f);
             return;
         }
 
-        int px = clamp((int)std::round(u * (imgW - 1)), 0, imgW - 1);
+        int px = clamp((int)std::round(u * (img->w - 1)), 0, img->w - 1);
         // Image row 0 is at the top of the canvas; v = 0 sits at the bottom,
         // so we flip vertically when indexing the pixel buffer.
-        int py = clamp((int)std::round((1.f - v) * (imgH - 1)), 0, imgH - 1);
-        int idx = (py * imgW + px) * 4;
+        int py = clamp((int)std::round((1.f - v) * (img->h - 1)), 0, img->h - 1);
+        int idx = (py * img->w + px) * 4;
 
-        float r = pixels[idx]     / 255.f;
-        float g = pixels[idx + 1] / 255.f;
-        float b = pixels[idx + 2] / 255.f;
+        float r = img->pixels[idx]     / 255.f;
+        float g = img->pixels[idx + 1] / 255.f;
+        float b = img->pixels[idx + 2] / 255.f;
 
         float h, s, intensity;
         rgbToHsi(r, g, b, h, s, intensity);
@@ -150,9 +186,9 @@ struct PixelProbe : Module {
 
     json_t* dataToJson() override {
         json_t* rootJ = json_object();
-        if (!loadedPath.empty()) {
-            json_object_set_new(rootJ, "loadedPath",
-                                json_string(loadedPath.c_str()));
+        std::string p = loadedPath();
+        if (!p.empty()) {
+            json_object_set_new(rootJ, "loadedPath", json_string(p.c_str()));
         }
         return rootJ;
     }
@@ -172,31 +208,46 @@ struct PixelProbe : Module {
 
 struct PixelCanvas : Widget {
     PixelProbe* module = nullptr;
-    int nvgHandle = -1;
-    int uploadedW = 0;
-    int uploadedH = 0;
 
-    void ensureTexture(NVGcontext* vg) {
-        if (!module) return;
-        if (module->pixels.empty()) {
+    // GPU-side cache of the most recently uploaded image. Identified by
+    // shared_ptr identity rather than by image dimensions, so we re-upload
+    // whenever the module publishes a new ImageData snapshot.
+    int nvgHandle = -1;
+    std::shared_ptr<const ImageData> uploaded;
+
+    // Last NanoVG context observed in draw(). Cached so the destructor can
+    // free the GPU image when the widget is torn down (Codex P2 #192).
+    NVGcontext* lastVg = nullptr;
+
+    ~PixelCanvas() override {
+        if (nvgHandle != -1 && lastVg) {
+            nvgDeleteImage(lastVg, nvgHandle);
+            nvgHandle = -1;
+        }
+    }
+
+    void ensureTexture(NVGcontext* vg,
+                       const std::shared_ptr<const ImageData>& img) {
+        bool empty = !img || img->pixels.empty() || img->w <= 0 || img->h <= 0;
+        if (empty) {
             if (nvgHandle != -1) {
                 nvgDeleteImage(vg, nvgHandle);
                 nvgHandle = -1;
             }
+            uploaded.reset();
             return;
         }
-        if (nvgHandle == -1 || module->textureDirty ||
-            module->imgW != uploadedW || module->imgH != uploadedH) {
+        if (nvgHandle == -1 || img != uploaded) {
             if (nvgHandle != -1) nvgDeleteImage(vg, nvgHandle);
-            nvgHandle = nvgCreateImageRGBA(vg, module->imgW, module->imgH, 0,
-                                            module->pixels.data());
-            uploadedW = module->imgW;
-            uploadedH = module->imgH;
-            module->textureDirty = false;
+            nvgHandle = nvgCreateImageRGBA(vg, img->w, img->h, 0,
+                                            img->pixels.data());
+            uploaded = img;
         }
     }
 
     void draw(const DrawArgs& args) override {
+        lastVg = args.vg;
+
         // Background
         nvgBeginPath(args.vg);
         nvgRect(args.vg, 0, 0, box.size.x, box.size.y);
@@ -205,7 +256,8 @@ struct PixelCanvas : Widget {
 
         if (!module) return;
 
-        ensureTexture(args.vg);
+        std::shared_ptr<const ImageData> img = module->snapshotImage();
+        ensureTexture(args.vg, img);
 
         float zoom = std::max(0.01f, module->params[PixelProbe::ZOOM_PARAM].getValue());
         float panX = module->params[PixelProbe::PAN_X_PARAM].getValue();
@@ -224,7 +276,7 @@ struct PixelCanvas : Widget {
             nvgFill(args.vg);
         }
 
-        // Probe marker at the actually-sampled point (Codex P2 #124).
+        // Probe marker at the actually-sampled point.
         float sx, sy;
         if (nvgHandle != -1) {
             sx = ox + module->sampledU * drawW;
@@ -277,7 +329,7 @@ struct PixelProbeWidget : ModuleWidget {
 
         // 8 HP panel: box.size.x = 120 px, box.size.y = 380 px.
         // Square canvas at the top, controls + jacks below — all kept inside
-        // the 380 px panel height (Codex P1 #150).
+        // the 380 px panel height.
         const float margin = 8.f;
         auto* canvas = new PixelCanvas();
         canvas->box.pos = Vec(margin, 22.f);
@@ -323,9 +375,11 @@ struct PixelProbeWidget : ModuleWidget {
         auto* item = createMenuItem<LoadMediaItem>("Load image…");
         item->module = m;
         menu->addChild(item);
-        if (m && !m->loadedPath.empty()) {
-            menu->addChild(createMenuLabel(
-                std::string("Loaded: ") + m->loadedPath));
+        if (m) {
+            std::string p = m->loadedPath();
+            if (!p.empty()) {
+                menu->addChild(createMenuLabel(std::string("Loaded: ") + p));
+            }
         }
     }
 };
