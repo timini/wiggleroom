@@ -2,26 +2,58 @@
 
 Detailed documentation for each WiggleRoom module.
 
-## Physical Modeling
+## Physical Modeling Synthesis
 
-- [ChaosFlute](ChaosFlute.md) - Chaotic non-linear flute
-- [ModalBell](ModalBell.md) - Struck metal bar with tunable modes
-- [PluckedString](PluckedString.md) - Karplus-Strong plucked string
+- [ChaosFlute](ChaosFlute.md)
+- [Linkage](Linkage.md)
+- [Matter](Matter.md)
+- [ModalBell](ModalBell.md)
+- [NutShaker](NutShaker.md)
+- [PhysicalChoir](PhysicalChoir.md)
+- [PluckedString](PluckedString.md)
+- [SpaceCello](SpaceCello.md)
+- [TheAbyss](TheAbyss.md)
 
 ## Filters & Effects
 
-- [BigReverb](BigReverb.md) - Zita Rev1 algorithmic reverb
-- [LadderLPF](LadderLPF.md) - Classic 4-pole ladder lowpass
-- [SaturationEcho](SaturationEcho.md) - Vintage tape delay
-- [SpectralResonator](SpectralResonator.md) - 6-band resonant filter bank
-- [TriPhaseEnsemble](TriPhaseEnsemble.md) - 3-voice BBD string ensemble
+- [BigReverb](BigReverb.md)
+- [InfiniteFolder](InfiniteFolder.md)
+- [LadderLPF](LadderLPF.md)
+- [SaturationEcho](SaturationEcho.md)
+- [SpectralResonator](SpectralResonator.md)
+- [TheCauldron](TheCauldron.md)
+- [TriPhaseEnsemble](TriPhaseEnsemble.md)
 
-## Modulators
+## Synthesizers & Oscillators
 
-- [Cycloid](Cycloid.md) - Polar Euclidean sequencer
-- [Intersect](Intersect.md) - Rhythmic trigger generator
-- [TheArchitect](TheArchitect.md) - Polyphonic quantizer
+- [ACID9Voice](ACID9Voice.md)
+- [AnalogDrums](AnalogDrums.md)
+- [ChaosPad](ChaosPad.md)
+- [TetanusCoil](TetanusCoil.md)
+- [VektorX](VektorX.md)
+
+## Sequencers & Clocks
+
+- [ACID9Seq](ACID9Seq.md)
+- [Cycloid](Cycloid.md)
+- [EucBank](EucBank.md)
+- [EucMix](EucMix.md)
+- [EucSeq](EucSeq.md)
+- [GravityClock](GravityClock.md)
+- [Intersect](Intersect.md)
+- [LogicMangler](LogicMangler.md)
+
+## Utilities
+
+- [OctoLFO](OctoLFO.md)
+- [TheArchitect](TheArchitect.md)
+- [XFade](XFade.md)
+
+## Experimental & Analysis
+
+- [PreFlightClock](PreFlightClock.md)
+- [SpectraHenge](SpectraHenge.md)
 
 ---
 
-For full module list, see the [main README](../../../README.md#modules-29).
+For build and release context, see the [main README](../../../README.md).
