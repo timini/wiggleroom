@@ -130,6 +130,8 @@ struct TheWeaver : Module {
     bool pinkyLow = true;      // alternates low/walker
     int orderIndex = 0;        // step within order-played pool
     int stepsSinceEoc = 0;     // for random/brownian EOC timing
+    bool firstStepAfterReset = true;  // emit step 0 (or pattern-specific
+                                      // starting index) on the first tick
 
     // ---- Note pool ----------------------------------------------------------
     std::vector<float> sortedPool;       // ascending V/Oct voltages
@@ -259,24 +261,24 @@ struct TheWeaver : Module {
     // ------------------------------------------------------------------------
 
     // Generate an auto-triad from the Scale Bus when no notes are played.
-    // Root at C3 relative to the bus root, then the next two scale degrees.
+    // Outputs root + 3rd scale degree + 5th scale degree (e.g. C-E-G in C major),
+    // not the first two scale notes above the root (which would yield C-D-E).
     void generateAutoTriad(std::vector<float>& out) const {
         int rootMidi = 60 + scaleRoot;  // C4 + root offset
         out.push_back(((float)rootMidi - 60.f) / 12.f);
 
-        int found = 0;
+        int degree = 0;     // scale degrees walked past the root
         int cur = rootMidi;
-        while (found < 2) {
+        while (degree < 5 && cur - rootMidi < 24) {
             cur++;
-            int chroma = cur % 12;
-            if (chroma < 0) chroma += 12;
+            int chroma = ((cur % 12) + 12) % 12;
             if ((scaleMask >> chroma) & 1) {
-                found++;
-                if (found == 1 || found == 2) {
+                degree++;
+                // 3rd scale degree = 2 steps past root; 5th = 4 steps past root.
+                if (degree == 2 || degree == 4) {
                     out.push_back(((float)cur - 60.f) / 12.f);
                 }
             }
-            if (cur - rootMidi > 24) break;  // safety
         }
     }
 
@@ -286,16 +288,26 @@ struct TheWeaver : Module {
         orderPool.clear();
         sortedPool.clear();
 
-        bool inputHasNotes = inputs[NOTES_INPUT].isConnected() &&
-                             inputs[NOTES_INPUT].getChannels() > 0;
-
-        if (inputHasNotes) {
+        // Detect "active" input: connected, has channels, AND at least one
+        // channel carries a non-zero voltage. Many polyphonic sources keep a
+        // fixed channel count and signal note-off by driving the V/Oct back
+        // to 0 V (MIDI-CV-style note-off, sequencers between steps). Without
+        // this filter Hold/Latch would continually overwrite heldNotes with
+        // the idle 0 V state and never actually latch the previous chord.
+        bool inputConnected = inputs[NOTES_INPUT].isConnected() &&
+                              inputs[NOTES_INPUT].getChannels() > 0;
+        std::vector<float> currentInputNotes;
+        if (inputConnected) {
             int ch = std::min(inputs[NOTES_INPUT].getChannels(), MAX_POLY_IN);
-            heldNotes.clear();
             for (int i = 0; i < ch; i++) {
                 float v = inputs[NOTES_INPUT].getVoltage(i);
-                heldNotes.push_back(v);
+                if (v != 0.f) currentInputNotes.push_back(v);
             }
+        }
+        bool inputHasNotes = !currentInputNotes.empty();
+
+        if (inputHasNotes) {
+            heldNotes = currentInputNotes;
             hadActiveInput = true;
         }
 
@@ -382,6 +394,52 @@ struct TheWeaver : Module {
         std::uniform_int_distribution<int> rand3(-1, 1);
         std::uniform_int_distribution<int> randPool(0, size - 1);
 
+        // First tick after reset/start: emit the pattern's starting index
+        // without advancing or wrapping. This guarantees step 0 is heard on
+        // ascending patterns and prevents DOWN/CONVERGE etc. from spuriously
+        // firing EOC on the first emitted note.
+        if (firstStepAfterReset) {
+            firstStepAfterReset = false;
+            switch (pattern) {
+                case PATTERN_DOWN:
+                    arpIndex = size - 1;
+                    break;
+                case PATTERN_DIVERGE: {
+                    int k = size / 2;
+                    arpIndex = (size % 2 == 1) ? k : (k - 1);
+                    convergeStep = 1;
+                    break;
+                }
+                case PATTERN_CONVERGE:
+                    arpIndex = 0;
+                    convergeStep = 1;
+                    break;
+                case PATTERN_RANDOM:
+                    arpIndex = randPool(rng);
+                    break;
+                case PATTERN_BROWNIAN:
+                    arpIndex = 0;
+                    break;
+                case PATTERN_PINKY_THUMB:
+                    arpIndex = 0;
+                    pinkyLow = false;
+                    pinkyWalker = 1;
+                    break;
+                case PATTERN_OCTAVE_JUMP:
+                    arpIndex = 0;
+                    r.octaveOffset = 0.f;
+                    break;
+                default:
+                    // UP, UP_DOWN, ORDER_PLAYED, SCALE_RUN: start at index 0.
+                    arpIndex = 0;
+                    orderIndex = 0;
+                    upDownDir = +1;
+                    break;
+            }
+            r.index = arpIndex;
+            return r;
+        }
+
         switch (pattern) {
             case PATTERN_UP: {
                 int next = arpIndex + 1;
@@ -427,42 +485,43 @@ struct TheWeaver : Module {
                 break;
             }
             case PATTERN_CONVERGE: {
-                // Order: 0, size-1, 1, size-2, ...
-                int pair = convergeStep;
-                int low = pair;
-                int high = size - 1 - pair;
-                if (!convergeSide) {
-                    r.index = low;
-                    convergeSide = true;
-                } else {
-                    r.index = (high > low) ? high : low;
-                    convergeSide = false;
-                    convergeStep++;
-                    if (convergeStep > size / 2) {
-                        convergeStep = 0;
-                        r.wrapped = true;
-                    }
+                // Single pass outside-in over every index: 0, N-1, 1, N-2, ...
+                // Cycle length is exactly N. For even N: ends on the lower of
+                // the two center indices; for odd N: ends on the single center.
+                int t = convergeStep;
+                int half = t / 2;
+                r.index = (t % 2 == 0) ? half : (size - 1 - half);
+                convergeStep++;
+                if (convergeStep >= size) {
+                    convergeStep = 0;
+                    r.wrapped = true;
                 }
+                convergeSide = false;
                 break;
             }
             case PATTERN_DIVERGE: {
-                // Start from middle and move outward
-                int mid = size / 2;
-                int pair = convergeStep;
-                int low = mid - pair;
-                int high = mid + pair;
-                if (!convergeSide) {
-                    r.index = (low >= 0) ? low : 0;
-                    convergeSide = true;
+                // Single pass inside-out over every index. Cycle length = N.
+                // Odd N=2k+1:  k, k-1, k+1, k-2, k+2, ..., 0, N-1
+                // Even N=2k:   k-1, k, k-2, k+1, ..., 0, N-1
+                int t = convergeStep;
+                int half = t / 2;
+                int outIdx;
+                if (size % 2 == 1) {
+                    int k = size / 2;
+                    if (t == 0) outIdx = k;
+                    else if (t % 2 == 1) outIdx = k - ((t + 1) / 2);
+                    else outIdx = k + (t / 2);
                 } else {
-                    r.index = (high < size) ? high : size - 1;
-                    convergeSide = false;
-                    convergeStep++;
-                    if (convergeStep > size / 2 + 1) {
-                        convergeStep = 0;
-                        r.wrapped = true;
-                    }
+                    int k = size / 2;
+                    outIdx = (t % 2 == 0) ? (k - 1 - half) : (k + half);
                 }
+                r.index = clamp(outIdx, 0, size - 1);
+                convergeStep++;
+                if (convergeStep >= size) {
+                    convergeStep = 0;
+                    r.wrapped = true;
+                }
+                convergeSide = false;
                 break;
             }
             case PATTERN_PINKY_THUMB: {
@@ -513,6 +572,7 @@ struct TheWeaver : Module {
         pinkyLow = true;
         orderIndex = 0;
         stepsSinceEoc = 0;
+        firstStepAfterReset = true;
     }
 
     // ------------------------------------------------------------------------
@@ -583,7 +643,13 @@ struct TheWeaver : Module {
             float iv = clamp(inputs[INDEX_CV_INPUT].getVoltage() * 0.1f +
                              params[INDEX_PARAM].getValue(), 0.f, 1.f);
             indexCvInt = clamp(static_cast<int>(iv * poolSize), 0, poolSize - 1);
-            if (indexCvInt != lastIndexCvInt) {
+            // Refire when the addressed index changes OR when the pool value
+            // at the current index changes (e.g. new chord at the same CV
+            // position). Without the latter check, holding the index steady
+            // while the chord changes leaves lastCv pointing at the old note.
+            float poolValAtIndex = pool[indexCvInt];
+            bool poolValChanged = std::fabs(poolValAtIndex - lastCv) > 1e-5f;
+            if (indexCvInt != lastIndexCvInt || poolValChanged) {
                 fireTick = true;
                 arpIndex = indexCvInt;
                 lastIndexCvInt = indexCvInt;
