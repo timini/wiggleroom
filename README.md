@@ -4,7 +4,7 @@ A collection of creative modules for [VCV Rack 2](https://vcvrack.com/), built w
 
 **[Documentation](docs/README.md)** | **[Developer Guide](docs/developer/getting-started.md)** | **[Release Strategy](docs/RELEASE_STRATEGY.md)**
 
-## Modules (31)
+## Modules (32)
 
 ### Physical Modeling Synthesis
 | Module | Description |
@@ -44,9 +44,10 @@ A collection of creative modules for [VCV Rack 2](https://vcvrack.com/), built w
 |--------|-------------|
 | **ACID9Seq** | Companion sequencer for ACID9Voice with planetary display |
 | **Cycloid** | Polar Euclidean sequencer with rotating patterns |
-| **Euclogic** | 4-channel Euclidean rhythm generator with logic |
-| **Euclogic2** | Compact 2-channel Euclidean rhythm generator |
-| **Euclogic3** | 3-channel Euclidean rhythm generator with truth table |
+| **EucSeq** | 4-channel Euclidean sequencer with per-step CV values |
+| **Logic Mangler** | Truth table logic processor with cell locking and density control |
+| **EucBank** | 16-slot pattern storage/recall for EucSeq + LogicMangler chain |
+| **EucMix** | 4x4 CV summing matrix for standalone or expander use |
 | **GravityClock** | Clock-synced bouncing ball trigger generator |
 | **Intersect** | Rhythmic trigger generator with set operations |
 

@@ -66,6 +66,11 @@ MODULE_HP = {
     "XFade": 4,
     "SpectraHenge": 16,
     "PreFlightClock": 10,
+    "EucSeq": 20,
+    "LogicMangler": 14,
+    "EucBank": 8,
+    "EucMix": 6,
+    "Euclogic3": 28,
 }
 
 
