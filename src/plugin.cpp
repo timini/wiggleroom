@@ -108,6 +108,9 @@ extern Model* modelSpectraHenge;
 #ifdef HAS_PREFLIGHTCLOCK
 extern Model* modelPreFlightClock;
 #endif
+#ifdef HAS_PIXELPROBE
+extern Model* modelPixelProbe;
+#endif
 
 void init(Plugin* p) {
     pluginInstance = p;
@@ -213,5 +216,8 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_PREFLIGHTCLOCK
     p->addModel(modelPreFlightClock);
+#endif
+#ifdef HAS_PIXELPROBE
+    p->addModel(modelPixelProbe);
 #endif
 }
