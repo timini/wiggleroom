@@ -216,6 +216,12 @@
       "name": "EucMix",
       "description": "4x4 CV summing matrix - standalone or expander for EucSeq chain CV mixing",
       "tags": ["Mixer", "Utility"]
+    },
+    {
+      "slug": "TheWeaver",
+      "name": "The Weaver",
+      "description": "Scale-Bus-aware polyphonic arpeggiator with 11 patterns, clock div/mult, latch/hold, and addressable Index CV",
+      "tags": ["Arpeggiator", "Sequencer", "Polyphonic"]
     }
   ]
 }

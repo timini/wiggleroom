@@ -108,6 +108,9 @@ extern Model* modelSpectraHenge;
 #ifdef HAS_PREFLIGHTCLOCK
 extern Model* modelPreFlightClock;
 #endif
+#ifdef HAS_THEWEAVER
+extern Model* modelTheWeaver;
+#endif
 
 void init(Plugin* p) {
     pluginInstance = p;
@@ -213,5 +216,8 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_PREFLIGHTCLOCK
     p->addModel(modelPreFlightClock);
+#endif
+#ifdef HAS_THEWEAVER
+    p->addModel(modelTheWeaver);
 #endif
 }
