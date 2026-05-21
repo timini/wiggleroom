@@ -102,22 +102,21 @@ dual_filter_stereo(fc, res, mode) = dual_filter(fc, res, mode), dual_filter(fc, 
 // amount: 0 = clean, 1 = heavily saturated
 grit_sat(amount, sig) = output
 with {
-    // Blend between clean and saturated
     amount_smooth = amount : si.smoo;
 
-    // Even-order harmonic saturation using asymmetric soft clip
-    // This creates the characteristic "gritty" 303 sound
+    // More aggressive drive: max 7x into tanh
+    drive = 1 + amount_smooth * 6;
+
+    // Stronger asymmetric saturation for richer even harmonics
+    asymmetric_sat(x) = ma.tanh(x * drive) * (1 + 0.6 * amount_smooth * x * x);
+
     saturated = sig : asymmetric_sat;
 
-    // Asymmetric saturation (more even harmonics)
-    asymmetric_sat(x) = ma.tanh(x * (1 + amount_smooth * 3)) *
-                        (1 + 0.3 * amount_smooth * x * x);
+    // Gentler drive compensation - let it get louder
+    drive_comp = 1.0 / (1 + amount_smooth * 0.25);
 
-    // Drive compensation
-    drive_comp = 1.0 / (1 + amount_smooth * 0.5);
-
-    // Mix clean and saturated
-    output = (sig * (1 - amount_smooth) + saturated * amount_smooth) * drive_comp;
+    // Less clean signal in the mix - fully saturated at max grit
+    output = (sig * max(0, 1 - amount_smooth * 1.5) + saturated * amount_smooth) * drive_comp;
 };
 
 // Stereo grit
