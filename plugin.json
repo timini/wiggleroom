@@ -216,6 +216,12 @@
       "name": "EucMix",
       "description": "4x4 CV summing matrix - standalone or expander for EucSeq chain CV mixing",
       "tags": ["Mixer", "Utility"]
+    },
+    {
+      "slug": "PixelProbe",
+      "name": "Pixel Probe",
+      "description": "Image-to-CV color sampler - load an image, address a probe with X/Y CV, get Hue/Saturation/Intensity as CV with pan/zoom and polar/bipolar output",
+      "tags": ["Sample and hold", "Controller", "Visual", "Utility"]
     }
   ]
 }
