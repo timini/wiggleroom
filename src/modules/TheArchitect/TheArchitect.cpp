@@ -6,7 +6,8 @@
  * global Key/Scale settings. Allows massive, coherent harmonic progressions.
  *
  * Features:
- *   - Global Root (C to B) and Scale (13 scales)
+ *   - Global Root (C to B) and Scale (34 scales, including all 12-TET scales from
+ *     Ornament & Crime: modes, blues, bebop, exotic/world, jazz symmetric)
  *   - 8 mono V/Oct inputs → 8 quantized outputs
  *   - Chord input → 4-voice poly output (Root, 3rd, 5th, 7th)
  *   - Chord inversions (0-3)
@@ -26,34 +27,73 @@ extern Plugin* pluginInstance;
 
 namespace WiggleRoom {
 
-// Scale definitions - each scale is a 12-bit mask indicating which notes are in the scale
-// Bit 0 = root, Bit 1 = minor 2nd, etc.
+// Scale definitions - each scale is a 12-bit mask indicating which notes are in the scale.
+// Bit n = 1 if semitone n above the root is in the scale (bit 0 = root).
+// Built via (1 << semitone) so a Major scale [0,2,4,5,7,9,11] is referenced by its intervals
+// rather than a hand-written binary literal (the previous literals had inverted bit order).
+//
+// Scale set covers all 12-TET scales from Ornament & Crime (braids_quantizer_scales) plus
+// common Western/exotic additions.
 static const int SCALES[] = {
-    0b101011010101,  // Major (Ionian)
-    0b101101010110,  // Minor (Aeolian)
-    0b101101011010,  // Dorian
-    0b110101011010,  // Phrygian
-    0b101011010110,  // Lydian
-    0b101011011010,  // Mixolydian
-    0b110101101010,  // Locrian
-    0b101101010101,  // Harmonic Minor
-    0b101011010110,  // Melodic Minor
-    0b101010110101,  // Pentatonic Major
-    0b100101010010,  // Pentatonic Minor
-    0b101010101010,  // Whole Tone
-    0b111111111111   // Chromatic
+    // --- Diatonic modes ---
+    (1<<0)|(1<<2)|(1<<4)|(1<<5)|(1<<7)|(1<<9)|(1<<11),         // 0  Major (Ionian)
+    (1<<0)|(1<<2)|(1<<3)|(1<<5)|(1<<7)|(1<<8)|(1<<10),         // 1  Minor (Aeolian)
+    (1<<0)|(1<<2)|(1<<3)|(1<<5)|(1<<7)|(1<<9)|(1<<10),         // 2  Dorian
+    (1<<0)|(1<<1)|(1<<3)|(1<<5)|(1<<7)|(1<<8)|(1<<10),         // 3  Phrygian
+    (1<<0)|(1<<2)|(1<<4)|(1<<6)|(1<<7)|(1<<9)|(1<<11),         // 4  Lydian
+    (1<<0)|(1<<2)|(1<<4)|(1<<5)|(1<<7)|(1<<9)|(1<<10),         // 5  Mixolydian
+    (1<<0)|(1<<1)|(1<<3)|(1<<5)|(1<<6)|(1<<8)|(1<<10),         // 6  Locrian
+    // --- Minor variants ---
+    (1<<0)|(1<<2)|(1<<3)|(1<<5)|(1<<7)|(1<<8)|(1<<11),         // 7  Harmonic Minor
+    (1<<0)|(1<<2)|(1<<3)|(1<<5)|(1<<7)|(1<<9)|(1<<11),         // 8  Melodic Minor (asc)
+    (1<<0)|(1<<2)|(1<<3)|(1<<6)|(1<<7)|(1<<8)|(1<<11),         // 9  Hungarian Minor
+    (1<<0)|(1<<2)|(1<<3)|(1<<6)|(1<<7)|(1<<9)|(1<<10),         // 10 Romanian Minor
+    // --- Pentatonic / blues ---
+    (1<<0)|(1<<2)|(1<<4)|(1<<7)|(1<<9),                        // 11 Pentatonic Major
+    (1<<0)|(1<<3)|(1<<5)|(1<<7)|(1<<10),                       // 12 Pentatonic Minor
+    (1<<0)|(1<<2)|(1<<3)|(1<<4)|(1<<7)|(1<<9),                 // 13 Blues Major
+    (1<<0)|(1<<3)|(1<<5)|(1<<6)|(1<<7)|(1<<10),                // 14 Blues Minor
+    // --- Symmetric ---
+    (1<<0)|(1<<2)|(1<<4)|(1<<6)|(1<<8)|(1<<10),                // 15 Whole Tone
+    (1<<0)|(1<<2)|(1<<3)|(1<<5)|(1<<6)|(1<<8)|(1<<9)|(1<<11),  // 16 Diminished (W-H)
+    (1<<0)|(1<<3)|(1<<4)|(1<<7)|(1<<8)|(1<<11),                // 17 Augmented
+    // --- Bebop / jazz ---
+    (1<<0)|(1<<2)|(1<<4)|(1<<5)|(1<<7)|(1<<8)|(1<<9)|(1<<11),  // 18 Bebop Major
+    (1<<0)|(1<<2)|(1<<3)|(1<<4)|(1<<5)|(1<<7)|(1<<9)|(1<<10),  // 19 Bebop Dorian
+    // --- O_C exotic / world ---
+    (1<<0)|(1<<1)|(1<<3)|(1<<4)|(1<<5)|(1<<7)|(1<<8)|(1<<10),  // 20 Folk
+    (1<<0)|(1<<2)|(1<<3)|(1<<7)|(1<<8),                        // 21 Hirajoshi
+    (1<<0)|(1<<1)|(1<<5)|(1<<7)|(1<<10),                       // 22 In Sen
+    (1<<0)|(1<<1)|(1<<5)|(1<<6)|(1<<10),                       // 23 Iwato
+    (1<<0)|(1<<2)|(1<<3)|(1<<7)|(1<<9),                        // 24 Kumoi
+    (1<<0)|(1<<1)|(1<<3)|(1<<7)|(1<<8),                        // 25 Pelog (Gamelan)
+    (1<<0)|(1<<1)|(1<<3)|(1<<4)|(1<<6)|(1<<8)|(1<<11),         // 26 Gypsy
+    (1<<0)|(1<<1)|(1<<4)|(1<<5)|(1<<7)|(1<<8)|(1<<11),         // 27 Arabian (Double Harmonic)
+    (1<<0)|(1<<1)|(1<<4)|(1<<5)|(1<<7)|(1<<8)|(1<<10),         // 28 Flamenco (Phrygian Dom)
+    (1<<0)|(1<<1)|(1<<4)|(1<<5)|(1<<6)|(1<<8)|(1<<11),         // 29 Persian
+    (1<<0)|(1<<1)|(1<<3)|(1<<5)|(1<<7)|(1<<8)|(1<<11),         // 30 Neapolitan Minor
+    (1<<0)|(1<<1)|(1<<3)|(1<<5)|(1<<7)|(1<<9)|(1<<11),         // 31 Neapolitan Major
+    (1<<0)|(1<<1)|(1<<4)|(1<<6)|(1<<8)|(1<<10)|(1<<11),        // 32 Enigmatic
+    // --- Catch-all ---
+    0xFFF                                                       // 33 Chromatic
 };
 
 static const std::vector<std::string> SCALE_NAMES = {
-    "Major", "Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian",
-    "Locrian", "Harm Min", "Mel Min", "Pent Maj", "Pent Min", "Whole", "Chromatic"
+    "Major", "Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Locrian",
+    "Harm Min", "Mel Min", "Hung Min", "Rom Min",
+    "Pent Maj", "Pent Min", "Blues Maj", "Blues Min",
+    "Whole", "Dim W-H", "Augment",
+    "Bebop Maj", "Bebop Dor",
+    "Folk", "Hirajoshi", "In Sen", "Iwato", "Kumoi", "Pelog",
+    "Gypsy", "Arabian", "Flamenco", "Persian", "Neap Min", "Neap Maj", "Enigmatic",
+    "Chromatic"
 };
 
 static const std::vector<std::string> NOTE_NAMES = {
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
 };
 
-static const int NUM_SCALES = 13;
+static const int NUM_SCALES = sizeof(SCALES) / sizeof(SCALES[0]);
 static const int NUM_TRACKS = 8;
 
 struct TheArchitect : Module {
@@ -184,10 +224,10 @@ struct TheArchitect : Module {
         }
         root = clamp(root, 0, 11);
 
-        // Get scale with CV modulation
+        // Get scale with CV modulation (10V sweeps the full scale list)
         int scaleIdx = static_cast<int>(params[SCALE_PARAM].getValue());
         if (inputs[SCALE_CV_INPUT].isConnected()) {
-            scaleIdx += static_cast<int>(inputs[SCALE_CV_INPUT].getVoltage() * 1.3f);
+            scaleIdx += static_cast<int>(inputs[SCALE_CV_INPUT].getVoltage() * (NUM_SCALES * 0.1f));
         }
         scaleIdx = clamp(scaleIdx, 0, NUM_SCALES - 1);
         int scaleMask = SCALES[scaleIdx];
