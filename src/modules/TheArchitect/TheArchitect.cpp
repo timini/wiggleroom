@@ -158,7 +158,11 @@ struct TheArchitect : Module {
         configOutput(SCALE_BUS_OUTPUT, "Scale Bus (16ch poly)");
     }
 
-    // Quantize a chromatic note (0-11) to the nearest note in the scale
+    // Quantize a chromatic note (0-11) to the nearest note in the scale.
+    // Returns a signed chroma that may fall outside 0-11 when the nearest
+    // in-scale note lies in the adjacent octave (e.g. B wrapping up to the
+    // next C in a sparse scale that omits both B and A#). The caller combines
+    // this with the octave, so the octave shift is carried correctly.
     int quantizeToScale(int note, int scaleMask, int root) {
         // Normalize note relative to root
         int relNote = (note - root + 12) % 12;
@@ -168,16 +172,18 @@ struct TheArchitect : Module {
             return note;
         }
 
-        // Find nearest note in scale (prefer lower)
+        // Find nearest note in scale (prefer lower). Return note +/- offset
+        // without wrapping so an upward/downward cross-octave choice keeps
+        // its true pitch instead of collapsing back into the current octave.
         for (int offset = 1; offset <= 6; offset++) {
             int lower = (relNote - offset + 12) % 12;
             int upper = (relNote + offset) % 12;
 
             if ((scaleMask >> lower) & 1) {
-                return (note - offset + 12) % 12 + (note / 12) * 12;
+                return note - offset;
             }
             if ((scaleMask >> upper) & 1) {
-                return (note + offset) % 12 + (note / 12) * 12;
+                return note + offset;
             }
         }
 
@@ -200,20 +206,62 @@ struct TheArchitect : Module {
         return (quantizedMidi - 60.f) / 12.f;
     }
 
-    // Find the Nth scale degree above a note
+    // Find the Nth scale degree above a note, returning the number of
+    // semitones ascended (not the wrapped chroma). For short scales a high
+    // degree such as the 7th spans more than one octave, so returning the
+    // absolute semitone offset lets the caller keep chords strictly ascending.
     int findScaleDegree(int startChroma, int degrees, int scaleMask, int root) {
         int current = startChroma;
+        int semitones = 0;
         int count = 0;
 
         while (count < degrees) {
             current = (current + 1) % 12;
+            semitones++;
             int relNote = (current - root + 12) % 12;
             if ((scaleMask >> relNote) & 1) {
                 count++;
             }
         }
 
-        return current;
+        return semitones;
+    }
+
+    // Persist a scale-list schema version. The scale list was reordered and
+    // expanded from 13 to 34 entries, so patches saved before this change
+    // store SCALE_PARAM indices that now point at different scales. Writing a
+    // marker here lets fromJson() detect and migrate legacy patches.
+    json_t* dataToJson() override {
+        json_t* rootJ = json_object();
+        json_object_set_new(rootJ, "scaleSchema", json_integer(1));
+        return rootJ;
+    }
+
+    void fromJson(json_t* rootJ) override {
+        // Restore params (and call dataFromJson if a "data" object exists).
+        Module::fromJson(rootJ);
+
+        // Legacy patches predate the scale-list expansion and carry no schema
+        // marker (either no "data" object at all, or one without "scaleSchema").
+        json_t* dataJ = json_object_get(rootJ, "data");
+        json_t* schemaJ = dataJ ? json_object_get(dataJ, "scaleSchema") : nullptr;
+        int schema = schemaJ ? static_cast<int>(json_integer_value(schemaJ)) : 0;
+
+        if (schema < 1) {
+            // Map the original 13-scale index order onto the new 34-scale list.
+            // Indices 0-8 are unchanged; only the tail moved.
+            static const int LEGACY_SCALE_REMAP[13] = {
+                0, 1, 2, 3, 4, 5, 6, 7, 8,
+                11,  // Pent Maj  (was 9)
+                12,  // Pent Min  (was 10)
+                15,  // Whole     (was 11)
+                33   // Chromatic (was 12)
+            };
+            int oldIdx = static_cast<int>(std::round(params[SCALE_PARAM].getValue()));
+            if (oldIdx >= 0 && oldIdx < 13) {
+                params[SCALE_PARAM].setValue(static_cast<float>(LEGACY_SCALE_REMAP[oldIdx]));
+            }
+        }
     }
 
     void process(const ProcessArgs& args) override {
@@ -273,21 +321,19 @@ struct TheArchitect : Module {
             if (rootChroma < 0) rootChroma += 12;
             int rootOctave = static_cast<int>(std::floor(rootMidi / 12.f));
 
-            // Find chord tones (scale degrees: root, 3rd, 5th, 7th)
-            int thirdChroma = findScaleDegree(rootChroma, 2, scaleMask, root);
-            int fifthChroma = findScaleDegree(rootChroma, 4, scaleMask, root);
-            int seventhChroma = findScaleDegree(rootChroma, 6, scaleMask, root);
-
-            // Calculate octaves (handle wrapping)
-            int thirdOctave = rootOctave + (thirdChroma < rootChroma ? 1 : 0);
-            int fifthOctave = rootOctave + (fifthChroma < rootChroma ? 1 : 0);
-            int seventhOctave = rootOctave + (seventhChroma < rootChroma ? 1 : 0);
+            // Find chord tones as semitone offsets above the root (root, 3rd,
+            // 5th, 7th). Offsets carry full-octave spans, so chords stay
+            // strictly ascending even for short (e.g. pentatonic) scales.
+            int thirdSemi = findScaleDegree(rootChroma, 2, scaleMask, root);
+            int fifthSemi = findScaleDegree(rootChroma, 4, scaleMask, root);
+            int seventhSemi = findScaleDegree(rootChroma, 6, scaleMask, root);
 
             // Build chord voltages
-            float v1 = (rootOctave * 12.f + rootChroma + transpose - 60.f) / 12.f;
-            float v2 = (thirdOctave * 12.f + thirdChroma + transpose - 60.f) / 12.f;
-            float v3 = (fifthOctave * 12.f + fifthChroma + transpose - 60.f) / 12.f;
-            float v4 = (seventhOctave * 12.f + seventhChroma + transpose - 60.f) / 12.f;
+            int rootMidiBase = rootOctave * 12 + rootChroma + transpose;
+            float v1 = (rootMidiBase - 60.f) / 12.f;
+            float v2 = (rootMidiBase + thirdSemi - 60.f) / 12.f;
+            float v3 = (rootMidiBase + fifthSemi - 60.f) / 12.f;
+            float v4 = (rootMidiBase + seventhSemi - 60.f) / 12.f;
 
             // Apply inversions
             if (inversion >= 1) v1 += 1.f;  // Root up an octave
