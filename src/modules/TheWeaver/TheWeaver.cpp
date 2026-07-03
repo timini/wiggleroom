@@ -138,6 +138,11 @@ struct TheWeaver : Module {
     std::vector<float> orderPool;        // raw poly-channel order
     std::vector<float> scaleRunPool;     // scale-run variant
 
+    // Preallocated scratch buffers so buildPools() never heap-allocates on the
+    // audio thread (it runs every sample).
+    std::vector<float> inputScratch;     // raw captured input channels
+    std::vector<float> baseScratch;      // sorted/unique base for octave spread
+
     // ---- Scale bus state ----------------------------------------------------
     int scaleMask = 0xFFF;   // chromatic fallback (all 12 active)
     int scaleRoot = 0;       // 0 = C
@@ -193,6 +198,8 @@ struct TheWeaver : Module {
         orderPool.reserve(MAX_POLY_IN);
         scaleRunPool.reserve(MAX_POLY_IN * 12);
         heldNotes.reserve(MAX_POLY_IN);
+        inputScratch.reserve(MAX_POLY_IN);
+        baseScratch.reserve(MAX_POLY_IN);
     }
 
     // ------------------------------------------------------------------------
@@ -288,31 +295,29 @@ struct TheWeaver : Module {
         orderPool.clear();
         sortedPool.clear();
 
-        // Detect "active" input: connected, has channels, AND at least one
-        // channel carries a non-zero voltage. Many polyphonic sources keep a
-        // fixed channel count and signal note-off by driving the V/Oct back
-        // to 0 V (MIDI-CV-style note-off, sequencers between steps). Without
-        // this filter Hold/Latch would continually overwrite heldNotes with
-        // the idle 0 V state and never actually latch the previous chord.
-        bool inputConnected = inputs[NOTES_INPUT].isConnected() &&
-                              inputs[NOTES_INPUT].getChannels() > 0;
-        std::vector<float> currentInputNotes;
-        if (inputConnected) {
+        // Detect note presence from the input's *channel count*, never from the
+        // pitch value. 0 V is a valid note (C in V/Oct), so filtering on
+        // v != 0 would drop any played C and, with Hold, latch an incomplete
+        // chord. A well-behaved polyphonic source drops its channel count to 0
+        // when all notes are released — that transition (channels -> 0, or the
+        // cable being unpatched) is what lets Hold latch the previous chord
+        // instead of continuously overwriting it.
+        inputScratch.clear();
+        if (inputs[NOTES_INPUT].isConnected()) {
             int ch = std::min(inputs[NOTES_INPUT].getChannels(), MAX_POLY_IN);
             for (int i = 0; i < ch; i++) {
-                float v = inputs[NOTES_INPUT].getVoltage(i);
-                if (v != 0.f) currentInputNotes.push_back(v);
+                inputScratch.push_back(inputs[NOTES_INPUT].getVoltage(i));
             }
         }
-        bool inputHasNotes = !currentInputNotes.empty();
+        bool inputHasNotes = !inputScratch.empty();
 
         if (inputHasNotes) {
-            heldNotes = currentInputNotes;
+            heldNotes = inputScratch;  // capacity-reserved: no realloc
             hadActiveInput = true;
         }
 
         if (!inputHasNotes && hold && hadActiveInput && !heldNotes.empty()) {
-            // keep heldNotes as-is
+            // Notes released while Hold is engaged: latch the previous chord.
         } else if (!inputHasNotes) {
             heldNotes.clear();
             hadActiveInput = false;
@@ -328,15 +333,17 @@ struct TheWeaver : Module {
             orderPool.push_back(quantizeToScale(v));
         }
 
-        // Sorted pool with octave spread
-        std::vector<float> base = orderPool;
-        std::sort(base.begin(), base.end());
-        base.erase(std::unique(base.begin(), base.end(),
-                               [](float a, float b) { return std::fabs(a - b) < 1e-4f; }),
-                   base.end());
+        // Sorted pool with octave spread. Reuse the preallocated scratch buffer
+        // (assign() reuses existing capacity) instead of constructing a fresh
+        // vector each sample.
+        baseScratch.assign(orderPool.begin(), orderPool.end());
+        std::sort(baseScratch.begin(), baseScratch.end());
+        baseScratch.erase(std::unique(baseScratch.begin(), baseScratch.end(),
+                              [](float a, float b) { return std::fabs(a - b) < 1e-4f; }),
+                          baseScratch.end());
 
         for (int o = 0; o < octaveSpread; o++) {
-            for (float v : base) {
+            for (float v : baseScratch) {
                 sortedPool.push_back(v + (float)o);
             }
         }
@@ -663,7 +670,14 @@ struct TheWeaver : Module {
             float outputPeriod = (ratio > 0.f) ? (clockPeriod / ratio) : DEFAULT_CLOCK_PERIOD;
             if (outputPeriod < 1e-4f) outputPeriod = 1e-4f;
 
-            if (sync && inputs[CLOCK_INPUT].isConnected()) {
+            // Hard sync only while a live clock is being detected. Once the
+            // clock is lost (no edge within CLOCK_LOST_TIMEOUT) we fall through
+            // to the free-running branch, which keeps the arp advancing from the
+            // last measured period (clockPeriod). Without this, at x1 or any
+            // divider ratio a stopped-but-still-patched clock would emit no new
+            // edges and output would halt; only ratio>1 kept ticking via the
+            // sub-tick interpolation below.
+            if (sync && inputs[CLOCK_INPUT].isConnected() && clockDetected) {
                 // Hard sync path
                 if (clockEdge) {
                     if (ratio >= 1.f) {
