@@ -67,10 +67,10 @@ struct PixelProbe : Module {
     // Last-sampled normalized canvas coordinate (within [0, 1]^2) after
     // pan/zoom. The widget reads these to draw the probe marker at the
     // actually-sampled location instead of the raw CV position.
-    // Updated only from the audio thread; widget reads it for display
-    // (single-writer / single-reader floats; tearing here is cosmetic).
-    float sampledU = 0.5f;
-    float sampledV = 0.5f;
+    // Written from the audio thread, read from the UI thread — atomic to
+    // avoid a data race (relaxed ordering: these are purely cosmetic).
+    std::atomic<float> sampledU{0.5f};
+    std::atomic<float> sampledV{0.5f};
 
     PixelProbe() {
         config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
@@ -111,6 +111,13 @@ struct PixelProbe : Module {
         return true;
     }
 
+    // Reset to the empty-image state (no pixels, no path). Used when a load
+    // fails or when restoring a patch that had no image, so state restore is
+    // deterministic and the module stops emitting stale colors.
+    void clearMedia() {
+        publishImage(std::make_shared<const ImageData>());
+    }
+
     std::string loadedPath() const {
         return snapshotImage()->path;
     }
@@ -145,8 +152,8 @@ struct PixelProbe : Module {
         float v = (yCv / zoom + panY + 1.f) * 0.5f;
         u = clamp(u, 0.f, 1.f);
         v = clamp(v, 0.f, 1.f);
-        sampledU = u;
-        sampledV = v;
+        sampledU.store(u, std::memory_order_relaxed);
+        sampledV.store(v, std::memory_order_relaxed);
 
         if (!img || img->pixels.empty() || img->w <= 0 || img->h <= 0) {
             outputs[HUE_OUTPUT].setVoltage(0.f);
@@ -195,9 +202,15 @@ struct PixelProbe : Module {
 
     void dataFromJson(json_t* rootJ) override {
         json_t* pJ = json_object_get(rootJ, "loadedPath");
+        std::string p;
         if (pJ && json_is_string(pJ)) {
-            std::string p = json_string_value(pJ);
-            if (!p.empty()) loadMedia(p);
+            p = json_string_value(pJ);
+        }
+        // Deterministic restore: an empty path, a missing key, or a failed
+        // reload (file moved/deleted) all reset to the empty image so we
+        // never keep outputting colors from a previously-loaded picture.
+        if (p.empty() || !loadMedia(p)) {
+            clearMedia();
         }
     }
 };
@@ -215,39 +228,71 @@ struct PixelCanvas : Widget {
     int nvgHandle = -1;
     std::shared_ptr<const ImageData> uploaded;
 
-    // Last NanoVG context observed in draw(). Cached so the destructor can
-    // free the GPU image when the widget is torn down (Codex P2 #192).
-    NVGcontext* lastVg = nullptr;
+    // The NanoVG context the current handle was created against. VCV can
+    // destroy and recreate the GL/NanoVG context (e.g. a VST host closing and
+    // reopening its window); when that happens a new vg pointer appears and
+    // the old handle id is meaningless. We track the owning context so we
+    // never reuse a stale handle or delete it against the wrong context.
+    NVGcontext* handleVg = nullptr;
 
     ~PixelCanvas() override {
-        if (nvgHandle != -1 && lastVg) {
-            nvgDeleteImage(lastVg, nvgHandle);
-            nvgHandle = -1;
+        // On plain module removal the GL context is still alive, so free the
+        // GPU image to avoid a leak. If the context was already torn down,
+        // onContextDestroy() has already reset the handle.
+        if (nvgHandle != -1 && handleVg) {
+            nvgDeleteImage(handleVg, nvgHandle);
         }
+        nvgHandle = -1;
+        handleVg = nullptr;
+    }
+
+    // Drop the cached handle without touching a (possibly dead) context.
+    void invalidateHandle() {
+        nvgHandle = -1;
+        handleVg = nullptr;
+        uploaded.reset();
+    }
+
+    void onContextCreate(const ContextCreateEvent& e) override {
+        // A fresh context: any cached handle belonged to the old one.
+        invalidateHandle();
+        Widget::onContextCreate(e);
+    }
+
+    void onContextDestroy(const ContextDestroyEvent& e) override {
+        // Free the GPU image against the context that owns it, then forget it
+        // so the next draw() uploads fresh against the new context.
+        if (nvgHandle != -1 && handleVg == e.vg) {
+            nvgDeleteImage(e.vg, nvgHandle);
+        }
+        invalidateHandle();
+        Widget::onContextDestroy(e);
     }
 
     void ensureTexture(NVGcontext* vg,
                        const std::shared_ptr<const ImageData>& img) {
+        // Defensive: if the context changed without an explicit destroy/create
+        // notification, abandon the stale handle rather than delete it on the
+        // wrong context.
+        if (nvgHandle != -1 && handleVg != vg) {
+            invalidateHandle();
+        }
         bool empty = !img || img->pixels.empty() || img->w <= 0 || img->h <= 0;
         if (empty) {
-            if (nvgHandle != -1) {
-                nvgDeleteImage(vg, nvgHandle);
-                nvgHandle = -1;
-            }
-            uploaded.reset();
+            if (nvgHandle != -1) nvgDeleteImage(vg, nvgHandle);
+            invalidateHandle();
             return;
         }
         if (nvgHandle == -1 || img != uploaded) {
             if (nvgHandle != -1) nvgDeleteImage(vg, nvgHandle);
             nvgHandle = nvgCreateImageRGBA(vg, img->w, img->h, 0,
                                             img->pixels.data());
+            handleVg = vg;
             uploaded = img;
         }
     }
 
     void draw(const DrawArgs& args) override {
-        lastVg = args.vg;
-
         // Background
         nvgBeginPath(args.vg);
         nvgRect(args.vg, 0, 0, box.size.x, box.size.y);
@@ -277,14 +322,16 @@ struct PixelCanvas : Widget {
         }
 
         // Probe marker at the actually-sampled point.
+        float sampledU = module->sampledU.load(std::memory_order_relaxed);
+        float sampledV = module->sampledV.load(std::memory_order_relaxed);
         float sx, sy;
         if (nvgHandle != -1) {
-            sx = ox + module->sampledU * drawW;
-            sy = oy + (1.f - module->sampledV) * drawH;
+            sx = ox + sampledU * drawW;
+            sy = oy + (1.f - sampledV) * drawH;
         } else {
             // No image: fall back to canvas-relative position.
-            sx = module->sampledU * box.size.x;
-            sy = (1.f - module->sampledV) * box.size.y;
+            sx = sampledU * box.size.x;
+            sy = (1.f - sampledV) * box.size.y;
         }
         sx = clamp(sx, 0.f, box.size.x);
         sy = clamp(sy, 0.f, box.size.y);
