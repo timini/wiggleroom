@@ -58,6 +58,7 @@ A collection of creative modules for [VCV Rack 2](https://vcvrack.com/), built w
 | **OctoLFO** | 8-channel clock-synced LFO with multiple shapes |
 | **TheArchitect** | Polyphonic quantizer and chord machine |
 | **XFade** | CV crossfader/mixer with Ring Mod and Fold modes |
+| **PixelProbe** | Image-to-CV color sampler — probe an image with X/Y CV, output Hue/Saturation/Intensity |
 
 ## Installation
 

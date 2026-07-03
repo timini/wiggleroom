@@ -111,6 +111,9 @@ extern Model* modelPreFlightClock;
 #ifdef HAS_THEWEAVER
 extern Model* modelTheWeaver;
 #endif
+#ifdef HAS_PIXELPROBE
+extern Model* modelPixelProbe;
+#endif
 
 void init(Plugin* p) {
     pluginInstance = p;
@@ -219,5 +222,8 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_THEWEAVER
     p->addModel(modelTheWeaver);
+#endif
+#ifdef HAS_PIXELPROBE
+    p->addModel(modelPixelProbe);
 #endif
 }

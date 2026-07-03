@@ -72,6 +72,7 @@ MODULE_HP = {
     "EucMix": 6,
     "Euclogic3": 28,
     "TheWeaver": 12,
+    "PixelProbe": 8,
 }
 
 
