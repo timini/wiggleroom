@@ -106,7 +106,7 @@
     {
       "slug": "OctoLFO",
       "name": "Octo LFO",
-      "description": "Clock-synced 8-channel LFO with wave shaping - Skew, Curve, and Fold modifiers with mini scope per channel",
+      "description": "Clock-synced 8-channel LFO with wave shaping - Skew, Curve, Fold, Scale, and Phase (NSEW) modifiers with mini scope per channel",
       "tags": ["Low-frequency oscillator", "Clock modulator", "Polyphonic"]
     },
     {
@@ -130,7 +130,7 @@
     {
       "slug": "ACID9Voice",
       "name": "ACID9 Voice",
-      "description": "Acid synthesizer voice with tri-core morphing oscillator, dual filters, stereo delay with ghost mode, and accent/slide control",
+      "description": "Acid synthesizer voice with tri-core morphing oscillator, dual filters, stereo delay with ghost mode, accent/slide control, and CV inputs for shape, isotope, and decay",
       "tags": ["Synth voice", "Oscillator", "Filter"]
     },
     {
@@ -150,18 +150,6 @@
       "name": "Vektor X",
       "description": "Vector synthesis module with joystick-style morphing between waveforms",
       "tags": ["Oscillator", "Synth voice"]
-    },
-    {
-      "slug": "Euclogic",
-      "name": "Euclogic",
-      "description": "Euclidean rhythm generator with logic operations",
-      "tags": ["Clock modulator", "Sequencer"]
-    },
-    {
-      "slug": "Euclogic2",
-      "name": "Euclogic 2",
-      "description": "Advanced Euclidean rhythm generator with expanded logic operations",
-      "tags": ["Clock modulator", "Sequencer"]
     },
     {
       "slug": "TetanusCoil",
@@ -191,6 +179,42 @@
       "slug": "XFade",
       "name": "XFade",
       "description": "CV crossfader utility",
+      "tags": ["Mixer", "Utility"]
+    },
+    {
+      "slug": "SpectraHenge",
+      "name": "SpectraHenge",
+      "description": "4-channel spatial/spectral mixer - stereo inputs, SVF filter morphing, equal-power panning on X/Y grid, with stereo send/return effects loop",
+      "tags": ["Mixer", "Filter", "Panning", "Effect", "Visual"]
+    },
+    {
+      "slug": "PreFlightClock",
+      "name": "PreFlight Clock",
+      "description": "Master clock with Ableton-style count-in sequence - fires reset, plays 4 metronome beeps, then starts run on the downbeat",
+      "tags": ["Clock modulator", "Utility"]
+    },
+    {
+      "slug": "EucSeq",
+      "name": "EucSeq",
+      "description": "4-channel Euclidean sequencer with per-step CV values, probability gates, and expander output to LogicMangler",
+      "tags": ["Sequencer", "Clock modulator"]
+    },
+    {
+      "slug": "LogicMangler",
+      "name": "Logic Mangler",
+      "description": "4-input truth table logic processor with cell locking, density control, and row/column randomize - standalone or EucSeq expander",
+      "tags": ["Logic", "Sequencer", "Clock modulator"]
+    },
+    {
+      "slug": "EucBank",
+      "name": "EucBank",
+      "description": "16-slot pattern storage and recall for EucSeq + LogicMangler expander chain",
+      "tags": ["Sequencer", "Controller"]
+    },
+    {
+      "slug": "EucMix",
+      "name": "EucMix",
+      "description": "4x4 CV summing matrix - standalone or expander for EucSeq chain CV mixing",
       "tags": ["Mixer", "Utility"]
     }
   ]

@@ -45,6 +45,9 @@ namespace WiggleRoom {
  *   - FM_IN: Frequency modulation
  *   - CLOCK: Clock for delay sync
  *   - RETURN: Insert loop return (normalizes to send when unpatched)
+ *   - SHAPE_CV: Shape (waveform morph) modulation
+ *   - ISOTOPE_CV: Isotope (detune/spread) modulation
+ *   - DECAY_CV: Decay (filter envelope) modulation
  *
  * Outputs:
  *   - LEFT/RIGHT: Main stereo output
@@ -81,6 +84,9 @@ struct ACID9Voice : FaustModule<VCVRackDSP> {
         FM_INPUT,
         CLOCK_INPUT,
         RETURN_INPUT,
+        SHAPE_CV_INPUT,
+        ISOTOPE_CV_INPUT,
+        DECAY_CV_INPUT,
         INPUTS_LEN
     };
     enum OutputId {
@@ -133,6 +139,9 @@ struct ACID9Voice : FaustModule<VCVRackDSP> {
         configInput(FM_INPUT, "FM");
         configInput(CLOCK_INPUT, "Clock");
         configInput(RETURN_INPUT, "Insert Return");
+        configInput(SHAPE_CV_INPUT, "Shape CV");
+        configInput(ISOTOPE_CV_INPUT, "Isotope CV");
+        configInput(DECAY_CV_INPUT, "Decay CV");
 
         // Outputs
         configOutput(LEFT_OUTPUT, "Left");
@@ -205,6 +214,14 @@ struct ACID9Voice : FaustModule<VCVRackDSP> {
         float filterMode = params[FILTER_MODE_PARAM].getValue();
         float grit = params[GRIT_PARAM].getValue();
 
+        // Apply CV modulation to shape, isotope, and decay
+        // Shape: 0-1 range, ±5V maps to ±0.5 (half range modulation)
+        float shapeFinal = clamp(shape + inputs[SHAPE_CV_INPUT].getVoltage() / 10.f, 0.f, 1.f);
+        // Isotope: 0-1 range, ±5V maps to ±0.5 (half range modulation)
+        float isotopeFinal = clamp(isotope + inputs[ISOTOPE_CV_INPUT].getVoltage() / 10.f, 0.f, 1.f);
+        // Decay: 0.01-2.0 range, ±5V maps to ±1.0s modulation
+        float decayFinal = clamp(decay + inputs[DECAY_CV_INPUT].getVoltage() / 5.f, 0.01f, 2.f);
+
         float delayTime = params[DELAY_TIME_PARAM].getValue();
         float delayFb = params[DELAY_FB_PARAM].getValue();
         float delayMix = params[DELAY_MIX_PARAM].getValue();
@@ -231,7 +248,7 @@ struct ACID9Voice : FaustModule<VCVRackDSP> {
         faustDsp.setParamValue(0, accent);           // accent
         faustDsp.setParamValue(1, cutoff);           // cutoff
         faustDsp.setParamValue(2, cutoffCV);         // cutoff_cv
-        faustDsp.setParamValue(3, decay);            // decay
+        faustDsp.setParamValue(3, decayFinal);        // decay (with CV)
         faustDsp.setParamValue(4, delayFb);          // delay_fb
         faustDsp.setParamValue(5, delayGhost);       // delay_ghost
         faustDsp.setParamValue(6, delayMix);         // delay_mix
@@ -241,12 +258,12 @@ struct ACID9Voice : FaustModule<VCVRackDSP> {
         faustDsp.setParamValue(10, fmIn);            // fm_in
         faustDsp.setParamValue(11, gate);            // gate
         faustDsp.setParamValue(12, grit);            // grit
-        faustDsp.setParamValue(13, isotope);         // isotope
+        faustDsp.setParamValue(13, isotopeFinal);     // isotope (with CV)
         faustDsp.setParamValue(14, resonance);       // resonance
         faustDsp.setParamValue(15, returnConnected); // return_connected
         faustDsp.setParamValue(16, returnL);         // return_in_l
         faustDsp.setParamValue(17, returnR);         // return_in_r
-        faustDsp.setParamValue(18, shape);           // shape
+        faustDsp.setParamValue(18, shapeFinal);       // shape (with CV)
         faustDsp.setParamValue(19, slide);           // slide
         faustDsp.setParamValue(20, subLevel);        // sub_level
         faustDsp.setParamValue(21, subMode);         // sub_mode
@@ -330,6 +347,12 @@ struct ACID9VoiceWidget : ModuleWidget {
         // === INSERT LOOP (middle row) ===
         addOutput(createOutputCentered<PJ301MPort>(Vec(col5, cvY), module, ACID9Voice::SEND_OUTPUT));
         addInput(createInputCentered<PJ301MPort>(Vec(col6, cvY), module, ACID9Voice::RETURN_INPUT));
+
+        // === ADDITIONAL CV INPUTS (second CV row) ===
+        float cvY2 = 237.f;
+        addInput(createInputCentered<PJ301MPort>(Vec(col1, cvY2), module, ACID9Voice::SHAPE_CV_INPUT));
+        addInput(createInputCentered<PJ301MPort>(Vec(col2, cvY2), module, ACID9Voice::ISOTOPE_CV_INPUT));
+        addInput(createInputCentered<PJ301MPort>(Vec(col3, cvY2), module, ACID9Voice::DECAY_CV_INPUT));
 
         // === MAIN INPUTS (bottom) ===
         float inputY = 270.f;

@@ -8,7 +8,7 @@
 
 #include <cassert>
 #include <iostream>
-#include "../src/modules/Euclogic/TruthTable.hpp"
+#include "../src/common/euclogic/TruthTable.hpp"
 
 void test_undo_after_mutate() {
     WiggleRoom::TruthTable tt;

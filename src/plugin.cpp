@@ -21,11 +21,17 @@ extern Model* modelOctoLFO;
 #ifdef HAS_THEARCHITECT
 extern Model* modelTheArchitect;
 #endif
-#ifdef HAS_EUCLOGIC
-extern Model* modelEuclogic;
+#ifdef HAS_EUCSEQ
+extern Model* modelEucSeq;
 #endif
-#ifdef HAS_EUCLOGIC2
-extern Model* modelEuclogic2;
+#ifdef HAS_LOGICMANGLER
+extern Model* modelLogicMangler;
+#endif
+#ifdef HAS_EUCBANK
+extern Model* modelEucBank;
+#endif
+#ifdef HAS_EUCMIX
+extern Model* modelEucMix;
 #endif
 #ifdef HAS_LADDERLPF
 extern Model* modelLadderLPF;
@@ -96,6 +102,12 @@ extern Model* modelLinkage;
 #ifdef HAS_XFADE
 extern Model* modelXFade;
 #endif
+#ifdef HAS_SPECTRAHENGE
+extern Model* modelSpectraHenge;
+#endif
+#ifdef HAS_PREFLIGHTCLOCK
+extern Model* modelPreFlightClock;
+#endif
 
 void init(Plugin* p) {
     pluginInstance = p;
@@ -115,11 +127,17 @@ void init(Plugin* p) {
 #ifdef HAS_THEARCHITECT
     p->addModel(modelTheArchitect);
 #endif
-#ifdef HAS_EUCLOGIC
-    p->addModel(modelEuclogic);
+#ifdef HAS_EUCSEQ
+    p->addModel(modelEucSeq);
 #endif
-#ifdef HAS_EUCLOGIC2
-    p->addModel(modelEuclogic2);
+#ifdef HAS_LOGICMANGLER
+    p->addModel(modelLogicMangler);
+#endif
+#ifdef HAS_EUCBANK
+    p->addModel(modelEucBank);
+#endif
+#ifdef HAS_EUCMIX
+    p->addModel(modelEucMix);
 #endif
 #ifdef HAS_LADDERLPF
     p->addModel(modelLadderLPF);
@@ -189,5 +207,11 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_XFADE
     p->addModel(modelXFade);
+#endif
+#ifdef HAS_SPECTRAHENGE
+    p->addModel(modelSpectraHenge);
+#endif
+#ifdef HAS_PREFLIGHTCLOCK
+    p->addModel(modelPreFlightClock);
 #endif
 }

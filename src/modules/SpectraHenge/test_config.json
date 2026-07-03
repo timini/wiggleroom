@@ -1,0 +1,96 @@
+{
+  "module_type": "effect",
+  "description": "4-channel spatial/spectral mixer - SVF filter morphing with equal-power panning on X/Y grid",
+  "quality_thresholds": {
+    "thd_max_percent": 20.0,
+    "clipping_max_percent": 5.0,
+    "hnr_min_db": -5.0,
+    "allow_hot_signal": true
+  },
+  "test_scenarios": [
+    {
+      "name": "default",
+      "duration": 2.0,
+      "description": "Default positions - channels spread across stereo field"
+    },
+    {
+      "name": "all_lpf",
+      "duration": 2.0,
+      "parameters": {
+        "tilt1": 0.0,
+        "tilt2": 0.0,
+        "tilt3": 0.0,
+        "tilt4": 0.0,
+        "pan1": 0.0,
+        "pan2": 0.33,
+        "pan3": 0.66,
+        "pan4": 1.0
+      },
+      "description": "All channels in LPF mode, spread across stereo"
+    },
+    {
+      "name": "all_hpf",
+      "duration": 2.0,
+      "parameters": {
+        "tilt1": 1.0,
+        "tilt2": 1.0,
+        "tilt3": 1.0,
+        "tilt4": 1.0,
+        "pan1": 0.25,
+        "pan2": 0.5,
+        "pan3": 0.5,
+        "pan4": 0.75
+      },
+      "description": "All channels in HPF mode, centered stereo"
+    },
+    {
+      "name": "morph_spread",
+      "duration": 3.0,
+      "parameters": {
+        "tilt1": 0.0,
+        "tilt2": 0.33,
+        "tilt3": 0.66,
+        "tilt4": 1.0,
+        "pan1": 0.0,
+        "pan2": 0.33,
+        "pan3": 0.66,
+        "pan4": 1.0,
+        "q": 3.0
+      },
+      "description": "Full morph spread LP→BP→HP with resonance"
+    },
+    {
+      "name": "high_resonance",
+      "duration": 2.0,
+      "parameters": {
+        "q": 8.0,
+        "tilt1": 0.5,
+        "tilt2": 0.5,
+        "tilt3": 0.5,
+        "tilt4": 0.5
+      },
+      "description": "High Q with all channels at BPF"
+    }
+  ],
+  "parameter_sweeps": {
+    "exclude": [],
+    "steps": 8
+  },
+  "showcase": {
+    "duration": 15.0,
+    "automations": [
+      {"param": "pan1", "start_time": 0.0, "end_time": 15.0, "start_value": 0.0, "end_value": 1.0},
+      {"param": "pan2", "start_time": 0.0, "end_time": 15.0, "start_value": 1.0, "end_value": 0.0},
+      {"param": "pan3", "start_time": 0.0, "end_time": 7.5, "start_value": 0.25, "end_value": 0.75},
+      {"param": "pan3", "start_time": 7.5, "end_time": 15.0, "start_value": 0.75, "end_value": 0.25},
+      {"param": "pan4", "start_time": 0.0, "end_time": 15.0, "start_value": 0.5, "end_value": 0.5},
+      {"param": "tilt1", "start_time": 0.0, "end_time": 15.0, "start_value": 0.0, "end_value": 1.0},
+      {"param": "tilt2", "start_time": 0.0, "end_time": 15.0, "start_value": 1.0, "end_value": 0.0},
+      {"param": "tilt3", "start_time": 0.0, "end_time": 7.5, "start_value": 0.0, "end_value": 1.0},
+      {"param": "tilt3", "start_time": 7.5, "end_time": 15.0, "start_value": 1.0, "end_value": 0.0},
+      {"param": "tilt4", "start_time": 0.0, "end_time": 15.0, "start_value": 0.5, "end_value": 0.5},
+      {"param": "q", "start_time": 0.0, "end_time": 7.5, "start_value": 0.5, "end_value": 5.0},
+      {"param": "q", "start_time": 7.5, "end_time": 15.0, "start_value": 5.0, "end_value": 0.5}
+    ]
+  }
+}
