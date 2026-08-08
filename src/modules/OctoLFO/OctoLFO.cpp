@@ -11,6 +11,7 @@
  *     - Skew: Time warping (shift peak position)
  *     - Curve: Slope warping (log/exp response)
  *     - Fold: Harmonic warping (wave folding)
+ *   - Per-LFO exponential FM input with bipolar attenuverter
  *   - Mini scope display per LFO
  ******************************************************************************/
 
@@ -126,6 +127,12 @@ struct OctoLFO : Module {
     static constexpr int NUM_LFOS = 8;
     static constexpr int SCOPE_BUFFER_SIZE = 256;  // 4x zoom out for longer waveform display
 
+    // FM depth at full attenuverter: +/-5V spans +/-FM_RANGE_OCTAVES around the synced rate
+    static constexpr float FM_RANGE_OCTAVES = 4.f;
+    // Cap the phase increment so extreme FM (or an audio-rate clock input)
+    // can't drive the phase wrap loop below into thousands of iterations
+    static constexpr float MAX_PHASE_INC = 0.25f;
+
     enum ParamId {
         MASTER_RATE_PARAM,  // Master mult/div
         ENUMS(BIPOLAR_PARAM, NUM_LFOS),  // Per-LFO Bipolar (0) / Unipolar (1) switch
@@ -136,11 +143,13 @@ struct OctoLFO : Module {
         ENUMS(FOLD_PARAM, NUM_LFOS),      // Harmonic warping
         ENUMS(SCALE_PARAM, NUM_LFOS),    // Per-LFO amplitude scale
         ENUMS(PHASE_PARAM, NUM_LFOS),    // Per-LFO phase offset (NSEW)
+        ENUMS(FM_PARAM, NUM_LFOS),       // Per-LFO FM attenuverter
         PARAMS_LEN
     };
     enum InputId {
         CLOCK_INPUT,
         RESET_INPUT,
+        ENUMS(FM_INPUT, NUM_LFOS),       // Per-LFO frequency modulation CV
         INPUTS_LEN
     };
     enum OutputId {
@@ -207,6 +216,10 @@ struct OctoLFO : Module {
             // Per-LFO phase offset: N=0°, E=90°, S=180°, W=270°
             configSwitch(PHASE_PARAM + i, 0.f, 3.f, 0.f, label + " Phase", {"N (0\u00b0)", "E (90\u00b0)", "S (180\u00b0)", "W (270\u00b0)"});
 
+            // FM attenuverter: -1 (inverted) to +1, 0 = no modulation
+            configParam(FM_PARAM + i, -1.f, 1.f, 0.f, label + " FM Amount", "%", 0.f, 100.f);
+
+            configInput(FM_INPUT + i, label + " FM");
             configOutput(LFO_OUTPUT + i, label);
         }
 
@@ -304,7 +317,17 @@ struct OctoLFO : Module {
             float combinedRate = masterRate * lfoRate;
             float freq = combinedRate / clockPeriod;
 
-            phases[i] += freq * dt;
+            // Exponential FM around the clock-synced rate. Skipped entirely at
+            // zero attenuation or with nothing patched, so existing patches keep
+            // their rates.
+            float fmAmount = params[FM_PARAM + i].getValue();
+            if (inputs[FM_INPUT + i].isConnected() && std::abs(fmAmount) > 0.001f) {
+                float fmCV = inputs[FM_INPUT + i].getVoltage();
+                freq *= std::pow(2.f, (fmCV / 5.f) * fmAmount * FM_RANGE_OCTAVES);
+            }
+
+            float phaseInc = clamp(freq * dt, -MAX_PHASE_INC, MAX_PHASE_INC);
+            phases[i] += phaseInc;
             while (phases[i] >= 1.f) phases[i] -= 1.f;
             while (phases[i] < 0.f) phases[i] += 1.f;
 
@@ -437,7 +460,7 @@ struct MiniScopeWidget : Widget {
 struct OctoLFOWidget : ModuleWidget {
     OctoLFOWidget(OctoLFO* module) {
         setModule(module);
-        box.size = Vec(20 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
+        box.size = Vec(24 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT);
         addChild(new WiggleRoom::ImagePanel(
             asset::plugin(pluginInstance, "res/OctoLFO.png"), box.size));
 
@@ -448,7 +471,7 @@ struct OctoLFOWidget : ModuleWidget {
         addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 
         // Use mm2px for consistent positioning (VCV uses mm internally)
-        float panelWidth = box.size.x;  // 101.6mm for 20HP
+        float panelWidth = box.size.x;  // 121.92mm for 24HP
 
         // Top section: Clock input, Reset, Master rate
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(8, 12)), module, OctoLFO::CLOCK_INPUT));
@@ -460,17 +483,19 @@ struct OctoLFOWidget : ModuleWidget {
         float startY = 24.f;  // mm
         float rowHeight = 12.f;  // mm
 
-        // Column positions in mm
-        float colRate = 8.f;
-        float colWave = 18.f;
-        float colSkew = 28.f;
-        float colCurve = 38.f;
-        float colFold = 48.f;
-        float colScope = 62.f;  // Center of scope
-        float colPhase = 76.f;    // Phase offset (N/E/S/W)
-        float colScale = 83.f;   // Amplitude scale
-        float colBipolar = 89.f;  // Bipolar/Unipolar switch per LFO
-        float colOut = 96.f;
+        // Column positions in mm (24HP panel is 121.92mm wide)
+        float colRate = 7.f;
+        float colWave = 15.5f;
+        float colSkew = 24.f;
+        float colCurve = 32.f;
+        float colFold = 40.f;
+        float colScope = 54.f;   // Center of scope (spans 45-63mm)
+        float colPhase = 70.f;   // Phase offset (N/E/S/W)
+        float colScale = 78.f;   // Amplitude scale
+        float colBipolar = 84.5f; // Bipolar/Unipolar switch per LFO
+        float colFmAtten = 91.5f; // FM attenuverter
+        float colFmIn = 101.5f;  // FM CV input
+        float colOut = 114.f;
 
         for (int i = 0; i < OctoLFO::NUM_LFOS; i++) {
             float y = startY + i * rowHeight;
@@ -506,6 +531,12 @@ struct OctoLFOWidget : ModuleWidget {
 
             // Bipolar/Unipolar switch
             addParam(createParamCentered<CKSS>(mm2px(Vec(colBipolar, y)), module, OctoLFO::BIPOLAR_PARAM + i));
+
+            // FM attenuverter
+            addParam(createParamCentered<Trimpot>(mm2px(Vec(colFmAtten, y)), module, OctoLFO::FM_PARAM + i));
+
+            // FM CV input
+            addInput(createInputCentered<PJ301MPort>(mm2px(Vec(colFmIn, y)), module, OctoLFO::FM_INPUT + i));
 
             // Output jack
             addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(colOut, y)), module, OctoLFO::LFO_OUTPUT + i));

@@ -45,7 +45,7 @@ MODULE_HP = {
     "Matter": 8,
     "ModalBell": 8,
     "MoogLPF": 4,
-    "OctoLFO": 20,
+    "OctoLFO": 24,
     "PluckedString": 6,
     "SaturationEcho": 4,
     "SolinaEnsemble": 4,
