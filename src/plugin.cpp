@@ -33,6 +33,30 @@ extern Model* modelEucBank;
 #ifdef HAS_EUCMIX
 extern Model* modelEucMix;
 #endif
+#ifdef HAS_EUCSEQ2
+extern Model* modelEucSeq2;
+#endif
+#ifdef HAS_EUCSEQ3
+extern Model* modelEucSeq3;
+#endif
+#ifdef HAS_LOGICMANGLER2
+extern Model* modelLogicMangler2;
+#endif
+#ifdef HAS_LOGICMANGLER3
+extern Model* modelLogicMangler3;
+#endif
+#ifdef HAS_EUCMIX2
+extern Model* modelEucMix2;
+#endif
+#ifdef HAS_EUCMIX3
+extern Model* modelEucMix3;
+#endif
+#ifdef HAS_EUCBANK2
+extern Model* modelEucBank2;
+#endif
+#ifdef HAS_EUCBANK3
+extern Model* modelEucBank3;
+#endif
 #ifdef HAS_LADDERLPF
 extern Model* modelLadderLPF;
 #endif
@@ -144,6 +168,30 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_EUCMIX
     p->addModel(modelEucMix);
+#endif
+#ifdef HAS_EUCSEQ2
+    p->addModel(modelEucSeq2);
+#endif
+#ifdef HAS_EUCSEQ3
+    p->addModel(modelEucSeq3);
+#endif
+#ifdef HAS_LOGICMANGLER2
+    p->addModel(modelLogicMangler2);
+#endif
+#ifdef HAS_LOGICMANGLER3
+    p->addModel(modelLogicMangler3);
+#endif
+#ifdef HAS_EUCMIX2
+    p->addModel(modelEucMix2);
+#endif
+#ifdef HAS_EUCMIX3
+    p->addModel(modelEucMix3);
+#endif
+#ifdef HAS_EUCBANK2
+    p->addModel(modelEucBank2);
+#endif
+#ifdef HAS_EUCBANK3
+    p->addModel(modelEucBank3);
 #endif
 #ifdef HAS_LADDERLPF
     p->addModel(modelLadderLPF);

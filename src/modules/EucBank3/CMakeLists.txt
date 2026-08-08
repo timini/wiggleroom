@@ -1,0 +1,5 @@
+add_library(EucBank3_Module STATIC EucBank3.cpp)
+target_link_libraries(EucBank3_Module PRIVATE RackSDK)
+if(TARGET CommonLib)
+    target_link_libraries(EucBank3_Module PRIVATE CommonLib)
+endif()

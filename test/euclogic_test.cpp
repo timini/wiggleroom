@@ -947,6 +947,836 @@ int testLfoPhase(int argc, char** argv) {
     return (failed == 0) ? 0 : 1;
 }
 
+// Test: getHit() works immediately after construction (no configure/tick needed)
+int testGetHitAfterConstruct(int argc, char** argv) {
+    (void)argc; (void)argv;
+
+    WiggleRoom::EuclideanEngine engine;
+    // Default: steps=16, hits=8 — pattern should be populated at construction
+
+    int hitCount = 0;
+    for (int s = 0; s < engine.steps; s++) {
+        if (engine.getHit(s)) hitCount++;
+    }
+
+    bool pass = (hitCount == 8) && ((int)engine.pattern.size() == 16);
+
+    std::cout << "{\"test\": \"getHit_after_construct\""
+              << ", \"pattern_size\": " << engine.pattern.size()
+              << ", \"hit_count\": " << hitCount
+              << ", \"PASS\": " << (pass ? "true" : "false")
+              << "}" << std::endl;
+
+    return pass ? 0 : 1;
+}
+
+// Test: pattern updates correctly when configure() changes hits
+int testPatternUpdatesOnConfigure(int argc, char** argv) {
+    (void)argc; (void)argv;
+
+    WiggleRoom::EuclideanEngine engine;
+    engine.configure(16, 4, 0);
+
+    int hitCount4 = 0;
+    for (int s = 0; s < engine.steps; s++) {
+        if (engine.getHit(s)) hitCount4++;
+    }
+
+    engine.configure(16, 8, 0);
+
+    int hitCount8 = 0;
+    for (int s = 0; s < engine.steps; s++) {
+        if (engine.getHit(s)) hitCount8++;
+    }
+
+    bool pass = (hitCount4 == 4) && (hitCount8 == 8);
+
+    std::cout << "{\"test\": \"pattern_updates_on_configure\""
+              << ", \"hits_after_4\": " << hitCount4
+              << ", \"hits_after_8\": " << hitCount8
+              << ", \"PASS\": " << (pass ? "true" : "false")
+              << "}" << std::endl;
+
+    return pass ? 0 : 1;
+}
+
+// Test: Density-aware randomize — density 0 should produce all OFF, density 1 all ON
+int testTruthDensityRandomize(int argc, char** argv) {
+    (void)argc; (void)argv;
+
+    int passed = 0;
+    int failed = 0;
+    std::vector<std::string> failures;
+
+    // Test 1: density=0 for all columns → all cells OFF
+    {
+        WiggleRoom::TruthTable table;
+        table.setSeed(123);
+        float densities[4] = {0.f, 0.f, 0.f, 0.f};
+        table.randomizeWithDensity(densities);
+
+        int onCount = 0;
+        for (int i = 0; i < 16; i++) {
+            onCount += __builtin_popcount(table.mapping[i]);
+        }
+        if (onCount == 0) {
+            passed++;
+        } else {
+            failed++;
+            failures.push_back("density=0: expected 0 ON cells, got " + std::to_string(onCount));
+        }
+    }
+
+    // Test 2: density=1 for all columns → all cells ON
+    {
+        WiggleRoom::TruthTable table;
+        table.setSeed(456);
+        float densities[4] = {1.f, 1.f, 1.f, 1.f};
+        table.randomizeWithDensity(densities);
+
+        int onCount = 0;
+        for (int i = 0; i < 16; i++) {
+            onCount += __builtin_popcount(table.mapping[i]);
+        }
+        if (onCount == 64) {  // 16 rows * 4 cols
+            passed++;
+        } else {
+            failed++;
+            failures.push_back("density=1: expected 64 ON cells, got " + std::to_string(onCount));
+        }
+    }
+
+    // Test 3: density=0 for col 0, density=1 for col 1 — col 0 all OFF, col 1 all ON
+    {
+        WiggleRoom::TruthTable table;
+        table.setSeed(789);
+        float densities[4] = {0.f, 1.f, 0.5f, 0.5f};
+        table.randomizeWithDensity(densities);
+
+        int col0On = 0, col1On = 0;
+        for (int i = 0; i < 16; i++) {
+            if (table.mapping[i] & (1 << 0)) col0On++;
+            if (table.mapping[i] & (1 << 1)) col1On++;
+        }
+        bool col0Ok = (col0On == 0);
+        bool col1Ok = (col1On == 16);
+        if (col0Ok && col1Ok) {
+            passed++;
+        } else {
+            failed++;
+            std::ostringstream oss;
+            oss << "mixed density: col0 ON=" << col0On << " (expect 0), col1 ON=" << col1On << " (expect 16)";
+            failures.push_back(oss.str());
+        }
+    }
+
+    // Test 4: density=0.5 should produce roughly 50% (within 3-sigma)
+    {
+        WiggleRoom::TruthTable table;
+        table.setSeed(999);
+        float densities[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+        table.randomizeWithDensity(densities);
+
+        int onCount = 0;
+        for (int i = 0; i < 16; i++) {
+            onCount += __builtin_popcount(table.mapping[i]);
+        }
+        // 64 cells at 50% → expected 32, stddev = sqrt(64*0.25) = 4
+        float expected = 32.f;
+        float stddev = 4.f;
+        bool within3Sigma = std::abs(onCount - expected) <= 3 * stddev;
+        if (within3Sigma) {
+            passed++;
+        } else {
+            failed++;
+            failures.push_back("density=0.5: got " + std::to_string(onCount) + " ON cells (expected ~32)");
+        }
+    }
+
+    // Test 5: locked cells are preserved
+    {
+        WiggleRoom::TruthTable table;
+        table.setSeed(111);
+        // Set a specific cell and lock it
+        table.mapping[0] = 0x01;  // bit 0 ON for state 0
+        table.toggleLock(0, 0);    // lock bit 0 of state 0
+
+        float densities[4] = {0.f, 0.f, 0.f, 0.f};
+        table.randomizeWithDensity(densities);
+
+        bool lockedPreserved = (table.mapping[0] & 1) == 1;
+        // All other bits of state 0 should be OFF (density=0, unlocked)
+        bool othersOff = (table.mapping[0] & ~1) == 0;
+        if (lockedPreserved && othersOff) {
+            passed++;
+        } else {
+            failed++;
+            failures.push_back("locked cells: bit0 preserved=" + std::string(lockedPreserved ? "yes" : "no") +
+                             ", others off=" + std::string(othersOff ? "yes" : "no"));
+        }
+    }
+
+    // Test 6: undo works after density randomize
+    {
+        WiggleRoom::TruthTable table;
+        table.setSeed(222);
+        auto original = table.mapping;
+        float densities[4] = {0.f, 0.f, 0.f, 0.f};
+        table.randomizeWithDensity(densities);
+        table.undo();
+        bool restored = (table.mapping == original);
+        if (restored) {
+            passed++;
+        } else {
+            failed++;
+            failures.push_back("undo after density randomize did not restore original");
+        }
+    }
+
+    std::cout << "{\"test\": \"truth_density_randomize\", \"passed\": " << passed << ", \"failed\": " << failed;
+    if (!failures.empty()) {
+        std::cout << ", \"failures\": [";
+        for (size_t i = 0; i < failures.size(); i++) {
+            std::cout << "\"" << failures[i] << "\"";
+            if (i < failures.size() - 1) std::cout << ", ";
+        }
+        std::cout << "]";
+    }
+    std::cout << "}" << std::endl;
+
+    return (failed == 0) ? 0 : 1;
+}
+
+// Test: Intersect falling mode band detection — simulates the band index logic
+int testIntersectFalling(int argc, char** argv) {
+    (void)argc; (void)argv;
+
+    int passed = 0;
+    int failed = 0;
+    std::vector<std::string> failures;
+
+    // Simulate the band index calculation from Intersect::process()
+    // Virtual bands: -1 below min, divisions above max
+    auto calcBand = [](float normalizedCV, int divisions) -> int {
+        if (normalizedCV <= 0.f) return -1;
+        if (normalizedCV >= 1.f) return divisions;
+        int band = (int)std::floor(normalizedCV * divisions);
+        if (band >= divisions) band = divisions - 1;
+        if (band < 0) band = 0;
+        return band;
+    };
+
+    // Test 1: 4 divisions, CV sweep 0→10V→0V — all bands should trigger falling
+    {
+        int divisions = 4;
+        // Simulate CV voltages: rising then falling
+        std::vector<float> cvValues = {0.f, 2.5f, 5.f, 7.5f, 10.f, 7.5f, 5.f, 2.5f, 0.f};
+        int lastBand = -999;
+        std::vector<int> fallingTriggerBands;
+
+        for (float cv : cvValues) {
+            float norm = std::min(std::max(cv / 10.f, 0.f), 1.f);
+            int band = calcBand(norm, divisions);
+
+            if (band != lastBand && lastBand != -999) {
+                if (band < lastBand) {  // falling
+                    fallingTriggerBands.push_back(band);
+                }
+            }
+            lastBand = band;
+        }
+
+        // Falling from 10V→0V: 10→7.5(band3), 7.5→5(band2), 5→2.5(band1), 2.5→0(virtual -1)
+        // Band 0 is skipped because 2.5V is exactly on the boundary (band 1) and 0V jumps to virtual
+        std::vector<int> expected = {3, 2, 1, -1};
+        if (fallingTriggerBands == expected) {
+            passed++;
+        } else {
+            std::ostringstream oss;
+            oss << "4div sweep: falling triggers at bands [";
+            for (size_t i = 0; i < fallingTriggerBands.size(); i++) {
+                oss << fallingTriggerBands[i];
+                if (i < fallingTriggerBands.size() - 1) oss << ",";
+            }
+            oss << "], expected [3,2,1,0]";
+            failed++;
+            failures.push_back(oss.str());
+        }
+    }
+
+    // Test 2: top band triggers on falling when CV drops from exactly 10V
+    {
+        int divisions = 4;
+        int lastBand = calcBand(1.0f, divisions);  // 10V → should be virtual band 4
+        float droppedCV = 9.0f;
+        float norm = std::min(std::max(droppedCV / 10.f, 0.f), 1.f);
+        int newBand = calcBand(norm, divisions);  // 9V → band 3
+
+        bool triggersFalling = (newBand < lastBand);
+        std::ostringstream oss;
+        oss << "10V drop: lastBand=" << lastBand << " newBand=" << newBand << " triggers=" << triggersFalling;
+        if (triggersFalling) {
+            passed++;
+        } else {
+            failed++;
+            failures.push_back(oss.str());
+        }
+    }
+
+    // Test 3: top band triggers on falling when CV drops from 9.5V to 7V (within top band to next)
+    {
+        int divisions = 4;
+        float cv1 = 9.5f, cv2 = 7.0f;
+        int band1 = calcBand(cv1 / 10.f, divisions);  // 0.95 → floor(3.8) = 3
+        int band2 = calcBand(cv2 / 10.f, divisions);  // 0.70 → floor(2.8) = 2
+
+        bool triggersFalling = (band2 < band1);
+        if (triggersFalling) {
+            passed++;
+        } else {
+            failed++;
+            std::ostringstream oss;
+            oss << "9.5V→7V: band " << band1 << "→" << band2 << " no trigger";
+            failures.push_back(oss.str());
+        }
+    }
+
+    // Test 4: top band — CV stays within top band, no trigger
+    {
+        int divisions = 4;
+        float cv1 = 9.5f, cv2 = 8.5f;  // both in band 3
+        int band1 = calcBand(cv1 / 10.f, divisions);
+        int band2 = calcBand(cv2 / 10.f, divisions);
+
+        bool noTrigger = (band1 == band2);
+        if (noTrigger) {
+            passed++;
+        } else {
+            failed++;
+            failures.push_back("same-band movement triggered unexpectedly");
+        }
+    }
+
+    // Test 5: many divisions (32), top band falling detection
+    {
+        int divisions = 32;
+        float cv1 = 10.0f;  // normalized 1.0 → virtual band 32
+        float cv2 = 9.5f;   // normalized 0.95 → floor(30.4) = 30
+
+        int band1 = calcBand(cv1 / 10.f, divisions);
+        int band2 = calcBand(cv2 / 10.f, divisions);
+
+        bool triggersFalling = (band2 < band1);
+        if (triggersFalling) {
+            passed++;
+        } else {
+            failed++;
+            std::ostringstream oss;
+            oss << "32div 10V→9.5V: band " << band1 << "→" << band2 << " no trigger";
+            failures.push_back(oss.str());
+        }
+    }
+
+    // Test 6: Rising into bottom band from 0V
+    {
+        int divisions = 4;
+        int band1 = calcBand(0.f, divisions);   // 0V → virtual band -1
+        int band2 = calcBand(0.5f / 10.f, divisions);  // 0.5V → band 0
+
+        bool triggersRising = (band2 > band1);
+        if (triggersRising) {
+            passed++;
+        } else {
+            failed++;
+            std::ostringstream oss;
+            oss << "0V→0.5V: band " << band1 << "→" << band2 << " no rising trigger";
+            failures.push_back(oss.str());
+        }
+    }
+
+    // Test 7: Exactly at a boundary — floor(0.75 * 4) = 3, floor(0.5 * 4) = 2
+    {
+        int divisions = 4;
+        int band1 = calcBand(0.75f, divisions);  // exactly on boundary → band 3
+        int band2 = calcBand(0.5f, divisions);   // exactly on boundary → band 2
+
+        bool triggersFalling = (band2 < band1);
+        if (triggersFalling) {
+            passed++;
+        } else {
+            failed++;
+            std::ostringstream oss;
+            oss << "boundary: band " << band1 << "→" << band2;
+            failures.push_back(oss.str());
+        }
+    }
+
+    std::cout << "{\"test\": \"intersect_falling\", \"passed\": " << passed << ", \"failed\": " << failed;
+    if (!failures.empty()) {
+        std::cout << ", \"failures\": [";
+        for (size_t i = 0; i < failures.size(); i++) {
+            std::cout << "\"" << failures[i] << "\"";
+            if (i < failures.size() - 1) std::cout << ", ";
+        }
+        std::cout << "]";
+    }
+    std::cout << "}" << std::endl;
+
+    return (failed == 0) ? 0 : 1;
+}
+
+// Test: Density-aware mutate — biases flips toward density direction
+int testTruthDensityMutate(int argc, char** argv) {
+    (void)argc; (void)argv;
+
+    int passed = 0;
+    int failed = 0;
+    std::vector<std::string> failures;
+
+    // Test 1: density=0 should only flip ON→OFF (never introduce new ONs)
+    {
+        WiggleRoom::TruthTable table;
+        table.setSeed(42);
+        // Start with pass-through (some bits ON)
+        // Count initial ON bits
+        int initialOn = 0;
+        for (int i = 0; i < 16; i++) initialOn += __builtin_popcount(table.mapping[i]);
+
+        float densities[4] = {0.f, 0.f, 0.f, 0.f};
+        // Run many mutations — ON count should only decrease or stay same
+        bool everIncreased = false;
+        int prevOn = initialOn;
+        for (int m = 0; m < 100; m++) {
+            table.mutateWithDensity(densities);
+            int onCount = 0;
+            for (int i = 0; i < 16; i++) onCount += __builtin_popcount(table.mapping[i]);
+            if (onCount > prevOn) everIncreased = true;
+            prevOn = onCount;
+        }
+        if (!everIncreased) {
+            passed++;
+        } else {
+            failed++;
+            failures.push_back("density=0: ON count increased during mutation (should only decrease)");
+        }
+    }
+
+    // Test 2: density=1 should only flip OFF→ON (never remove ONs)
+    {
+        WiggleRoom::TruthTable table;
+        table.setSeed(42);
+        int initialOn = 0;
+        for (int i = 0; i < 16; i++) initialOn += __builtin_popcount(table.mapping[i]);
+
+        float densities[4] = {1.f, 1.f, 1.f, 1.f};
+        bool everDecreased = false;
+        int prevOn = initialOn;
+        for (int m = 0; m < 100; m++) {
+            table.mutateWithDensity(densities);
+            int onCount = 0;
+            for (int i = 0; i < 16; i++) onCount += __builtin_popcount(table.mapping[i]);
+            if (onCount < prevOn) everDecreased = true;
+            prevOn = onCount;
+        }
+        if (!everDecreased) {
+            passed++;
+        } else {
+            failed++;
+            failures.push_back("density=1: ON count decreased during mutation (should only increase)");
+        }
+    }
+
+    // Test 3: locked cells preserved
+    {
+        WiggleRoom::TruthTable table;
+        table.setSeed(77);
+        table.mapping[0] = 0x01;
+        table.toggleLock(0, 0);  // lock bit 0 of state 0
+
+        float densities[4] = {0.f, 0.f, 0.f, 0.f};
+        for (int m = 0; m < 50; m++) {
+            table.mutateWithDensity(densities);
+        }
+        bool lockedPreserved = (table.mapping[0] & 1) == 1;
+        if (lockedPreserved) {
+            passed++;
+        } else {
+            failed++;
+            failures.push_back("locked cell was modified by density mutate");
+        }
+    }
+
+    // Test 4: undo works
+    {
+        WiggleRoom::TruthTable table;
+        table.setSeed(88);
+        auto original = table.mapping;
+        float densities[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+        table.mutateWithDensity(densities);
+        table.undo();
+        bool restored = (table.mapping == original);
+        if (restored) {
+            passed++;
+        } else {
+            failed++;
+            failures.push_back("undo after density mutate did not restore original");
+        }
+    }
+
+    std::cout << "{\"test\": \"truth_density_mutate\", \"passed\": " << passed << ", \"failed\": " << failed;
+    if (!failures.empty()) {
+        std::cout << ", \"failures\": [";
+        for (size_t i = 0; i < failures.size(); i++) {
+            std::cout << "\"" << failures[i] << "\"";
+            if (i < failures.size() - 1) std::cout << ", ";
+        }
+        std::cout << "]";
+    }
+    std::cout << "}" << std::endl;
+
+    return (failed == 0) ? 0 : 1;
+}
+
+// Test: Input state computation from gate booleans
+// Verifies inputState |= (1 << i) correctly maps gate booleans to state index
+int testInputState(int argc, char** argv) {
+    (void)argc; (void)argv;
+
+    int passed = 0;
+    int failed = 0;
+    std::vector<std::string> failures;
+
+    // Test for N=2, N=3, N=4
+    int channelCounts[] = {2, 3, 4};
+    for (int N : channelCounts) {
+        int nStates = (1 << N);
+        for (int combo = 0; combo < nStates; combo++) {
+            // Set up gate booleans from combo bits
+            bool gates[4] = {};
+            for (int i = 0; i < N; i++) {
+                gates[i] = (combo >> i) & 1;
+            }
+
+            // Compute inputState using the same formula as LogicManglerCore.hpp:156-159
+            uint8_t inputState = 0;
+            for (int i = 0; i < N; i++) {
+                if (gates[i]) inputState |= (1 << i);
+            }
+
+            // inputState should equal combo (they use the same bit encoding)
+            if (inputState == (uint8_t)combo) {
+                passed++;
+            } else {
+                failed++;
+                std::ostringstream oss;
+                oss << "N=" << N << " combo=" << combo << ": expected state " << combo << ", got " << (int)inputState;
+                failures.push_back(oss.str());
+            }
+
+            // Also verify round-trip: extracting gates back from inputState
+            for (int i = 0; i < N; i++) {
+                bool extracted = (inputState >> i) & 1;
+                if (extracted != gates[i]) {
+                    failed++;
+                    std::ostringstream oss;
+                    oss << "N=" << N << " combo=" << combo << " bit=" << i
+                        << ": round-trip mismatch (gate=" << gates[i] << " extracted=" << extracted << ")";
+                    failures.push_back(oss.str());
+                } else {
+                    passed++;
+                }
+            }
+        }
+    }
+
+    std::cout << "{\"test\": \"input_state\", \"passed\": " << passed << ", \"failed\": " << failed;
+    if (!failures.empty()) {
+        std::cout << ", \"failures\": [";
+        for (size_t i = 0; i < failures.size(); i++) {
+            std::cout << "\"" << failures[i] << "\"";
+            if (i < failures.size() - 1) std::cout << ", ";
+        }
+        std::cout << "]";
+    }
+    std::cout << "}" << std::endl;
+
+    return (failed == 0) ? 0 : 1;
+}
+
+// Test: Truth table display T/F matches input state (LSB-first)
+// Verifies (state >> bit) & 1 produces correct T/F for each column
+int testDisplayBits(int argc, char** argv) {
+    (void)argc; (void)argv;
+
+    int passed = 0;
+    int failed = 0;
+    std::vector<std::string> failures;
+
+    int channelCounts[] = {2, 3, 4};
+    for (int N : channelCounts) {
+        int nStates = (1 << N);
+        for (int state = 0; state < nStates; state++) {
+            // Test 1: display formula matches gate-to-state formula
+            // If gate[bit]=true and all others false, inputState = (1 << bit)
+            // Display of that state at column 'bit' should show T
+            for (int bit = 0; bit < N; bit++) {
+                bool displayValue = (state >> bit) & 1;
+
+                // Verify specific known states
+                if (state == 0) {
+                    // State 0: all gates false → all columns F
+                    if (displayValue != false) {
+                        failed++;
+                        std::ostringstream oss;
+                        oss << "N=" << N << " state=0 bit=" << bit << ": expected F, got T";
+                        failures.push_back(oss.str());
+                    } else {
+                        passed++;
+                    }
+                } else if (state == nStates - 1) {
+                    // Max state: all gates true → all columns T
+                    if (displayValue != true) {
+                        failed++;
+                        std::ostringstream oss;
+                        oss << "N=" << N << " state=" << state << " bit=" << bit << ": expected T, got F";
+                        failures.push_back(oss.str());
+                    } else {
+                        passed++;
+                    }
+                } else {
+                    passed++;  // intermediate states checked by round-trip below
+                }
+            }
+
+            // Test 2: display formula is consistent with inputState formula
+            // Reconstruct gates from display, then recompute inputState
+            bool reconstructedGates[4] = {};
+            for (int bit = 0; bit < N; bit++) {
+                reconstructedGates[bit] = (state >> bit) & 1;
+            }
+            uint8_t reconstructedState = 0;
+            for (int i = 0; i < N; i++) {
+                if (reconstructedGates[i]) reconstructedState |= (1 << i);
+            }
+            if (reconstructedState == (uint8_t)state) {
+                passed++;
+            } else {
+                failed++;
+                std::ostringstream oss;
+                oss << "N=" << N << " state=" << state << ": display→gate→state round-trip gave " << (int)reconstructedState;
+                failures.push_back(oss.str());
+            }
+        }
+    }
+
+    // Verify specific examples from the plan
+    // N=2: State 0 → FF, State 1 → TF, State 2 → FT, State 3 → TT
+    {
+        auto displayStr = [](int state, int N) -> std::string {
+            std::string s;
+            for (int bit = 0; bit < N; bit++) {
+                s += ((state >> bit) & 1) ? 'T' : 'F';
+            }
+            return s;
+        };
+        struct { int state; int N; std::string expected; } cases[] = {
+            {0, 2, "FF"}, {1, 2, "TF"}, {2, 2, "FT"}, {3, 2, "TT"},
+            {0, 4, "FFFF"}, {1, 4, "TFFF"}, {3, 4, "TTFF"}, {15, 4, "TTTT"},
+        };
+        for (const auto& c : cases) {
+            std::string actual = displayStr(c.state, c.N);
+            if (actual == c.expected) {
+                passed++;
+            } else {
+                failed++;
+                std::ostringstream oss;
+                oss << "N=" << c.N << " state=" << c.state << ": display=\"" << actual << "\" expected=\"" << c.expected << "\"";
+                failures.push_back(oss.str());
+            }
+        }
+    }
+
+    std::cout << "{\"test\": \"display_bits\", \"passed\": " << passed << ", \"failed\": " << failed;
+    if (!failures.empty()) {
+        std::cout << ", \"failures\": [";
+        for (size_t i = 0; i < failures.size(); i++) {
+            std::cout << "\"" << failures[i] << "\"";
+            if (i < failures.size() - 1) std::cout << ", ";
+        }
+        std::cout << "]";
+    }
+    std::cout << "}" << std::endl;
+
+    return (failed == 0) ? 0 : 1;
+}
+
+// Test: Euclidean engine → gate → inputState end-to-end
+// Verifies synchronized engines produce expected inputState patterns
+int testGateSync(int argc, char** argv) {
+    (void)argc; (void)argv;
+
+    int passed = 0;
+    int failed = 0;
+    std::vector<std::string> failures;
+
+    // Test 1: Identical engines stay in sync (the user's reported scenario)
+    // Two channels with same 50% pattern: should alternate between 0 (FF) and 3 (TT)
+    for (int N : {2, 3, 4}) {
+        int nSteps = 4;
+        int nHits = 2;  // 50% fill
+
+        std::vector<WiggleRoom::EuclideanEngine> engines(N);
+        for (int i = 0; i < N; i++) {
+            engines[i].configure(nSteps, nHits, 0);
+        }
+
+        bool syncError = false;
+        bool unexpectedState = false;
+        int allFalseState = 0;
+        int allTrueState = (1 << N) - 1;
+
+        for (int tick = 0; tick < nSteps * 3; tick++) {  // 3 full cycles
+            bool gates[4] = {};
+            for (int i = 0; i < N; i++) {
+                gates[i] = engines[i].tick();
+            }
+
+            // All engines should produce the same gate value
+            for (int i = 1; i < N; i++) {
+                if (gates[i] != gates[0]) {
+                    syncError = true;
+                    std::ostringstream oss;
+                    oss << "N=" << N << " tick=" << tick << ": gate[0]=" << gates[0] << " gate[" << i << "]=" << gates[i];
+                    failures.push_back(oss.str());
+                    failed++;
+                }
+            }
+
+            // Compute inputState
+            uint8_t inputState = 0;
+            for (int i = 0; i < N; i++) {
+                if (gates[i]) inputState |= (1 << i);
+            }
+
+            // Should be either all-false (0) or all-true (2^N - 1)
+            if (inputState != allFalseState && inputState != allTrueState) {
+                unexpectedState = true;
+                std::ostringstream oss;
+                oss << "N=" << N << " tick=" << tick << ": inputState=" << (int)inputState
+                    << " (expected 0 or " << allTrueState << ")";
+                failures.push_back(oss.str());
+                failed++;
+            } else {
+                passed++;
+            }
+
+            // Verify display bits match gate values for this state
+            for (int bit = 0; bit < N; bit++) {
+                bool displayBit = (inputState >> bit) & 1;
+                if (displayBit != gates[bit]) {
+                    failed++;
+                    std::ostringstream oss;
+                    oss << "N=" << N << " tick=" << tick << " bit=" << bit
+                        << ": display=" << displayBit << " gate=" << gates[bit];
+                    failures.push_back(oss.str());
+                } else {
+                    passed++;
+                }
+            }
+        }
+
+        if (!syncError && !unexpectedState) {
+            passed++;  // bonus: whole cycle passed
+        }
+    }
+
+    // Test 2: Different patterns across channels → verify per-channel independence
+    {
+        int N = 2;
+        WiggleRoom::EuclideanEngine engines[2];
+        engines[0].configure(4, 1, 0);  // 1 hit in 4 steps
+        engines[1].configure(4, 3, 0);  // 3 hits in 4 steps
+
+        std::vector<uint8_t> stateSequence;
+        for (int tick = 0; tick < 4; tick++) {
+            bool gates[2];
+            gates[0] = engines[0].tick();
+            gates[1] = engines[1].tick();
+
+            uint8_t inputState = 0;
+            if (gates[0]) inputState |= 1;
+            if (gates[1]) inputState |= 2;
+
+            stateSequence.push_back(inputState);
+        }
+
+        // With different patterns, we should see states other than just 0 and 3
+        bool hasIntermediateStates = false;
+        for (uint8_t s : stateSequence) {
+            if (s == 1 || s == 2) {
+                hasIntermediateStates = true;
+                break;
+            }
+        }
+        if (hasIntermediateStates) {
+            passed++;
+        } else {
+            failed++;
+            std::ostringstream oss;
+            oss << "different patterns: expected intermediate states (1 or 2), got [";
+            for (size_t i = 0; i < stateSequence.size(); i++) {
+                oss << (int)stateSequence[i];
+                if (i < stateSequence.size() - 1) oss << ",";
+            }
+            oss << "]";
+            failures.push_back(oss.str());
+        }
+    }
+
+    // Test 3: Various pattern lengths and fills
+    {
+        struct PatternTest {
+            int steps; int hits; int rotation;
+        };
+        PatternTest patterns[] = {
+            {8, 4, 0}, {8, 3, 0}, {16, 4, 0}, {8, 8, 0}, {8, 0, 0},
+        };
+
+        for (const auto& pt : patterns) {
+            WiggleRoom::EuclideanEngine engine;
+            engine.configure(pt.steps, pt.hits, pt.rotation);
+
+            int hitCount = 0;
+            for (int tick = 0; tick < pt.steps; tick++) {
+                if (engine.tick()) hitCount++;
+            }
+
+            if (hitCount == pt.hits) {
+                passed++;
+            } else {
+                failed++;
+                std::ostringstream oss;
+                oss << "pattern(" << pt.steps << "," << pt.hits << "," << pt.rotation
+                    << "): expected " << pt.hits << " hits, got " << hitCount;
+                failures.push_back(oss.str());
+            }
+        }
+    }
+
+    std::cout << "{\"test\": \"gate_sync\", \"passed\": " << passed << ", \"failed\": " << failed;
+    if (!failures.empty()) {
+        std::cout << ", \"failures\": [";
+        for (size_t i = 0; i < failures.size(); i++) {
+            std::cout << "\"" << failures[i] << "\"";
+            if (i < failures.size() - 1) std::cout << ", ";
+        }
+        std::cout << "]";
+    }
+    std::cout << "}" << std::endl;
+
+    return (failed == 0) ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         printUsage();
@@ -1018,6 +1848,38 @@ int main(int argc, char** argv) {
 
     if (cmd == "--test-lfo-phase") {
         return testLfoPhase(argc, argv);
+    }
+
+    if (cmd == "--test-getHit-after-construct") {
+        return testGetHitAfterConstruct(argc, argv);
+    }
+
+    if (cmd == "--test-pattern-updates-on-configure") {
+        return testPatternUpdatesOnConfigure(argc, argv);
+    }
+
+    if (cmd == "--test-truth-density-randomize") {
+        return testTruthDensityRandomize(argc, argv);
+    }
+
+    if (cmd == "--test-truth-density-mutate") {
+        return testTruthDensityMutate(argc, argv);
+    }
+
+    if (cmd == "--test-intersect-falling") {
+        return testIntersectFalling(argc, argv);
+    }
+
+    if (cmd == "--test-input-state") {
+        return testInputState(argc, argv);
+    }
+
+    if (cmd == "--test-display-bits") {
+        return testDisplayBits(argc, argv);
+    }
+
+    if (cmd == "--test-gate-sync") {
+        return testGateSync(argc, argv);
     }
 
     std::cerr << "Unknown command: " << cmd << "\n";

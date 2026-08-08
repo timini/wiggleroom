@@ -1,0 +1,5 @@
+add_library(EucMix3_Module STATIC EucMix3.cpp)
+target_link_libraries(EucMix3_Module PRIVATE RackSDK)
+if(TARGET CommonLib)
+    target_link_libraries(EucMix3_Module PRIVATE CommonLib)
+endif()

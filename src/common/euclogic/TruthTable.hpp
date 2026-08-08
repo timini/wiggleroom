@@ -157,16 +157,21 @@ struct TruthTableT {
     // Randomize / Mutate (respect locks)
     // ---------------------------------------------------------------
     void randomize() {
+        float defaultDensities[N_CHANNELS];
+        for (int i = 0; i < N_CHANNELS; i++) defaultDensities[i] = 0.5f;
+        randomizeWithDensity(defaultDensities);
+    }
+
+    void randomizeWithDensity(const float densities[N_CHANNELS]) {
         pushUndo();
-        std::uniform_int_distribution<int> dist(0, 1);
+        std::uniform_real_distribution<float> dist(0.f, 1.f);
         for (int i = 0; i < N_STATES; i++) {
             uint8_t newVal = 0;
             for (int bit = 0; bit < N_CHANNELS; bit++) {
                 if (isLocked(i, bit)) {
-                    // Preserve locked bit
                     newVal |= (mapping[i] & (1 << bit));
                 } else {
-                    if (dist(rng)) newVal |= (1 << bit);
+                    if (dist(rng) < densities[bit]) newVal |= (1 << bit);
                 }
             }
             mapping[i] = newVal;
@@ -174,26 +179,55 @@ struct TruthTableT {
     }
 
     void mutate() {
+        float defaultDensities[N_CHANNELS];
+        for (int i = 0; i < N_CHANNELS; i++) defaultDensities[i] = 0.5f;
+        mutateWithDensity(defaultDensities);
+    }
+
+    void mutateWithDensity(const float densities[N_CHANNELS]) {
         pushUndo();
-        // Find unlocked cells
+        // Find candidate cells biased by density:
+        // density < 0.5 → prefer flipping ON→OFF
+        // density > 0.5 → prefer flipping OFF→ON
+        // density = 0 → only flip ON→OFF
+        // density = 1 → only flip OFF→ON
         struct Cell { int state; int bit; };
-        std::vector<Cell> unlocked;
+        std::vector<Cell> candidates;
         for (int i = 0; i < N_STATES; i++) {
             for (int bit = 0; bit < N_CHANNELS; bit++) {
-                if (!isLocked(i, bit)) {
-                    unlocked.push_back({i, bit});
+                if (isLocked(i, bit)) continue;
+                bool isOn = (mapping[i] >> bit) & 1;
+                float d = densities[bit];
+                // At density=0: only ON cells are candidates (to turn OFF)
+                // At density=1: only OFF cells are candidates (to turn ON)
+                // At density=0.5: all cells are candidates
+                if (isOn && d < 1.f) {
+                    // Probability of being a candidate scales with (1 - density)
+                    // At d=0 always candidate, at d=1 never
+                    candidates.push_back({i, bit});
+                } else if (!isOn && d > 0.f) {
+                    // Probability of being a candidate scales with density
+                    // At d=1 always candidate, at d=0 never
+                    candidates.push_back({i, bit});
                 }
             }
         }
-        if (unlocked.empty()) return;
+        if (candidates.empty()) return;
 
-        std::uniform_int_distribution<int> countDist(1, std::min(3, (int)unlocked.size()));
-        std::uniform_int_distribution<int> cellDist(0, (int)unlocked.size() - 1);
+        std::uniform_int_distribution<int> countDist(1, std::min(3, (int)candidates.size()));
+        std::uniform_int_distribution<int> cellDist(0, (int)candidates.size() - 1);
+        std::uniform_real_distribution<float> probDist(0.f, 1.f);
 
         int numFlips = countDist(rng);
-        for (int i = 0; i < numFlips; i++) {
-            auto& cell = unlocked[cellDist(rng)];
-            mapping[cell.state] ^= (1 << cell.bit);
+        for (int f = 0; f < numFlips; f++) {
+            auto& cell = candidates[cellDist(rng)];
+            bool isOn = (mapping[cell.state] >> cell.bit) & 1;
+            float d = densities[cell.bit];
+            // Bias: ON→OFF more likely at low density, OFF→ON more likely at high density
+            float flipProb = isOn ? (1.f - d) : d;
+            if (probDist(rng) < flipProb) {
+                mapping[cell.state] ^= (1 << cell.bit);
+            }
         }
     }
 

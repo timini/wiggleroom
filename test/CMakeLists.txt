@@ -184,3 +184,13 @@ set_target_properties(euclogic_test PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
 )
+
+# PreFlightClock test executable (standalone C++ test, no Faust/VCV dependencies)
+add_executable(preflight_clock_test
+    preflight_clock_test.cpp
+)
+
+set_target_properties(preflight_clock_test PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)

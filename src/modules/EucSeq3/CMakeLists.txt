@@ -1,0 +1,5 @@
+add_library(EucSeq3_Module STATIC EucSeq3.cpp)
+target_link_libraries(EucSeq3_Module PRIVATE RackSDK)
+if(TARGET CommonLib)
+    target_link_libraries(EucSeq3_Module PRIVATE CommonLib)
+endif()
