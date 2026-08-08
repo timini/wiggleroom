@@ -1,48 +1,42 @@
 #pragma once
-/******************************************************************************
- * EUCLOGIC EXPANDER MESSAGE
- * Shared struct for passing state between EucSeq, LogicMangler, EucBank, EucMix
- * via VCV Rack's expander system.
- *
- * Chain: EucSeq -> LogicMangler -> EucBank -> EucMix (left to right)
- ******************************************************************************/
-
 #include <cstdint>
 
 namespace WiggleRoom {
 
-struct EuclogicExpanderMessage {
-    // EucSeq state
-    bool gates[4];           // current gate states per channel (pre-logic)
-    bool triggers[4];        // current trigger states
-    float lfo[4];            // LFO values (0-10V)
-    float cv[4];             // CV step values per channel
-    int currentStep[4];      // current step index per channel
-    int totalSteps[4];       // total steps per channel
+template<int N>
+struct EuclogicExpanderMessageT {
+    static constexpr int NUM_CH = N;
+    static constexpr int N_STATES = (1 << N);
+    static constexpr uint8_t OUTPUT_MASK = static_cast<uint8_t>((1 << N) - 1);
 
-    // Truth table state (populated by LogicMangler)
-    uint8_t truthTableMapping[16];
-    uint8_t truthTableLocks[16];
-    bool postLogicGates[4];  // post-truth-table gate states
-    float probB[4];          // post-logic probability values
-    float colDensity[4];     // per-column density values
+    bool gates[N];
+    bool triggers[N];
+    float lfo[N];
+    float cv[N];
+    int currentStep[N];
+    int totalSteps[N];
 
-    // EucSeq params (for bank storage)
-    int steps[4];
-    int hits[4];
-    int quant[4];
-    float probA[4];
-    bool retrigger[4];
-    bool bipolar[4];
+    uint8_t truthTableMapping[N_STATES];
+    uint8_t truthTableLocks[N_STATES];
+    bool postLogicGates[N];
+    float probB[N];
+    float colDensity[N];
+
+    int steps[N];
+    int hits[N];
+    int quant[N];
+    float probA[N];
+    bool retrigger[N];
+    bool bipolar[N];
     float speed;
     float swing;
 
-    bool valid;              // true when message is populated
+    bool valid;
 
-    EuclogicExpanderMessage() { clear(); }
+    EuclogicExpanderMessageT() { clear(); }
 
     void clear() {
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < N; i++) {
             gates[i] = false;
             triggers[i] = false;
             lfo[i] = 0.f;
@@ -59,14 +53,17 @@ struct EuclogicExpanderMessage {
             retrigger[i] = true;
             bipolar[i] = false;
         }
-        for (int i = 0; i < 16; i++) {
-            truthTableMapping[i] = static_cast<uint8_t>(i) & 0x0F;
+        for (int i = 0; i < N_STATES; i++) {
+            truthTableMapping[i] = static_cast<uint8_t>(i) & OUTPUT_MASK;
             truthTableLocks[i] = 0;
         }
-        speed = 8.f;  // x1 index
+        speed = 8.f;
         swing = 50.f;
         valid = false;
     }
 };
+
+// Backward-compatible alias
+using EuclogicExpanderMessage = EuclogicExpanderMessageT<4>;
 
 } // namespace WiggleRoom

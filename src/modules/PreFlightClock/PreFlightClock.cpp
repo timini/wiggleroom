@@ -28,6 +28,7 @@ struct PreFlightClock : Module {
         METRO_OUTPUT,
         RESET_OUTPUT,
         RUN_OUTPUT,
+        CLOCK_OUTPUT,
         MASTER_OUTPUT,
         X2_OUTPUT,
         X3_OUTPUT,
@@ -79,6 +80,7 @@ struct PreFlightClock : Module {
     dsp::SchmittTrigger stopButtonTrigger;
     dsp::PulseGenerator resetPulse;
     dsp::PulseGenerator masterPulse;
+    dsp::PulseGenerator clockPulse;
     dsp::PulseGenerator multPulses[6]; // x2, x3, x4, x8, x16, x32
     dsp::PulseGenerator divPulses[7];  // /1.5, /2, /3, /4, /8, /16, /32
 
@@ -103,6 +105,7 @@ struct PreFlightClock : Module {
         configOutput(METRO_OUTPUT, "Metronome");
         configOutput(RESET_OUTPUT, "Reset");
         configOutput(RUN_OUTPUT, "Run");
+        configOutput(CLOCK_OUTPUT, "Master clock (always running)");
         configOutput(MASTER_OUTPUT, "Clock (x1)");
         configOutput(X2_OUTPUT, "Clock x2");
         configOutput(X3_OUTPUT, "Clock x3");
@@ -187,31 +190,37 @@ struct PreFlightClock : Module {
 
         if (masterBeat) {
             masterPulse.trigger(1e-3f);
+            clockPulse.trigger(1e-3f);
             beatBrightness = 1.f;
 
-            // Count-in logic
+            // Count-in logic: -3, -2, -1, 0, then 1.1.1 (start)
+            // Ableton-style: first beat accented (tock), rest regular (tic)
+            // No metronome on the downbeat — it would ruin the start
             if (state == COUNTING_IN) {
                 if (waitingForBeat) {
-                    // First beat after play: fire reset
-                    resetPulse.trigger(1e-3f);
                     waitingForBeat = false;
                 }
 
                 if (countInBeats > 0) {
-                    // Trigger metronome beep
-                    metroPhase = 0.f;
-                    metroFreq = 440.f;
-                    metroEnvelope = 1.f;
-                    metroDecayTime = 0.05f;
+                    if (countInBeats == 4) {
+                        // First count-in beat (-3): accented "tock"
+                        metroPhase = 0.f;
+                        metroFreq = 880.f;
+                        metroEnvelope = 1.f;
+                        metroDecayTime = 0.08f;
+                    } else {
+                        // Remaining beats (-2, -1, 0): regular "tic"
+                        metroPhase = 0.f;
+                        metroFreq = 440.f;
+                        metroEnvelope = 0.7f;
+                        metroDecayTime = 0.04f;
+                    }
                     countInBeats--;
                 } else {
-                    // Count-in complete: transition to RUNNING
+                    // Count-in complete: transition to RUNNING on 1.1.1
                     state = RUNNING;
-                    // Downbeat beep (higher pitch, longer decay)
-                    metroPhase = 0.f;
-                    metroFreq = 880.f;
-                    metroEnvelope = 1.f;
-                    metroDecayTime = 0.1f;
+                    resetPulse.trigger(1e-3f);
+                    // No metronome beep on the downbeat
                 }
             }
         }
@@ -256,13 +265,17 @@ struct PreFlightClock : Module {
         outputs[METRO_OUTPUT].setVoltage(metroOut * 5.f);
         outputs[RESET_OUTPUT].setVoltage(resetPulse.process(dt) ? 10.f : 0.f);
         outputs[RUN_OUTPUT].setVoltage(state == RUNNING ? 10.f : 0.f);
-        outputs[MASTER_OUTPUT].setVoltage(masterPulse.process(dt) ? 10.f : 0.f);
+        outputs[CLOCK_OUTPUT].setVoltage(clockPulse.process(dt) ? 10.f : 0.f);
 
+        bool isRunning = (state == RUNNING);
+        outputs[MASTER_OUTPUT].setVoltage((isRunning && masterPulse.process(dt)) ? 10.f : 0.f);
         for (int i = 0; i < 6; i++) {
-            outputs[X2_OUTPUT + i].setVoltage(multPulses[i].process(dt) ? 10.f : 0.f);
+            bool pulse = multPulses[i].process(dt);
+            outputs[X2_OUTPUT + i].setVoltage((isRunning && pulse) ? 10.f : 0.f);
         }
         for (int i = 0; i < 7; i++) {
-            outputs[DIV1_5_OUTPUT + i].setVoltage(divPulses[i].process(dt) ? 10.f : 0.f);
+            bool pulse = divPulses[i].process(dt);
+            outputs[DIV1_5_OUTPUT + i].setVoltage((isRunning && pulse) ? 10.f : 0.f);
         }
 
         // --- Lights ---
@@ -354,7 +367,8 @@ struct PreFlightClockDisplay : LightWidget {
                     color = nvgRGBA(200, 60, 60, 220);
                     break;
                 case PreFlightClock::COUNTING_IN:
-                    snprintf(buf, sizeof(buf), "%d", count);
+                    // Display as -3, -2, -1, 0 (countInBeats 3→0 maps to -(count) )
+                    snprintf(buf, sizeof(buf), "%d", count > 0 ? -count : 0);
                     text = buf;
                     color = nvgRGBA(80, 140, 255, 255);
                     break;
@@ -422,18 +436,21 @@ struct PreFlightClockWidget : ModuleWidget {
             addChild(display);
         }
 
-        // --- State outputs: Reset, Run, Metro ---
+        // --- State outputs: Reset, Run, Clock, Metro ---
         float yStateRow = 156;
-        float xCol1 = box.size.x * 0.17f;
-        float xCol2 = box.size.x * 0.50f;
-        float xCol3 = box.size.x * 0.83f;
+        float xS1 = box.size.x * 0.125f;
+        float xS2 = box.size.x * 0.375f;
+        float xS3 = box.size.x * 0.625f;
+        float xS4 = box.size.x * 0.875f;
 
         addOutput(createOutputCentered<PJ301MPort>(
-            Vec(xCol1, yStateRow), module, PreFlightClock::RESET_OUTPUT));
+            Vec(xS1, yStateRow), module, PreFlightClock::RESET_OUTPUT));
         addOutput(createOutputCentered<PJ301MPort>(
-            Vec(xCol2, yStateRow), module, PreFlightClock::RUN_OUTPUT));
+            Vec(xS2, yStateRow), module, PreFlightClock::RUN_OUTPUT));
         addOutput(createOutputCentered<PJ301MPort>(
-            Vec(xCol3, yStateRow), module, PreFlightClock::METRO_OUTPUT));
+            Vec(xS3, yStateRow), module, PreFlightClock::CLOCK_OUTPUT));
+        addOutput(createOutputCentered<PJ301MPort>(
+            Vec(xS4, yStateRow), module, PreFlightClock::METRO_OUTPUT));
 
         // --- Clock outputs: 4 rows of 4 (last row has 2) ---
         float yRow1 = 194;
@@ -469,12 +486,15 @@ struct PreFlightClockWidget : ModuleWidget {
 
         // --- CV inputs at bottom ---
         float yInputRow = 326;
+        float xI1 = box.size.x * 0.17f;
+        float xI2 = box.size.x * 0.50f;
+        float xI3 = box.size.x * 0.83f;
         addInput(createInputCentered<PJ301MPort>(
-            Vec(xCol1, yInputRow), module, PreFlightClock::BPM_CV_INPUT));
+            Vec(xI1, yInputRow), module, PreFlightClock::BPM_CV_INPUT));
         addInput(createInputCentered<PJ301MPort>(
-            Vec(xCol2, yInputRow), module, PreFlightClock::PLAY_TRIG_INPUT));
+            Vec(xI2, yInputRow), module, PreFlightClock::PLAY_TRIG_INPUT));
         addInput(createInputCentered<PJ301MPort>(
-            Vec(xCol3, yInputRow), module, PreFlightClock::STOP_TRIG_INPUT));
+            Vec(xI3, yInputRow), module, PreFlightClock::STOP_TRIG_INPUT));
     }
 };
 

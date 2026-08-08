@@ -1,0 +1,5 @@
+add_library(LogicMangler3_Module STATIC LogicMangler3.cpp)
+target_link_libraries(LogicMangler3_Module PRIVATE RackSDK)
+if(TARGET CommonLib)
+    target_link_libraries(LogicMangler3_Module PRIVATE CommonLib)
+endif()
