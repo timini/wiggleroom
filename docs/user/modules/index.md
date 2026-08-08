@@ -44,13 +44,24 @@ Detailed documentation for each WiggleRoom module.
 - [Intersect](Intersect.md) - Rhythmic trigger generator with set operations
 - [LogicMangler](LogicMangler.md) - Truth table logic processor with cell locking and density control
 - [PreFlightClock](PreFlightClock.md) - Master clock with Ableton-style count-in sequence
+- [TheWeaver](TheWeaver.md) - Scale-Bus-aware polyphonic arpeggiator with 11 patterns and addressable Index CV
+
+### 2- and 3-channel EucLogic chain
+
+Narrower variants of the EucSeq chain above, for patches that do not need four channels.
+
+- [EucSeq2](EucSeq2.md) / [EucSeq3](EucSeq3.md) - 2- and 3-channel Euclidean sequencers
+- [LogicMangler2](LogicMangler2.md) / [LogicMangler3](LogicMangler3.md) - matching truth table logic processors
+- [EucMix2](EucMix2.md) / [EucMix3](EucMix3.md) - 2x2 and 3x3 CV summing matrices
+- [EucBank2](EucBank2.md) / [EucBank3](EucBank3.md) - 16-slot pattern storage for each chain
 
 ## Utilities
 
-- [OctoLFO](OctoLFO.md) - 8-channel clock-synced LFO with multiple shapes
+- [OctoLFO](OctoLFO.md) - 8-channel clock-synced LFO with multiple shapes and per-channel FM
+- [PixelProbe](PixelProbe.md) - Image-to-CV colour sampler with X/Y probe addressing
 - [TheArchitect](TheArchitect.md) - Polyphonic quantizer and chord machine
 - [XFade](XFade.md) - CV crossfader/mixer with Ring Mod and Fold modes
 
 ---
 
-For source, module list, and installation, see the [main README](../../../README.md#modules-32).
+For source, module list, and installation, see the [main README](../../../README.md#modules-44).
