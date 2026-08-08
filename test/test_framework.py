@@ -339,17 +339,29 @@ def test_gate_response(module_name: str, tmp_dir: Path) -> TestResult:
     stats_no_gate = extract_audio_stats(audio_no_gate)
     stats_with_gate = extract_audio_stats(audio_with_gate)
 
-    # Check if there's a significant difference
+    # Check if there's a significant difference.
+    #
+    # RMS alone is averaged over the whole render, so a percussive voice that
+    # fires one decaying hit scores far lower than a sustained one even though
+    # the gate clearly works. Matter, for example, goes from digital silence at
+    # gate=0 to a 0.167 peak at gate=10, yet only shifts RMS by 0.0056 over 2s.
+    # Peak catches that; RMS still catches sustained voices whose peak barely
+    # moves. A gate that genuinely does nothing moves neither.
     rms_diff = abs(stats_with_gate["rms"] - stats_no_gate["rms"])
+    peak_diff = abs(stats_with_gate["peak"] - stats_no_gate["peak"])
 
-    if rms_diff < 0.01:
+    if rms_diff < 0.01 and peak_diff < 0.01:
         return TestResult("gate_response", False,
-                         f"Gate has no effect on output (RMS diff: {rms_diff:.4f})",
+                         f"Gate has no effect on output "
+                         f"(RMS diff: {rms_diff:.4f}, peak diff: {peak_diff:.4f})",
                          {"rms_no_gate": stats_no_gate["rms"],
-                          "rms_with_gate": stats_with_gate["rms"]})
+                          "rms_with_gate": stats_with_gate["rms"],
+                          "peak_no_gate": stats_no_gate["peak"],
+                          "peak_with_gate": stats_with_gate["peak"]})
 
     return TestResult("gate_response", True,
-                     f"Gate affects output (RMS diff: {rms_diff:.4f})")
+                     f"Gate affects output (RMS diff: {rms_diff:.4f}, "
+                     f"peak diff: {peak_diff:.4f})")
 
 
 def test_parameter_sensitivity(module_name: str, tmp_dir: Path, exclude_params: list[str] | None = None) -> TestResult:
