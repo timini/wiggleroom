@@ -77,6 +77,10 @@ struct Intersect : Module {
     int lastBandIndex = -999;
     float currentSteppedVoltage = 0.0f;
 
+    // Peak tracking between samples to prevent aliasing
+    float peakMinCV = 1.f;   // min normalized CV since last sample
+    float peakMaxCV = 0.f;   // max normalized CV since last sample
+
     // Thread-safe visualization data (written by audio, read by UI)
     static const int BUFFER_SIZE = 128;
     std::array<float, BUFFER_SIZE> cvBuffer{};
@@ -135,6 +139,8 @@ struct Intersect : Module {
         displayBandIndex.store(-1);
         displayFlashBand.store(-1);
         displayFlashTime.store(-1.0f);
+        peakMinCV = 1.f;
+        peakMaxCV = 0.f;
     }
 
     // Helper: Normalize CV to 0.0-1.0 range
@@ -224,6 +230,11 @@ struct Intersect : Module {
         bool isUnipolar = params[SCALE_PARAM].getValue() > 0.5f;
         float normalizedCV = normalizeCV(rawCV, isUnipolar);
 
+        // Track min/max CV between clock samples to prevent aliasing
+        // (ensures we detect bands the CV passed through between samples)
+        peakMinCV = std::min(peakMinCV, normalizedCV);
+        peakMaxCV = std::max(peakMaxCV, normalizedCV);
+
         // Update CV history for visualization (at ~60 FPS equivalent)
         int samplesPerUpdate = std::max(1, (int)(args.sampleRate / 60.0f / BUFFER_SIZE * 2));
         historyCounter++;
@@ -242,38 +253,65 @@ struct Intersect : Module {
 
         // The main algorithm: sample on clock
         if (shouldSample) {
-            // Calculate current band
+            // Calculate current band from the instantaneous CV
             int currentBandIndex = (int)std::floor(normalizedCV * divisions);
             if (currentBandIndex >= divisions) currentBandIndex = divisions - 1;
             if (currentBandIndex < 0) currentBandIndex = 0;
 
-            // Did we cross a line?
-            if (currentBandIndex != lastBandIndex && lastBandIndex != -999) {
-                // Check edge mode: 0=Rising, 1=Both, 2=Falling
+            // Calculate the highest and lowest bands reached since last sample
+            int peakHighBand = (int)std::floor(peakMaxCV * divisions);
+            if (peakHighBand >= divisions) peakHighBand = divisions - 1;
+            int peakLowBand = (int)std::floor(peakMinCV * divisions);
+            if (peakLowBand < 0) peakLowBand = 0;
+
+            // Use peak bands to detect crossings the instantaneous CV might miss
+            // If CV went higher than current between samples, use that as the
+            // effective "from" band for falling detection (and vice versa)
+            int effectiveBand = currentBandIndex;
+            if (lastBandIndex != -999) {
                 int edgeMode = (int)std::round(params[EDGE_MODE_PARAM].getValue());
+
+                // For falling: if CV peaked above current band, the effective
+                // previous high point was peakHighBand
+                // For rising: if CV dipped below current band, the effective
+                // previous low point was peakLowBand
                 bool shouldTrigger = false;
+                int triggerBand = currentBandIndex;
 
                 if (edgeMode == 0) {
-                    // Rising only: trigger when moving to higher band
+                    // Rising: trigger if we reached higher than lastBandIndex
+                    // Use current band (we're rising TO here)
                     shouldTrigger = (currentBandIndex > lastBandIndex);
+                    // Also trigger if peak went higher even if current came back
+                    if (!shouldTrigger && peakHighBand > lastBandIndex && peakHighBand > currentBandIndex) {
+                        shouldTrigger = true;
+                        triggerBand = peakHighBand;
+                    }
                 } else if (edgeMode == 2) {
-                    // Falling only: trigger when moving to lower band
+                    // Falling: trigger if we reached lower than lastBandIndex
                     shouldTrigger = (currentBandIndex < lastBandIndex);
+                    // Also trigger if peak went lower even if current came back
+                    if (!shouldTrigger && peakLowBand < lastBandIndex && peakLowBand < currentBandIndex) {
+                        shouldTrigger = true;
+                        triggerBand = peakLowBand;
+                    }
                 } else {
                     // Both: any band change triggers
-                    shouldTrigger = true;
+                    shouldTrigger = (currentBandIndex != lastBandIndex) ||
+                                    (peakHighBand > lastBandIndex) ||
+                                    (peakLowBand < lastBandIndex);
+                    if (peakHighBand > lastBandIndex) triggerBand = peakHighBand;
+                    else if (peakLowBand < lastBandIndex) triggerBand = peakLowBand;
                 }
 
                 if (shouldTrigger) {
                     bool isGateMode = params[GATE_MODE_PARAM].getValue() > 0.5f;
                     if (isGateMode) {
-                        // Gate mode: gate lasts for the effective sample period
                         gatePulse.trigger(effectiveSamplePeriod);
                     } else {
-                        // Trigger mode: short 1ms pulse
                         triggerPulse.trigger(TRIGGER_PULSE_DURATION);
                     }
-                    displayFlashBand.store(currentBandIndex);
+                    displayFlashBand.store(DSP::clamp(triggerBand, 0, divisions - 1));
                     displayFlashTime.store(0.0f);
                 }
             }
@@ -284,6 +322,10 @@ struct Intersect : Module {
 
             lastBandIndex = currentBandIndex;
             displayBandIndex.store(currentBandIndex);
+
+            // Reset peak tracking for next sample period
+            peakMinCV = normalizedCV;
+            peakMaxCV = normalizedCV;
         }
 
         // Update trigger flash timer

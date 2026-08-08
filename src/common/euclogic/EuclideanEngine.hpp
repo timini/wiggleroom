@@ -23,6 +23,8 @@ struct EuclideanEngine {
     // Pre-computed pattern
     std::vector<bool> pattern;
 
+    EuclideanEngine() { generate(); }
+
     // Generate Euclidean rhythm pattern using Bjorklund's algorithm
     void generate() {
         pattern.clear();

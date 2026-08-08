@@ -190,7 +190,7 @@
     {
       "slug": "PreFlightClock",
       "name": "PreFlight Clock",
-      "description": "Master clock with Ableton-style count-in sequence - fires reset, plays 4 metronome beeps, then starts run on the downbeat",
+      "description": "Master clock with Ableton-style count-in sequence - fires reset, plays 4 metronome beeps, then starts run on the downbeat. Includes always-running master clock output for downstream sync.",
       "tags": ["Clock modulator", "Utility"]
     },
     {
@@ -228,6 +228,54 @@
       "name": "Pixel Probe",
       "description": "Image-to-CV color sampler - load an image, address a probe with X/Y CV, get Hue/Saturation/Intensity as CV with pan/zoom and polar/bipolar output",
       "tags": ["Sample and hold", "Controller", "Visual", "Utility"]
+    },
+    {
+      "slug": "EucSeq2",
+      "name": "EucSeq 2ch",
+      "description": "2-channel Euclidean sequencer with per-step CV values, probability gates, and expander output",
+      "tags": ["Sequencer", "Clock modulator"]
+    },
+    {
+      "slug": "EucSeq3",
+      "name": "EucSeq 3ch",
+      "description": "3-channel Euclidean sequencer with per-step CV values, probability gates, and expander output",
+      "tags": ["Sequencer", "Clock modulator"]
+    },
+    {
+      "slug": "LogicMangler2",
+      "name": "Logic Mangler 2ch",
+      "description": "2-input truth table logic processor with cell locking, density control, and randomize - standalone or EucSeq2 expander",
+      "tags": ["Logic", "Sequencer", "Clock modulator"]
+    },
+    {
+      "slug": "LogicMangler3",
+      "name": "Logic Mangler 3ch",
+      "description": "3-input truth table logic processor with cell locking, density control, and randomize - standalone or EucSeq3 expander",
+      "tags": ["Logic", "Sequencer", "Clock modulator"]
+    },
+    {
+      "slug": "EucMix2",
+      "name": "EucMix 2ch",
+      "description": "2x2 CV summing matrix - standalone or expander for EucSeq2 chain CV mixing",
+      "tags": ["Mixer", "Utility"]
+    },
+    {
+      "slug": "EucMix3",
+      "name": "EucMix 3ch",
+      "description": "3x3 CV summing matrix - standalone or expander for EucSeq3 chain CV mixing",
+      "tags": ["Mixer", "Utility"]
+    },
+    {
+      "slug": "EucBank2",
+      "name": "EucBank 2ch",
+      "description": "16-slot pattern storage and recall for 2-channel EucLogic expander chain",
+      "tags": ["Sequencer", "Controller"]
+    },
+    {
+      "slug": "EucBank3",
+      "name": "EucBank 3ch",
+      "description": "16-slot pattern storage and recall for 3-channel EucLogic expander chain",
+      "tags": ["Sequencer", "Controller"]
     }
   ]
 }
