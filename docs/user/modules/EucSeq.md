@@ -8,7 +8,7 @@ EucSeq is a WiggleRoom module in the **Sequencers & Clocks** category. A 4-chann
 
 - EucSeq is a sequencer — it does not process audio inline.
 - Inputs accept clock and per-channel CV for hits, steps, and probability.
-- Each of the four channels emits Gate, Trigger, LFO, and CV outputs, intended to drive voices, drum modules, or modulation destinations.
+- Each of the four channels emits Gate, Trigger, and CV outputs, intended to drive voices, drum modules, or modulation destinations.
 
 ## Typical Uses
 

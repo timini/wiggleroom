@@ -26,7 +26,7 @@ WiggleRoom modules are organized into **thematic packs**, each with **Free** and
 | Matter | Pro | Complex resonant body model |
 | VektorX | Pro | Flagship drone synth |
 | ACID9Voice | Pro | TB-303 inspired acid synth |
-| TR808 | Pro | Classic drum machine emulation |
+| AnalogDrums | Pro | Virtual analog drum machine, 12 voices |
 | TetanusCoil | Pro | Chaotic oscillator |
 | NutShaker | Pro | Physical shaker model |
 | PhysicalChoir | Pro | Vocal choir synthesis |
@@ -54,9 +54,34 @@ WiggleRoom modules are organized into **thematic packs**, each with **Free** and
 | Intersect | Free | Useful trigger generator |
 | Cycloid | Pro | Visual Euclidean sequencer |
 | TheArchitect | Pro | Advanced poly-quantizer |
-| Euclogic | Pro | 4-channel Euclidean sequencer |
-| Euclogic2 | Free | Compact 2-channel Euclidean |
+| EucSeq | Pro | 4-channel Euclidean sequencer |
+| EucSeq2 | Free | Compact 2-channel Euclidean |
 | ACID9Seq | Pro | Companion sequencer for ACID9Voice |
+
+#### Not yet assigned (15 modules)
+
+These shipped after the pack structure was last reviewed and have no pack or tier.
+Both columns are open decisions, not omissions to be filled in mechanically.
+
+| Module | Likely pack | Notes |
+|--------|-------------|-------|
+| XFade | Modulators | CV crossfader and mixer |
+| SpectraHenge | Effects | Four-node spectral processor with send/return loop |
+| PreFlightClock | Modulators | Master clock with count-in |
+| TheWeaver | Modulators | Polyphonic arpeggiator |
+| PixelProbe | Modulators | Image-to-CV colour sampler |
+| LogicMangler | Modulators | Truth table logic for the EucSeq chain |
+| EucBank | Modulators | Pattern storage for the EucSeq chain |
+| EucMix | Modulators | 4x4 CV summing matrix |
+| EucSeq3 | Modulators | 3-channel Euclidean sequencer |
+| LogicMangler2, LogicMangler3 | Modulators | 2- and 3-channel truth table logic |
+| EucMix2, EucMix3 | Modulators | 2x2 and 3x3 CV summing matrices |
+| EucBank2, EucBank3 | Modulators | Pattern storage for the 2- and 3-channel chains |
+
+The EucLogic chain raises a packaging question worth settling before the next release:
+eleven of these fifteen are chain modules, and an expander is not much use without the
+sequencer it expands. Splitting the chain across Free and Pro tiers would leave buyers
+holding modules that cannot do anything on their own.
 
 ### Summary
 
@@ -65,12 +90,13 @@ WiggleRoom modules are organized into **thematic packs**, each with **Free** and
 | Voices | 2 | 12 | 14 |
 | Effects | 3 | 4 | 7 |
 | Modulators | 4 | 4 | 8 |
-| **Total** | **9** | **20** | **29** |
+| Unassigned | | | 15 |
+| **Total** | **9** | **20** | **44** |
 
 ### Visual Overview
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
+┌───────────────────────────────────────────────────────────────────────────┐
 │                         WIGGLE ROOM PACKS                                 │
 ├────────────────────────┬─────────────────────┬────────────────────────────┤
 │        VOICES          │       EFFECTS       │        MODULATORS          │
@@ -79,11 +105,11 @@ WiggleRoom modules are organized into **thematic packs**, each with **Free** and
 ├──────────┼─────────────┼──────────┼──────────┼─────────────┼──────────────┤
 │ Plucked  │ ChaosFlute  │ LadderLPF│ Satura-  │ GravityClock│ Cycloid      │
 │ String   │ SpaceCello  │ BigReverb│ tionEcho │ OctoLFO     │ TheArchitect │
-│ ModalBell│ TheAbyss    │ Infinite │ TriPhase │ Intersect   │ Euclogic     │
-│          │ Matter      │ Folder   │ Ensemble │ Euclogic2   │ ACID9Seq     │
+│ ModalBell│ TheAbyss    │ Infinite │ TriPhase │ Intersect   │ EucSeq       │
+│          │ Matter      │ Folder   │ Ensemble │ EucSeq2     │ ACID9Seq     │
 │          │ VektorX     │          │ Spectral │             │              │
 │          │ ACID9Voice  │          │ Resonator│             │              │
-│          │ TR808       │          │ The      │             │              │
+│          │ AnalogDrums │          │ The      │             │              │
 │          │ TetanusCoil │          │ Cauldron │             │              │
 │          │ NutShaker   │          │          │             │              │
 │          │ Physical    │          │          │             │              │

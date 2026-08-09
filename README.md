@@ -4,7 +4,7 @@ A collection of creative modules for [VCV Rack 2](https://vcvrack.com/), built w
 
 **[Documentation](docs/README.md)** | **[Developer Guide](docs/developer/getting-started.md)** | **[Release Strategy](docs/RELEASE_STRATEGY.md)**
 
-## Modules (33)
+## Modules (44)
 
 ### Physical Modeling Synthesis
 | Module | Description |
@@ -26,6 +26,7 @@ A collection of creative modules for [VCV Rack 2](https://vcvrack.com/), built w
 | **InfiniteFolder** | West Coast-style wavefolder with infinite folding |
 | **LadderLPF** | Classic 4-pole ladder lowpass filter with resonance |
 | **SaturationEcho** | Vintage tape delay with saturation and modulation |
+| **SpectraHenge** | Four-node spectral processor with stereo inputs and send/return loop |
 | **SpectralResonator** | 6-band resonant filter bank for spectral shaping |
 | **TheCauldron** | Fluid wave math processor with chaotic modulation |
 | **TriPhaseEnsemble** | 3-voice BBD string ensemble effect |
@@ -50,7 +51,19 @@ A collection of creative modules for [VCV Rack 2](https://vcvrack.com/), built w
 | **EucMix** | 4x4 CV summing matrix for standalone or expander use |
 | **GravityClock** | Clock-synced bouncing ball trigger generator |
 | **Intersect** | Rhythmic trigger generator with set operations |
+| **PreFlightClock** | Master clock with Ableton-style count-in sequence |
 | **TheWeaver** | Scale-Bus-aware polyphonic arpeggiator with 11 patterns and addressable Index CV |
+
+#### 2- and 3-channel EucLogic chain
+
+Narrower variants of the EucSeq chain above, for patches that do not need four channels.
+
+| Module | Description |
+|--------|-------------|
+| **EucSeq2** / **EucSeq3** | 2- and 3-channel Euclidean sequencers |
+| **LogicMangler2** / **LogicMangler3** | Matching truth table logic processors |
+| **EucMix2** / **EucMix3** | 2x2 and 3x3 CV summing matrices |
+| **EucBank2** / **EucBank3** | 16-slot pattern storage for each chain |
 
 ### Utilities
 | Module | Description |
