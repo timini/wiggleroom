@@ -218,8 +218,19 @@ struct TruthTableT {
         std::uniform_int_distribution<int> cellDist(0, (int)candidates.size() - 1);
         std::uniform_real_distribution<float> probDist(0.f, 1.f);
 
+        // Flip exactly numFlips cells. Density biases *which* cell is chosen, via
+        // rejection sampling, rather than gating whether the flip happens at all.
+        //
+        // The previous version drew a cell and then tested probDist(rng) < flipProb
+        // as a second coin toss, skipping the flip when it failed. At the default
+        // density of 0.5 that meant a 50% chance of doing nothing per flip, so with
+        // numFlips == 1 roughly a third of Mutate presses changed nothing at all.
+        // A Mutate button that silently no-ops is a UX bug, so the flip is now
+        // guaranteed.
         int numFlips = countDist(rng);
-        for (int f = 0; f < numFlips; f++) {
+        int flipped = 0;
+        constexpr int MAX_ATTEMPTS = 64;
+        for (int attempt = 0; attempt < MAX_ATTEMPTS && flipped < numFlips; attempt++) {
             auto& cell = candidates[cellDist(rng)];
             bool isOn = (mapping[cell.state] >> cell.bit) & 1;
             float d = densities[cell.bit];
@@ -227,7 +238,16 @@ struct TruthTableT {
             float flipProb = isOn ? (1.f - d) : d;
             if (probDist(rng) < flipProb) {
                 mapping[cell.state] ^= (1 << cell.bit);
+                flipped++;
             }
+        }
+
+        // Belt and braces. By construction every candidate has flipProb > 0, so the
+        // loop above effectively always succeeds; this guarantees Mutate is never a
+        // no-op even if that ever stops holding.
+        if (flipped == 0) {
+            auto& cell = candidates[cellDist(rng)];
+            mapping[cell.state] ^= (1 << cell.bit);
         }
     }
 

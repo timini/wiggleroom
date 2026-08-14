@@ -248,6 +248,29 @@ class TestTruthTable:
         result = run_test(["--test-truth-mutate", "--seed=42"])
         assert 1 <= result["differences"] <= 3, f"Expected 1-3 differences, got {result['differences']}"
 
+    def test_mutate_is_never_a_no_op(self):
+        """Mutate must always change something.
+
+        A Mutate button that sometimes does nothing is a UX bug: the user presses
+        it and the patch is unchanged. Sweep seeds so a single lucky seed cannot
+        hide the failure.
+        """
+        no_ops = []
+        for seed in range(1, 51):
+            result = run_test(["--test-truth-mutate", f"--seed={seed}"])
+            if result["differences"] < 1:
+                no_ops.append(seed)
+        assert not no_ops, f"Mutate was a no-op for seeds: {no_ops}"
+
+    def test_mutate_respects_upper_bound(self):
+        """Mutate should never change more than 3 entries, across many seeds"""
+        too_many = []
+        for seed in range(1, 51):
+            result = run_test(["--test-truth-mutate", f"--seed={seed}"])
+            if result["differences"] > 3:
+                too_many.append((seed, result["differences"]))
+        assert not too_many, f"Mutate exceeded 3 changes: {too_many}"
+
     def test_undo_restores_state(self):
         """Undo should restore previous state"""
         result = run_test(["--test-truth-undo"])
