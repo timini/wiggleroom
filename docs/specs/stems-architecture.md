@@ -100,16 +100,18 @@ The user's requirement was to avoid being tied to one platform. The way to honou
 
 ```
         core/            no framework dependencies, unit-testable
+        ├── FftBackend interface (implementation supplied by the adapter)
         ├── buffer, sync, separation (tier 0 + tier 1 interface)
         ├── pitch analysis + quantiser
         ├── wavetable extractor + oscillator
         ├── lowpass gate
         └── grain engine + diffuser
              │
-    ┌────────┴────────┐
-    │                 │
-  VCV adapter      JUCE adapter
-  (rack::Module)   (VST3/AU/CLAP/standalone)
+    ┌────────┼────────┬──────────────┐
+    │        │        │              │
+  VCV      JUCE     stems_test    (future)
+  adapter  adapter  adapter
+  RealFFT  juce FFT reference DFT
 ```
 
 The concept document's advice to start with JUCE is defensible but not obligatory. Since this repository is already a working GPL-3 VCV plugin with build, test and CI infrastructure in place, starting with the VCV adapter at Tier 0 gets a playable instrument soonest and defers every hard deployment question. Nothing about that choice blocks a JUCE adapter later, provided the core stays framework-free.
@@ -129,9 +131,29 @@ Recommended set for a GPL-3.0-or-later VCV module:
 | Beat detection | Not required for v1 | n/a | Tempo and phase come from `clock_in`. Only needed to align an off-grid recording, which can be deferred |
 | Granular | Adapted from Clouds | MIT | Émilie Gillet's DSP is MIT and directly usable with attribution |
 | Lowpass gate | Shared with `specs/TheLantern.md` | n/a | Do not implement twice. That spec is in PR #66 and not yet on main; if it does not land, this module needs its own |
-| FFT | Rack's `dsp::RealFFT` | FFTPACK (BSD-style) | Wraps pffft, already in the SDK at `dsp/fft.hpp`. No new dependency |
+| FFT | Adapter-supplied behind a core interface; Rack adapter uses `dsp::RealFFT` | FFTPACK (BSD-style) | See the note below. The core must not include Rack headers |
 
 Note the pattern: for every function where the obvious library is GPL or AGPL, either a permissive alternative exists at comparable quality, or the algorithm is small enough to implement directly. Taking that route keeps the core free of copyleft dependencies, which costs little now and preserves optionality later.
+
+### The FFT must not tie the core to Rack
+
+Using `rack::dsp::RealFFT` directly inside `src/common/stems/` would contradict the platform strategy above: the core is meant to have no framework dependencies so a JUCE adapter is possible, and including `dsp/fft.hpp` would make the core include and link the Rack SDK.
+
+The core therefore declares a minimal interface and each adapter supplies the implementation:
+
+```cpp
+// src/common/stems/FftBackend.hpp  — no rack.hpp
+struct FftBackend {
+    virtual ~FftBackend() = default;
+    virtual void forward(const float* in, float* out) = 0;   // real -> packed complex
+    virtual void inverse(const float* in, float* out) = 0;
+    virtual size_t size() const = 0;
+};
+```
+
+The Rack adapter wraps `dsp::RealFFT`. `stems_test` supplies its own implementation, which conveniently also removes the open question about linking pffft into a standalone test executable: the unit tests can use a small self-contained DFT as the reference and never link the SDK at all. A future JUCE adapter supplies `juce::dsp::FFT`.
+
+Cost is one virtual call per frame, which is negligible against a 2048-point transform.
 
 ### Deliberately rejected
 

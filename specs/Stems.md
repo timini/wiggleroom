@@ -36,12 +36,14 @@ The control surface is large. If 34 HP proves unwieldy, the granular section is 
 | rec_thresh | Input level that starts recording in threshold mode | -60 to 0 dB | -30 |
 | buf_len | Buffer length in bars, quantised to the clock | 1-16 bars | 4 |
 
+The buffer is additionally capped at **32 seconds** regardless of `buf_len` and tempo. Without that cap the range is unbounded downward in tempo: at 30 BPM, which `PreFlightClock` supports, 16 bars of 4/4 is 128 seconds, and one source plus four stereo float stems at 48 kHz would need roughly 246 MB before any scratch space. At the 32 second cap the same figure is about 61 MB at 48 kHz and 123 MB at 96 kHz. If the clock is slow enough that `buf_len` bars would exceed the cap, recording stops at the cap and the loop length is reported in the UI as the shorter value.
+
 ### Clock and sync
 
 | Parameter | Description | Range | Default |
 |-----------|-------------|-------|---------|
 | clock_div | Division/multiplication of the incoming clock | /16 to x16 | x1 |
-| sync_mode | Repitch, time-stretch, or granular-sync | 0-2 | 1 |
+| sync_mode | Repitch, time-stretch, or granular-sync | 0-2 | 0 |
 | loop_start | Loop start point as a fraction of the buffer | 0-1 | 0 |
 | loop_len | Loop length as a fraction of the buffer | 0.03-1 | 1 |
 
@@ -130,8 +132,14 @@ Separate loop, voice and main outputs let the module be used as three instrument
 This is the architectural spine and must be settled before anything else is written.
 
 - **Audio thread** (`process()`): stem mixing, playback, wavetable extraction and oscillation, LPG, granular. No allocation, no locks, no file or model I/O.
-- **Worker thread**: separation, beat/downbeat analysis, scale detection. Results handed to the audio thread through lock-free single-producer single-consumer buffers with atomic pointer swap.
+- **Worker thread**: separation, beat/downbeat analysis, scale detection.
 - Rack guarantees it never calls `Module` methods concurrently, but it makes no guarantees about threads you create. All shared state crosses the boundary through atomics or lock-free queues.
+
+Three ownership rules make that safe. All three are requirements, not implementation detail:
+
+1. **Immutable per-job input snapshots with generation IDs.** The worker never reads the live ring buffer, because `process()` may be mutating it if the user starts a new recording or overdub mid-job. Each job receives its own immutable copy tagged with a generation ID. A result whose generation is not the current one is discarded rather than published, so a superseded take can never overwrite a newer one.
+2. **Publication by atomic pointer swap.** The audio thread pins the pointer once at the top of `process()` and uses it for the whole call, so it sees either the old set or the new one, never a partial one.
+3. **Retirement queue, not shared ownership.** An atomic swap alone does not say when the audio thread has finished with the previous set. Freeing it on the worker immediately risks use-after-free; `shared_ptr` risks the final release landing on the audio thread and deallocating tens of megabytes there; keeping every old set leaks. The retired pointer is therefore handed back to the worker through a single-producer single-consumer queue and destroyed there, after the audio thread has published that it has moved on.
 
 ### Stage 1: Buffer and beat sync
 
@@ -151,17 +159,23 @@ The concept document assumes a neural separation model. That is achievable but c
 **Tier 0, classical DSP. Always available, ships in the box.**
 Harmonic/percussive separation by median filtering on the spectrogram (Fitzgerald, DAFx-10; margin extension by Driedger, Müller and Disch, 2014), combined with a band split. Produces four layers:
 
+The four layers must be **disjoint**, so that summing them at unity reconstructs the source rather than double-counting. Masks are applied in a fixed order, each excluding what earlier layers have already claimed:
+
 | Layer | Derivation |
 |-------|-----------|
-| Low | Below the split frequency, harmonic-dominant |
-| Percussive | Median-filtered across frequency bins |
-| Harmonic | Median-filtered across time frames |
-| Residual | What neither mask claims |
+| Low | Bins below the split frequency, whatever their harmonic/percussive character |
+| Percussive | Median-filtered across frequency bins, **excluding** the Low band |
+| Harmonic | Median-filtered across time frames, **excluding** the Low band and the Percussive mask |
+| Residual | The remainder, so that Low + Percussive + Harmonic + Residual equals the source |
+
+Defining Harmonic without excluding the Low band would make the two overlap, and the default all-faders-at-unity state would then reconstruct bass at double amplitude.
 
 Cheap, deterministic, no model files, no external dependencies, permissively implementable. For ambient generative use these four layers are musically sufficient: the instrument needs *material that differs*, not correctly labelled instruments.
 
 **Tier 1, neural separation. Optional, user-enabled.**
 Four-stem model via ONNX Runtime on the worker thread. Better labelled separation at significant cost in size and deployment complexity. Models are not bundled; the user points the module at a model directory.
+
+"A model directory" is not a sufficient contract. Separation exports differ in sample rate, channel layout, tensor names and shapes, preprocessing, chunking and stem ordering, so an implementation cannot otherwise tell whether a directory is usable or how to map its outputs onto the four-buffer interface. Tier 1 therefore requires a **`stems-model.json` manifest** alongside the weights declaring at minimum: model family and version, expected sample rate, channel count, input tensor name and shape, output tensor names in Low/Percussive/Harmonic/Residual order (or a declared mapping from the model's own stem names), and any required chunk length and overlap. A directory without a valid manifest, or with a manifest declaring an unsupported family, is rejected with a clear message and the module stays on Tier 0. Supported families are enumerated in the manifest schema rather than inferred.
 
 Tier 0 is the MVP and must be complete and shippable on its own. Tier 1 is an enhancement, not a prerequisite.
 
@@ -171,7 +185,16 @@ Autocorrelation or YIN-family fundamental estimation over a sliding window of th
 
 Critical constraint absent from the concept: **scale detection is meaningless on an unpitched stem.** Running it on a drum layer produces noise. The module must compute a confidence score and, below threshold, hold the last confident result rather than emit garbage. If the user selects a percussive stem for analysis the UI must indicate that analysis is inactive.
 
-Quantiser snaps `quant_cv_in` to the nearest note in the detected scale and emits it on `quant_cv_out`, normalled internally to the wavetable oscillator so the module is self-playing with nothing patched.
+On a fresh module there is no last confident result to hold. Auto mode therefore **seeds from the manual `root` and `scale` defaults** (C, major) and uses those until the first confident detection replaces them. That covers the empty-buffer state, an unpitched first recording, and the window while separation is still running.
+
+Quantiser snaps `quant_cv_in` to the nearest note in the detected scale and emits it on `quant_cv_out`.
+
+**Self-play.** `quant_cv_out` is normalled to the wavetable oscillator, but that alone does not make the module self-playing: an unpatched `quant_cv_in` reads a constant 0 V, and an unpatched `lpg_trig` leaves the gate closed. Two internal sources close that gap, both active only while the corresponding jack is unpatched:
+
+- **Internal pitch**: degrees of the detected scale are selected by a slow internal random walk, clocked from the loop grid, so pitch evolves rather than sitting on one note.
+- **Internal trigger**: the LPG is fired from the loop grid at a division set by `clock_div`, so the voice articulates in time with the loop.
+
+Patching either jack overrides its internal source. Without this, a module with nothing patched is either silent or a single held pitch, which is not a generative instrument.
 
 ### Stage 4: Dynamic wavetable
 
@@ -202,10 +225,10 @@ Grain scheduler over a mix of the loop bus and the voice bus, set by `grain_bala
 
 - **Real-time safety**: no allocation, locking, logging or I/O on the audio thread. All buffers preallocated at construction or on the worker thread.
 - **Bounded CPU**: the grain pool is fixed size. Wavetable extraction is amortised across blocks rather than done in one spike when the playhead crosses a frame boundary.
-- **Memory budget**: Tier 0 must run in under 200 MB including the buffer and all four stem copies. Tier 1's model footprint is explicitly out of that budget and is disclosed to the user.
+- **Memory budget**: Tier 0 must run in under 256 MB including the source buffer, all four stem copies and FFT scratch. The 32 second buffer cap is what keeps this achievable at 96 kHz. Tier 1's model footprint is explicitly out of that budget and is disclosed to the user.
 - **Patch persistence**: the audio buffer is **not** saved into the patch file by default. Four stems of stereo 48 kHz audio at 16 bars is well over 100 MB and would make patches unusable. Offer explicit save-to-disk as an opt-in, storing a reference in the patch.
 - **Sample rate**: must handle sample rate changes without dropouts, resampling the buffer or invalidating and re-separating as appropriate.
-- **Graceful degradation**: the module must remain playable while separation is running. Until stems are ready, all four mixer channels play the unseparated buffer. Separation failure is non-fatal and falls back to the same state.
+- **Graceful degradation**: the module must remain playable while separation is running. Until stems are ready the unseparated buffer is routed through **channel 1 only**, with channels 2 to 4 silent. Routing it to all four at their default unity gain would sum four identical copies for a 12 dB boost and near-certain clipping, then drop abruptly when the real stems arrived. The transition to separated stems must be level-preserving and crossfaded, not a jump. Separation failure is non-fatal and falls back to the same single-channel state.
 - **Licensing**: every third-party dependency must be compatible with GPL-3.0-or-later. Several obvious candidate libraries are not, or impose obligations that foreclose other distribution routes. See the architecture document before adding any dependency.
 - **No bundled model weights** in the VCV Library package.
 
@@ -224,3 +247,9 @@ Grain scheduler over a mix of the loop bus and the voice bus, set by `grain_bala
 11. **Empty buffer**: every control must be safe to move before anything is recorded. No NaN, no denormals, no output spikes.
 12. **Sample rate change**: switch 44.1 kHz to 96 kHz mid-playback. No crash, no dropout, loop stays in time.
 13. **Patch save/load**: save and reload a patch. Confirm parameters restore, confirm the patch file has not ballooned.
+14. **Layers are disjoint**: with all four faders at unity, the mixer output must reconstruct the source within 0.5 dB. Overlapping Low and Harmonic masks would show up here as a bass boost.
+15. **Fallback level**: record, then measure output level during separation and after stems arrive. The two must match within 1 dB, with no jump at the transition. Routing the unseparated buffer to all four unity channels would show as a 12 dB step.
+16. **Superseded job**: start a recording, begin separation, then immediately start another recording. Confirm the first job's result is discarded and never published over the second take.
+17. **Self-play**: with nothing patched except a clock, confirm the module produces evolving pitched output. Confirm patching `quant_cv_in` or `lpg_trig` overrides the corresponding internal source.
+18. **Auto-scale seeding**: on a fresh module with an empty buffer and `scale_mode` on auto, confirm the quantiser uses the manual defaults rather than an undefined scale.
+19. **Buffer cap**: set `buf_len` to 16 bars at 30 BPM. Confirm recording stops at the 32 second cap and the reported loop length reflects it.
