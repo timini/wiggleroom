@@ -142,7 +142,7 @@ Using `rack::dsp::RealFFT` directly inside `src/common/stems/` would contradict 
 The core therefore declares a minimal interface and each adapter supplies the implementation:
 
 ```cpp
-// src/common/stems/FftBackend.hpp  — no rack.hpp
+// src/common/stems/FftBackend.hpp  (no rack.hpp)
 struct FftBackend {
     virtual ~FftBackend() = default;
     virtual void forward(const float* in, float* out) = 0;   // real -> packed complex
