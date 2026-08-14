@@ -8,9 +8,14 @@ Before this file existed, 13 of euclogic_test's commands and 2 of octolfo_test's
 were never run by anything, so a regression in them was invisible even once the
 executables were running in CI.
 
-This test discovers every `cmd == "--test-..."` handler directly in the C++
-source and runs it. New commands are therefore covered automatically, and the
-coverage cannot silently drift again.
+This test discovers every runnable subcommand and runs it, so new commands are
+covered automatically and the coverage cannot silently drift.
+
+Discovery asks each executable via --list-commands, which is authoritative.
+Scraping the C++ source is only a fallback, because scraping has already been
+wrong twice: a lowercase-only character class missed
+--test-getHit-after-construct, and table-driven dispatch does not look like
+`cmd == "..."` at all, which hid five commands in stems_test.
 
 What it asserts per command:
   - exit code 0
@@ -52,13 +57,27 @@ def find_executable(name: str) -> Path:
     )
 
 
-def discover_commands(source_name: str) -> list[str]:
-    """Pull every --test-* subcommand straight out of the C++ dispatcher."""
+def discover_commands(source_name: str, exe: Path) -> list[str]:
+    """Discover every runnable --test-* subcommand.
+
+    Prefers asking the executable itself via --list-commands, which is
+    authoritative and cannot drift. Falls back to scraping the C++ dispatcher
+    for executables that do not implement it yet.
+
+    Scraping has already been wrong twice: a lowercase-only character class
+    silently skipped --test-getHit-after-construct, and table-driven dispatch
+    does not match `cmd == "..."` at all, which hid five commands in
+    stems_test. Hence the preference for asking.
+    """
+    listed = subprocess.run(
+        [str(exe), "--list-commands"], capture_output=True, text=True, timeout=30
+    )
+    if listed.returncode == 0 and listed.stdout.strip():
+        cmds = sorted({line.strip() for line in listed.stdout.splitlines() if line.strip()})
+        if cmds:
+            return cmds
+
     src = (project_root / "test" / source_name).read_text()
-    # Capture the whole quoted value rather than assuming a character class.
-    # An earlier lowercase-only pattern silently skipped
-    # --test-getHit-after-construct, which is exactly the kind of gap this file
-    # exists to prevent.
     cmds = sorted(set(re.findall(r'cmd == "(--test-[^"]+)"', src)))
     if not cmds:
         raise AssertionError(f"No --test-* commands discovered in {source_name}")
@@ -105,7 +124,7 @@ def test_every_native_command_runs_and_passes():
     failures = []
     for source_name, exe_name in SUITES.items():
         exe = find_executable(exe_name)
-        for cmd in discover_commands(source_name):
+        for cmd in discover_commands(source_name, exe):
             problem = check(exe, cmd)
             if problem:
                 failures.append(f"{exe_name} {cmd}: {problem}")
@@ -125,7 +144,7 @@ def main() -> int:
             print(f"\nERROR: {exc}")
             return 1
 
-        commands = discover_commands(source_name)
+        commands = discover_commands(source_name, exe)
         print(f"\n{exe_name}: {len(commands)} commands discovered in {source_name}")
         for cmd in commands:
             total += 1
