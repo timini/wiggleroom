@@ -221,6 +221,22 @@ class TestTransport:
         result = run_test(["--test-transport-clock-restart"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_clock_jitter_does_not_manufacture_downbeats(self):
+        """A downbeat is an integer loop-boundary crossing, not any backward
+        phase correction. A late edge corrects backwards while still at, say,
+        3/16; treating that as a wrap fired spurious downbeat triggers
+        throughout the loop. Measured 88 downbeats over 10 loops before the fix.
+        """
+        result = run_test(["--test-transport-downbeat-jitter"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_reset_between_edges_preserves_clock_timing(self):
+        """Clearing the elapsed timer on an asynchronous reset made the next
+        edge measure only the reset-to-edge fragment. A reset halfway through a
+        120 BPM interval recorded 0.25 s and doubled playback speed."""
+        result = run_test(["--test-transport-reset-midinterval"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_free_runs_safely_without_a_clock(self):
         """No clock must not produce NaN or an out-of-range phase.
 

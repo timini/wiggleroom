@@ -83,20 +83,17 @@ public:
         const bool clockEdge = clockTrigger_.process(clockVoltage);
         const bool resetEdge = resetTrigger_.process(resetVoltage);
 
-        // Reset wins, and is immediate, so a song-position reset lands exactly
-        // on the downbeat rather than at the next clock edge.
-        if (resetEdge) {
-            phase_ = 0.0;
-            pulseCount_ = 0;
-            downbeat_ = true;
-            timeSinceClock_ = 0.0;
-            return;
-        }
-
         timeSinceClock_ += 1.0 / sampleRate_;
 
+        // Clock TIMING is maintained on every edge, independently of reset.
+        // Doing this before the reset check matters twice over: a reset
+        // coincident with an edge must not lose that edge's measurement, and a
+        // reset between edges must not restart the timer. Clearing the timer on
+        // an asynchronous reset made the next edge measure only the
+        // reset-to-edge fragment, so a reset halfway through a 120 BPM interval
+        // recorded 0.25 s and doubled playback speed until the edge after that.
         if (clockEdge) {
-            // Only measure a period between two real edges. After an idle gap
+            // Only measure between two real edges. After an idle gap
             // timeSinceClock_ holds the whole idle duration; recording that as
             // the period would crawl playback until the next edge and then
             // jump. The first edge after idle sets the origin only.
@@ -107,16 +104,38 @@ public:
             }
             hasClockOrigin_ = true;
             timeSinceClock_ = 0.0;
+        }
 
+        // Reset wins on musical POSITION, and is immediate, so a song-position
+        // reset lands exactly on the downbeat rather than at the next edge.
+        if (resetEdge) {
+            phase_ = 0.0;
+            pulseCount_ = 0;
+            loopIndex_ = 0;
+            downbeat_ = true;
+            return;
+        }
+
+        if (clockEdge) {
             pulseCount_++;
             // Snap to the grid the DIVISION implies, not the x1 grid. At x2 the
             // loop completes in half the clocks, so snapping to pulse/16 would
             // drag the playhead backwards on every edge.
             const double loopPosition =
                 static_cast<double>(pulseCount_) * clockDivision_ / clocksPerLoop_;
-            const double wrapped = loopPosition - std::floor(loopPosition);
-            if (wrapped < phase_) downbeat_ = true;
-            phase_ = wrapped;
+
+            // A downbeat is a crossing of an integer loop boundary on the
+            // divided grid, NOT any backward phase correction. A late edge
+            // corrects the phase backwards while still sitting at, say, 3/16;
+            // treating that as a wrap fired spurious downbeats throughout the
+            // loop under ordinary clock jitter.
+            const long long newLoopIndex =
+                static_cast<long long>(std::floor(loopPosition));
+            if (newLoopIndex != loopIndex_) {
+                loopIndex_ = newLoopIndex;
+                downbeat_ = true;
+            }
+            phase_ = loopPosition - std::floor(loopPosition);
             return;
         }
 
@@ -135,6 +154,7 @@ public:
             totalPhaseAdvanced_ += increment;
             if (phase_ >= 1.0) {
                 phase_ -= std::floor(phase_);
+                loopIndex_++;
                 downbeat_ = true;
             }
         }
@@ -195,6 +215,7 @@ private:
     bool downbeat_ = false;
     bool clockDetected_ = false;
     bool hasClockOrigin_ = false;
+    long long loopIndex_ = 0;
 
     SchmittTrigger clockTrigger_;
     SchmittTrigger resetTrigger_;

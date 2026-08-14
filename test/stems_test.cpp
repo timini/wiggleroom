@@ -624,6 +624,77 @@ bool transportClockRestart(std::string& detail) {
     return true;
 }
 
+/** Clock jitter must not manufacture extra downbeats.
+ *
+ *  A late edge corrects the phase backwards. Treating any backward correction
+ *  as a wrap fires downbeat_out spuriously throughout the loop.
+ */
+bool transportDownbeatJitter(std::string& detail) {
+    const int sampleRate = 48000;
+    Transport t(sampleRate);
+    t.setClocksPerLoop(16);
+    t.setBufferFrames(sampleRate);
+
+    const int loops = 10;
+    const int nominalGap = 1000;
+    std::mt19937 rng(7);
+    std::uniform_int_distribution<int> jitter(-60, 60);
+
+    int downbeats = 0;
+    for (int pulse = 0; pulse < loops * 16; pulse++) {
+        const int gap = nominalGap + jitter(rng);
+        for (int i = 0; i < gap; i++) {
+            t.process(i < 48 ? 10.f : 0.f, 0.f);
+            if (t.downbeat()) downbeats++;
+        }
+    }
+    if (downbeats != loops) {
+        detail = "expected " + std::to_string(loops) + " downbeats over " +
+                 std::to_string(loops) + " loops, got " + std::to_string(downbeats);
+        return false;
+    }
+    return true;
+}
+
+/** A reset between clock edges must not corrupt the next period measurement. */
+bool transportResetMidInterval(std::string& detail) {
+    const int sampleRate = 48000;
+    Transport t(sampleRate);
+    t.setClocksPerLoop(16);
+    t.setBufferFrames(sampleRate);
+
+    const int gap = sampleRate / 2;   // 0.5 s between edges
+    const int pulseHigh = 48;
+
+    auto edge = [&]() { for (int i = 0; i < pulseHigh; i++) t.process(10.f, 0.f); };
+    auto low  = [&](int n) { for (int i = 0; i < n; i++) t.process(0.f, 0.f); };
+
+    // Three edges, ending exactly on the third so the elapsed timer is at zero.
+    edge(); low(gap - pulseHigh);
+    edge(); low(gap - pulseHigh);
+    edge();
+
+    const double before = t.clockPeriodSeconds();
+    if (std::abs(before - 0.5) > 0.01) {
+        detail = "setup: period " + std::to_string(before) + " expected 0.5";
+        return false;
+    }
+
+    // Reset halfway to the next edge, then complete the interval normally.
+    low(gap / 2 - pulseHigh);
+    t.process(0.f, 10.f);
+    low(gap / 2 - 1);
+    edge();
+
+    const double after = t.clockPeriodSeconds();
+    if (std::abs(after - 0.5) > 0.02) {
+        detail = "period after a mid-interval reset is " + std::to_string(after) +
+                 ", expected ~0.5; the reset restarted the clock timer";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /**
@@ -657,6 +728,8 @@ const char* const kCommands[] = {
     "--test-transport-loop-max-start",
     "--test-transport-samplerate",
     "--test-transport-clock-restart",
+    "--test-transport-downbeat-jitter",
+    "--test-transport-reset-midinterval",
 };
 
 int main(int argc, char** argv) {
@@ -742,6 +815,8 @@ int main(int argc, char** argv) {
             {"--test-transport-loop-max-start",  "transport_loop_max_start",  transportLoopMaxStart},
             {"--test-transport-samplerate",      "transport_samplerate",      transportSampleRateChange},
             {"--test-transport-clock-restart",   "transport_clock_restart",   transportClockRestart},
+            {"--test-transport-downbeat-jitter", "transport_downbeat_jitter", transportDownbeatJitter},
+            {"--test-transport-reset-midinterval","transport_reset_midinterval",transportResetMidInterval},
         };
         for (const auto& c : bufferCases) {
             if (cmd == c.cmd) {
@@ -785,6 +860,8 @@ int main(int argc, char** argv) {
         record(transportLoopMaxStart(detail));
         record(transportSampleRateChange(detail));
         record(transportClockRestart(detail));
+        record(transportDownbeatJitter(detail));
+        record(transportResetMidInterval(detail));
 
         std::cout << "{\"test\": \"self_test\""
                   << ", \"passed\": " << passed
