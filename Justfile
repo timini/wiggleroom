@@ -299,9 +299,9 @@ verify-manifest-tests:
 verify-test-infra:
     cd test && python3 -m pytest test_utils_unit.py test_audio_quality_unit.py -v
 
-# Run native C++ test executables (requires `just build` first)
 # These are standalone binaries with no Rack dependency; they test the
 # framework-free logic in src/common/. Each exits non-zero on failure.
+# Run native C++ tests (requires 'just build' first)
 test-native:
     #!/usr/bin/env bash
     set -euo pipefail
