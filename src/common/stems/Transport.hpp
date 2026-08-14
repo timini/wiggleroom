@@ -28,10 +28,17 @@ class Transport {
 public:
     explicit Transport(int sampleRate) { setSampleRate(sampleRate); }
 
+    /**
+     * Change sample rate without disturbing musical state.
+     *
+     * The measured period is stored in seconds, so it needs no recalculation.
+     * Resetting it here would drop a 30 BPM loop to the 120 BPM default and
+     * play it at four times its intended rate until the next clock edge, which
+     * is precisely the mid-playback sample-rate change the spec requires be
+     * seamless.
+     */
     void setSampleRate(int sampleRate) {
         sampleRate_ = (sampleRate > 0) ? sampleRate : 48000;
-        // 120 BPM default so an unclocked module still behaves sensibly.
-        clockPeriodSeconds_ = 0.5;
     }
 
     /** Clock pulses that make up one full loop. 16 is 4 bars of 4/4. */
@@ -44,11 +51,17 @@ public:
         clockDivision_ = (division > 0.f) ? division : 1.f;
     }
 
-    /** Loop window as fractions of the buffer. */
+    /**
+     * Loop window as fractions of the buffer.
+     *
+     * Length is clamped first and start is then constrained to keep
+     * start + length <= 1. Clamping start first meant a start of 1, a legal
+     * end of the parameter range, produced a zero length that the minimum then
+     * pushed past the end of the buffer, so every read returned silence.
+     */
     void setLoopBounds(float start, float length) {
-        loopStart_  = std::min(std::max(start, 0.f), 1.f);
-        loopLength_ = std::min(std::max(length, 0.001f), 1.f - loopStart_);
-        if (loopLength_ <= 0.f) loopLength_ = 0.001f;
+        loopLength_ = std::min(std::max(length, kMinLoopLength), 1.f);
+        loopStart_  = std::min(std::max(start, 0.f), 1.f - loopLength_);
     }
 
     void setBufferFrames(std::size_t frames) { bufferFrames_ = frames; }
@@ -61,32 +74,58 @@ public:
     void process(float clockVoltage, float resetVoltage) {
         downbeat_ = false;
 
-        // Reset takes priority and is immediate, so a song-position reset lands
-        // exactly on the downbeat rather than at the next clock edge.
-        if (resetTrigger_.process(resetVoltage)) {
+        // Advance BOTH triggers every sample, before any early return. If reset
+        // returned early without consuming a coincident clock edge, the still
+        // high clock would register as a fresh edge on the next sample and step
+        // the phase straight off the downbeat. PreFlightClock in this repo
+        // fires its master clock and reset together on the downbeat, so that is
+        // the normal integration, not an edge case.
+        const bool clockEdge = clockTrigger_.process(clockVoltage);
+        const bool resetEdge = resetTrigger_.process(resetVoltage);
+
+        // Reset wins, and is immediate, so a song-position reset lands exactly
+        // on the downbeat rather than at the next clock edge.
+        if (resetEdge) {
             phase_ = 0.0;
             pulseCount_ = 0;
             downbeat_ = true;
+            timeSinceClock_ = 0.0;
             return;
         }
 
         timeSinceClock_ += 1.0 / sampleRate_;
 
-        if (clockTrigger_.process(clockVoltage)) {
-            if (timeSinceClock_ > 0.0005) {   // debounce, caps at 2 kHz
+        if (clockEdge) {
+            // Only measure a period between two real edges. After an idle gap
+            // timeSinceClock_ holds the whole idle duration; recording that as
+            // the period would crawl playback until the next edge and then
+            // jump. The first edge after idle sets the origin only.
+            if (hasClockOrigin_ && timeSinceClock_ > kDebounceSeconds &&
+                timeSinceClock_ <= kClockTimeoutSeconds) {
                 clockPeriodSeconds_ = timeSinceClock_;
                 clockDetected_ = true;
             }
+            hasClockOrigin_ = true;
             timeSinceClock_ = 0.0;
 
-            pulseCount_ = (pulseCount_ + 1) % clocksPerLoop_;
-            // Snap to the grid. This is what bounds drift.
-            phase_ = static_cast<double>(pulseCount_) / clocksPerLoop_;
-            if (pulseCount_ == 0) downbeat_ = true;
+            pulseCount_++;
+            // Snap to the grid the DIVISION implies, not the x1 grid. At x2 the
+            // loop completes in half the clocks, so snapping to pulse/16 would
+            // drag the playhead backwards on every edge.
+            const double loopPosition =
+                static_cast<double>(pulseCount_) * clockDivision_ / clocksPerLoop_;
+            const double wrapped = loopPosition - std::floor(loopPosition);
+            if (wrapped < phase_) downbeat_ = true;
+            phase_ = wrapped;
             return;
         }
 
-        if (timeSinceClock_ > 3.0) clockDetected_ = false;
+        if (timeSinceClock_ > kClockTimeoutSeconds) {
+            clockDetected_ = false;
+            // Force the next edge to be treated as an origin rather than the
+            // end of an enormous interval.
+            hasClockOrigin_ = false;
+        }
 
         // Between edges, advance at the rate implied by the measured period.
         const double loopSeconds = clockPeriodSeconds_ * clocksPerLoop_ / clockDivision_;
@@ -137,6 +176,10 @@ private:
         }
     };
 
+    static constexpr float kMinLoopLength = 0.001f;
+    static constexpr double kDebounceSeconds = 0.0005;    // caps usable clock at 2 kHz
+    static constexpr double kClockTimeoutSeconds = 3.0;
+
     int sampleRate_ = 48000;
     int clocksPerLoop_ = 16;
     float clockDivision_ = 1.f;
@@ -148,9 +191,10 @@ private:
     double totalPhaseAdvanced_ = 0.0;
     double clockPeriodSeconds_ = 0.5;
     double timeSinceClock_ = 0.0;
-    int pulseCount_ = 0;
+    long long pulseCount_ = 0;
     bool downbeat_ = false;
     bool clockDetected_ = false;
+    bool hasClockOrigin_ = false;
 
     SchmittTrigger clockTrigger_;
     SchmittTrigger resetTrigger_;

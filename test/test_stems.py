@@ -164,8 +164,11 @@ class TestTransport:
     def test_stays_locked_over_a_long_run(self):
         """1000 bars at 120 BPM with under one frame of downbeat drift.
 
-        Verified to have teeth: removing the phase snap makes this fail with
-        1.17 frames of drift.
+        Drift is measured in audio frames, scaled by frames-per-loop. An earlier
+        version scaled only by clocksPerLoop, which measures clock intervals: at
+        120 BPM and 48 kHz that let roughly 24000 frames pass a "1 frame"
+        assertion. Verified to have teeth: removing the phase snap now fails
+        with 27999 frames of drift.
         """
         result = run_test(["--test-transport-lock"])
         assert result["failed"] == 0, result.get("detail", "")
@@ -181,6 +184,41 @@ class TestTransport:
 
     def test_loop_bounds_window_the_playhead(self):
         result = run_test(["--test-transport-loop"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_clock_division_applies_to_edge_snaps(self):
+        """Division must scale the snap grid, not just the free-run rate.
+
+        Snapping to the x1 grid while free-running at x2 drags the playhead
+        backwards on every clock edge.
+        """
+        result = run_test(["--test-transport-division-snap"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_reset_consumes_a_coincident_clock_edge(self):
+        """PreFlightClock in this repo fires clock and reset together on the
+        downbeat, so this is the normal integration. If reset returns early
+        without consuming the edge, the still-high clock registers as fresh on
+        the next sample and steps the phase one clock off the downbeat."""
+        result = run_test(["--test-transport-reset-coincident"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_loop_window_stays_inside_the_buffer(self):
+        """A loop start of 1 is a legal end of the parameter range and must not
+        place the playhead at or beyond the buffer end."""
+        result = run_test(["--test-transport-loop-max-start"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_sample_rate_change_preserves_tempo(self):
+        """The period is stored in seconds and needs no recalculation. Resetting
+        it would play a 30 BPM loop at four times its rate until the next edge."""
+        result = run_test(["--test-transport-samplerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_first_edge_after_idle_sets_origin_only(self):
+        """Otherwise the idle duration is recorded as the clock period and
+        playback crawls until the second edge, then jumps."""
+        result = run_test(["--test-transport-clock-restart"])
         assert result["failed"] == 0, result.get("detail", "")
 
     def test_free_runs_safely_without_a_clock(self):
