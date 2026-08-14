@@ -231,8 +231,34 @@ bool bufferCapacity(std::string& detail) {
 
 }  // namespace
 
+/**
+ * Every runnable subcommand, declared once.
+ *
+ * The coverage guard reads this via --list-commands rather than scraping the
+ * source with a regex. Scraping has already gone wrong twice: once on a
+ * lowercase-only character class that missed a mixed-case name, and once on
+ * table-driven dispatch that does not look like `cmd == "..."` at all. An
+ * executable declaring its own commands cannot drift from itself.
+ */
+const char* const kCommands[] = {
+    "--test-fft-roundtrip",
+    "--test-fft-impulse",
+    "--test-fft-sine",
+    "--test-fft-sizes",
+    "--test-buffer-roundtrip",
+    "--test-buffer-wraparound",
+    "--test-buffer-no-alloc",
+    "--test-buffer-interpolate",
+    "--test-buffer-capacity",
+};
+
 int main(int argc, char** argv) {
     const std::string cmd = (argc > 1) ? argv[1] : "--self-test";
+
+    if (cmd == "--list-commands") {
+        for (const char* c : kCommands) std::cout << c << "\n";
+        return 0;
+    }
 
     if (cmd == "--help" || cmd == "-h") {
         std::cerr << "Stems Test Executable\n\n"
