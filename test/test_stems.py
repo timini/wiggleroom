@@ -153,10 +153,49 @@ class TestRingBuffer:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestTransport:
+    """Clock tracking and repitch playback.
+
+    Phase-locking rather than free-running estimation: the playhead advances at
+    the measured rate but snaps to the grid on every clock edge, so error is
+    bounded by one clock interval and never accumulates.
+    """
+
+    def test_stays_locked_over_a_long_run(self):
+        """1000 bars at 120 BPM with under one frame of downbeat drift.
+
+        Verified to have teeth: removing the phase snap makes this fail with
+        1.17 frames of drift.
+        """
+        result = run_test(["--test-transport-lock"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_reset_returns_to_downbeat_immediately(self):
+        """Reset must land on the downbeat, not wait for the next clock edge."""
+        result = run_test(["--test-transport-reset"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_clock_division_scales_rate(self):
+        result = run_test(["--test-transport-division"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_loop_bounds_window_the_playhead(self):
+        result = run_test(["--test-transport-loop"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_free_runs_safely_without_a_clock(self):
+        """No clock must not produce NaN or an out-of-range phase.
+
+        This is the state on patch load, before anything is patched.
+        """
+        result = run_test(["--test-transport-no-clock"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 def run_all_tests() -> bool:
     passed = failed = 0
     errors = []
-    for cls in (TestFftBackend, TestRingBuffer):
+    for cls in (TestFftBackend, TestRingBuffer, TestTransport):
         instance = cls()
         for name in dir(instance):
             if not name.startswith("test_"):

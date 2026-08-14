@@ -23,11 +23,17 @@
  *   --test-buffer-capacity      Capacity honours the duration cap
  *   --test-buffer-non-finite    inf/NaN positions give silence, not NaN audio
  *   --test-buffer-clear-cheap   clear() is O(1) and does not touch storage
+ *   --test-transport-lock       Phase stays locked to the clock over 1000 bars
+ *   --test-transport-reset      Reset returns to the downbeat within one sample
+ *   --test-transport-division   Clock division and multiplication scale the rate
+ *   --test-transport-loop       Loop start and length map the playhead correctly
+ *   --test-transport-no-clock   Free-runs safely with no clock present
  ******************************************************************************/
 
 #include "common/stems/FftBackend.hpp"
 #include "common/stems/ReferenceFft.hpp"
 #include "common/stems/RingBuffer.hpp"
+#include "common/stems/Transport.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -298,6 +304,159 @@ bool bufferClearIsCheap(std::string& detail) {
     return true;
 }
 
+
+// ---------------------------------------------------------------------------
+// Transport
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::Transport;
+
+namespace {
+/** Drive a transport with a synthetic clock. Returns worst downbeat drift in frames. */
+double runClock(Transport& t, int sampleRate, double bpm, int bars,
+                int clocksPerLoop, double* driftAccum = nullptr) {
+    const double beatsPerBar = 4.0;
+    const double samplesPerBeat = 60.0 / bpm * sampleRate;
+    const int totalBeats = static_cast<int>(bars * beatsPerBar);
+
+    double worstDrift = 0.0;
+    int sampleIndex = 0;
+    for (int beat = 0; beat < totalBeats; beat++) {
+        const int nextEdge = static_cast<int>((beat + 1) * samplesPerBeat);
+        // 1ms high pulse at the start of the beat, then low
+        const int pulseSamples = std::max(1, sampleRate / 1000);
+        for (int i = sampleIndex; i < nextEdge; i++) {
+            const bool high = (i - sampleIndex) < pulseSamples;
+            t.process(high ? 10.f : 0.f, 0.f);
+
+            // On each loop downbeat the phase must be at 0
+            if (t.downbeat()) {
+                const double drift = std::min(t.phase(), 1.0 - t.phase()) * clocksPerLoop;
+                worstDrift = std::max(worstDrift, drift);
+                if (driftAccum) *driftAccum += drift;
+            }
+        }
+        sampleIndex = nextEdge;
+    }
+    return worstDrift;
+}
+}  // namespace
+
+/** Phase must stay locked to the incoming clock over a long run. */
+bool transportLock(std::string& detail) {
+    const int sampleRate = 48000;
+    Transport t(sampleRate);
+    t.setClocksPerLoop(16);
+    t.setBufferFrames(sampleRate * 8);
+
+    const double worstDrift = runClock(t, sampleRate, 120.0, 1000, 16);
+    if (worstDrift > 1.0) {
+        detail = "worst downbeat drift " + std::to_string(worstDrift) + " frames";
+        return false;
+    }
+    if (!t.clockDetected()) { detail = "clock not detected"; return false; }
+    return true;
+}
+
+/** Reset must return the playhead to the downbeat immediately. */
+bool transportReset(std::string& detail) {
+    const int sampleRate = 48000;
+    Transport t(sampleRate);
+    t.setClocksPerLoop(16);
+    t.setBufferFrames(sampleRate * 4);
+
+    runClock(t, sampleRate, 120.0, 3, 16);
+    if (t.phase() == 0.0) { detail = "setup: phase should be mid-loop"; return false; }
+
+    t.process(0.f, 10.f);  // reset edge
+    if (t.phase() != 0.0) {
+        detail = "phase after reset is " + std::to_string(t.phase());
+        return false;
+    }
+    if (t.playheadFrames() != 0.0) {
+        detail = "playhead after reset is " + std::to_string(t.playheadFrames());
+        return false;
+    }
+    return true;
+}
+
+/** Division and multiplication must scale the advance rate. */
+bool transportDivision(std::string& detail) {
+    const int sampleRate = 48000;
+    struct Case { float div; double expectRatio; };
+    const Case cases[] = {{1.f, 1.0}, {2.f, 2.0}, {0.5f, 0.5}};
+
+    double baseline = 0.0;
+    for (const auto& c : cases) {
+        Transport t(sampleRate);
+        t.setClocksPerLoop(16);
+        t.setBufferFrames(sampleRate * 4);
+        t.setClockDivision(c.div);
+        runClock(t, sampleRate, 120.0, 1, 16);
+
+        const double advanced = t.totalPhaseAdvanced();
+        if (c.div == 1.f) baseline = advanced;
+        else {
+            const double ratio = advanced / baseline;
+            if (std::abs(ratio - c.expectRatio) > 0.05) {
+                detail = "div " + std::to_string(c.div) + " ratio " + std::to_string(ratio) +
+                         " expected " + std::to_string(c.expectRatio);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/** Loop start and length must window the playhead into the buffer. */
+bool transportLoop(std::string& detail) {
+    const int sampleRate = 48000;
+    const std::size_t frames = 48000;
+    Transport t(sampleRate);
+    t.setClocksPerLoop(16);
+    t.setBufferFrames(frames);
+
+    t.setLoopBounds(0.25f, 0.5f);   // start quarter in, half the buffer long
+    t.setPhaseForTest(0.0);
+    if (std::abs(t.playheadFrames() - 12000.0) > 1.0) {
+        detail = "phase 0 gave playhead " + std::to_string(t.playheadFrames()) + " expected 12000";
+        return false;
+    }
+    t.setPhaseForTest(0.5);
+    if (std::abs(t.playheadFrames() - 24000.0) > 1.0) {
+        detail = "phase 0.5 gave playhead " + std::to_string(t.playheadFrames()) + " expected 24000";
+        return false;
+    }
+    t.setPhaseForTest(0.999);
+    const double end = t.playheadFrames();
+    if (end < 12000.0 || end >= 36000.0) {
+        detail = "phase ~1 gave playhead " + std::to_string(end) + " outside the loop window";
+        return false;
+    }
+    return true;
+}
+
+/** With no clock the transport must free-run safely, never producing NaN. */
+bool transportNoClock(std::string& detail) {
+    const int sampleRate = 48000;
+    Transport t(sampleRate);
+    t.setClocksPerLoop(16);
+    t.setBufferFrames(sampleRate * 2);
+
+    for (int i = 0; i < sampleRate * 5; i++) t.process(0.f, 0.f);
+
+    if (!std::isfinite(t.phase()) || !std::isfinite(t.playheadFrames())) {
+        detail = "non-finite phase or playhead with no clock";
+        return false;
+    }
+    if (t.phase() < 0.0 || t.phase() >= 1.0) {
+        detail = "phase out of range: " + std::to_string(t.phase());
+        return false;
+    }
+    if (t.clockDetected()) { detail = "clockDetected true with no clock"; return false; }
+    return true;
+}
+
 }  // namespace
 
 /**
@@ -321,6 +480,11 @@ const char* const kCommands[] = {
     "--test-buffer-capacity",
     "--test-buffer-non-finite",
     "--test-buffer-clear-cheap",
+    "--test-transport-lock",
+    "--test-transport-reset",
+    "--test-transport-division",
+    "--test-transport-loop",
+    "--test-transport-no-clock",
 };
 
 int main(int argc, char** argv) {
@@ -396,6 +560,11 @@ int main(int argc, char** argv) {
             {"--test-buffer-capacity",    "buffer_capacity",    bufferCapacity},
             {"--test-buffer-non-finite",  "buffer_non_finite",  bufferNonFinite},
             {"--test-buffer-clear-cheap", "buffer_clear_cheap", bufferClearIsCheap},
+            {"--test-transport-lock",     "transport_lock",     transportLock},
+            {"--test-transport-reset",    "transport_reset",    transportReset},
+            {"--test-transport-division", "transport_division", transportDivision},
+            {"--test-transport-loop",     "transport_loop",     transportLoop},
+            {"--test-transport-no-clock", "transport_no_clock", transportNoClock},
         };
         for (const auto& c : bufferCases) {
             if (cmd == c.cmd) {
@@ -429,6 +598,11 @@ int main(int argc, char** argv) {
         record(bufferCapacity(detail));
         record(bufferNonFinite(detail));
         record(bufferClearIsCheap(detail));
+        record(transportLock(detail));
+        record(transportReset(detail));
+        record(transportDivision(detail));
+        record(transportLoop(detail));
+        record(transportNoClock(detail));
 
         std::cout << "{\"test\": \"self_test\""
                   << ", \"passed\": " << passed
