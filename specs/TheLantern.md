@@ -43,6 +43,12 @@ instrument
 | lpg_mode | Lopass (0), Both (1), Gate (2) | 0-2 | 1 |
 | response | Scales vactrol time constants about the 12/250 ms reference | 0.5-2 | 1.0 |
 
+`harmonics` maps to folder input amplitude `A` over **0.5 V to 10 V**, not 0 V to 10 V. At knob zero the
+transfer function would otherwise give `Vin = 0`, so all five cells and the `5*Vin` direct path would
+output silence, and the documented "clean sine at default settings" would be unimplementable. 0.5 V sits
+below the lowest cell threshold of 0.6 V, so no cell engages and the output is the direct path alone: a
+clean scaled sine, which is exactly the intended behaviour at minimum.
+
 Faust indexes parameters alphabetically, not by declaration order. Confirm indices with
 `./build/test/faust_render --module TheLantern --list-params` before writing `mapParam` calls.
 
@@ -63,6 +69,7 @@ Faust indexes parameters alphabetically, not by declaration order. Confirm indic
 | Output | Type | Description |
 |--------|------|-------------|
 | out | Audio | Main output, post lowpass gate |
+| fold | Audio | Folder output, post timbre, **pre lowpass gate** |
 | sine | Audio | Principal oscillator sine, pre-fold |
 | square | Audio | Principal oscillator square |
 
@@ -136,11 +143,31 @@ derives analytically **for sinusoidal input**. Because the folder is fed by the 
 sine, that assumption holds by construction. Keeping the internal signal path sinusoidal into the folder
 is what makes correct antialiasing tractable, and is a design constraint, not an implementation detail.
 
-The `ext_in` input breaks this assumption. When it is patched, fall back to plain oversampling and accept
-the additional aliasing, as an existing Faust port of this circuit was forced to do for arbitrary input.
+**The analytic crossing times hold only for a constant-amplitude, constant-frequency sine.** Three things
+break that assumption, and all three are core features rather than edge cases:
 
-Implementation order: 8x oversampling first, verified against the transfer-curve test, then polyBLAMP as a
-measurable SNR improvement.
+- `ext_in`, which is arbitrary input
+- FM from the modulation oscillator, which makes frequency time-varying
+- AM and timbre modulation, which make amplitude time-varying
+
+The published formulas schedule later crossings at fixed multiples of `1/f0` and derive the polyBLAMP
+scaling from a constant `A`. Under any of the above, applying them mistimes the corrections and
+reintroduces the artefacts they exist to remove.
+
+The module therefore selects its antialiasing strategy per sample block:
+
+| Condition | Strategy |
+|-----------|----------|
+| Unmodulated internal sine, nothing patched to `ext_in` | Analytic crossing times plus two-point polyBLAMP, 8x oversampling |
+| Any of `fm_amt`, `am_amt`, `timbre_mod` non-zero, or modulation CV present | Numerical crossing detection by root-finding on the sampled signal, or oversampling-only fallback |
+| `ext_in` patched | Oversampling-only fallback |
+
+The decision is made per block from the modulation depths and jack states, and the transition between
+strategies must not click.
+
+Implementation order: 8x oversampling first for all cases, verified against the transfer-curve test, then
+analytic polyBLAMP for the unmodulated case as a measurable SNR improvement, then numerical crossing
+detection if the modulated case proves audibly worse than the target.
 
 ## Inspiration / References
 
@@ -154,6 +181,17 @@ Not modelled on the 259e Twisted Waveform Generator, which is a different, digit
 
 ## Special Requirements
 
+- **Multi-output test isolation is a prerequisite.** `faust_render` writes every Faust output as a WAV
+  channel, and both `test/utils.py::load_audio` and `test/audio_quality.py::load_audio` mix those channels
+  down to mono. With four outputs the ungated pre-fold sine, the square and the pre-LPG fold signal would
+  all be averaged into the post-LPG main output, corrupting every measurement this spec relies on: vactrol
+  timing, plucked decay, gate response, the transfer curve, THD and alias ratio. Add a `--channel N` option
+  to `faust_render` and channel selection to the two `load_audio` helpers **before** relying on any of
+  those metrics. This benefits every multi-output module, not just this one.
+- **The transfer-curve test must read the `fold` output, not `out`.** Forcing the gate open does not make
+  the lowpass gate unity gain: DC gain is `Ra / (Ra + 2*Rf)` and `Rf` is bounded above zero, so even in
+  Both mode at maximum LED current the main output departs from the expected curve by far more than the
+  1e-3 V tolerance, and Gate mode differs more still. The `fold` output exists for this reason.
 - **Naming**: the shipping `plugin.json` entry must not contain "Buchla". `scripts/verify_manifest.py`
   flags it as a trademark warning. Use "West Coast", "complex oscillator", "lowpass gate", "timbre".
   The hardware name belongs in `specs/` and `docs/specs/` only.
@@ -171,14 +209,15 @@ Not modelled on the 259e Twisted Waveform Generator, which is a different, digit
 
 ## Test Scenarios
 
-1. **Default settings**: `harmonics = 0`, gate high. Should produce a clean sine at the pitch given by
-   `volts`, with no folding.
+1. **Default settings**: `harmonics = 0` (folder input 0.5 V, below the lowest cell threshold), gate high.
+   Should produce a clean sine at the pitch given by `volts`, with no folding.
 2. **Harmonics sweep**: sweep `harmonics` 0 to 10 at `symmetry = 0`. Odd harmonics only, with harmonic
    count rising monotonically. Even-harmonic energy should stay near zero throughout.
 3. **Symmetry offset**: `harmonics = 5`, sweep `symmetry` -1 to 1. Even harmonics should appear and be
    maximal at the extremes, minimal at centre.
-4. **Static transfer curve**: DC sweep -10V to +10V through the folder with the gate forced open. Must
-   match the published piecewise equations to within 1e-3 V. This is the primary correctness test.
+4. **Static transfer curve**: DC sweep -10V to +10V read from the `fold` output, which is pre lowpass
+   gate. Must match the published piecewise equations to within 1e-3 V. This is the primary correctness
+   test. Reading `out` instead would fold the lowpass gate's DC gain into the result.
 5. **Lowpass gate modes**: at fixed gate level, compare magnitude response across Lopass, Both and Gate.
    Gate should attenuate roughly flat, Lopass should roll off, Both should sit between the two.
 6. **Vactrol timing**: step the gate input. Rise time approximately 12 ms, fall approximately 250 ms,
