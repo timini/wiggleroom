@@ -86,15 +86,19 @@ public:
      */
     void readFrameInterpolated(double position, float& left, float& right) const {
         const std::size_t stored = framesStored();
-        if (stored == 0 || position < 0.0) {
+
+        // Validate fully while the value is still floating point, BEFORE any
+        // cast. Converting inf or NaN to size_t is undefined behaviour, and NaN
+        // slips past a bare `position < 0.0` guard because every comparison
+        // with NaN is false. Unchecked, an infinite or NaN playback position
+        // emits NaN audio, which then poisons everything downstream of it.
+        if (stored == 0 || !std::isfinite(position) || position < 0.0 ||
+            position >= static_cast<double>(stored)) {
             left = right = 0.f;
             return;
         }
+
         const std::size_t i0 = static_cast<std::size_t>(position);
-        if (i0 >= stored) {
-            left = right = 0.f;
-            return;
-        }
         const float frac = static_cast<float>(position - static_cast<double>(i0));
 
         float l0 = 0.f, r0 = 0.f, l1 = 0.f, r1 = 0.f;
@@ -107,9 +111,16 @@ public:
         right = r0 + (r1 - r0) * frac;
     }
 
-    /** Discard contents. Keeps the allocation. */
+    /**
+     * Discard contents. O(1) and safe to call from the audio thread.
+     *
+     * Deliberately does NOT zero the storage. That would be up to 24.6 MB at
+     * 96 kHz stereo over the 32 second cap, written synchronously at the exact
+     * moment a new take starts, which is long enough to cause a dropout.
+     * Resetting the counters already makes every old sample unreachable:
+     * framesStored() becomes 0 and every read returns silence.
+     */
     void clear() {
-        std::fill(data_.begin(), data_.end(), 0.f);
         writeIndex_ = 0;
         framesWritten_ = 0;
     }

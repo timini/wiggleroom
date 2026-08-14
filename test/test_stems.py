@@ -126,6 +126,26 @@ class TestRingBuffer:
         result = run_test(["--test-buffer-interpolate"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_non_finite_positions_are_rejected(self):
+        """inf and NaN playback positions must give silence, not NaN audio.
+
+        Casting inf or NaN to size_t is undefined behaviour, and NaN slips past
+        a bare `position < 0` guard because every NaN comparison is false. NaN
+        audio would then propagate through the entire patch.
+        """
+        result = run_test(["--test-buffer-non-finite"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_clear_does_not_touch_storage(self):
+        """clear() must be O(1) and audio-thread safe.
+
+        Zeroing the allocation is up to 24.6 MB at 96 kHz stereo over the
+        32 second cap, written synchronously exactly when a new take starts.
+        Resetting the counters already makes old samples unreachable.
+        """
+        result = run_test(["--test-buffer-clear-cheap"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_capacity_follows_rate_and_duration_cap(self):
         """Capacity is sampleRate * maxSeconds, which is how the spec's 32
         second cap is enforced across 44.1k, 48k and 96k."""

@@ -21,6 +21,8 @@
  *   --test-buffer-no-alloc      No allocation after construction
  *   --test-buffer-interpolate   Fractional reads interpolate correctly
  *   --test-buffer-capacity      Capacity honours the duration cap
+ *   --test-buffer-non-finite    inf/NaN positions give silence, not NaN audio
+ *   --test-buffer-clear-cheap   clear() is O(1) and does not touch storage
  ******************************************************************************/
 
 #include "common/stems/FftBackend.hpp"
@@ -31,6 +33,7 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -229,6 +232,72 @@ bool bufferCapacity(std::string& detail) {
     return true;
 }
 
+/**
+ * Non-finite positions must yield silence, not undefined behaviour.
+ *
+ * static_cast<size_t> of inf or NaN is UB, and NaN slips past a plain
+ * `position < 0.0` guard because every comparison with NaN is false. Left
+ * unchecked this emits NaN audio, which then propagates through the whole
+ * graph.
+ */
+bool bufferNonFinite(std::string& detail) {
+    RingBuffer buf(48000, 1.0f, 2);
+    for (std::size_t i = 0; i < 100; i++) buf.write(1.f, 1.f);
+
+    const double inf = std::numeric_limits<double>::infinity();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double cases[] = {inf, -inf, nan, -1.0, 1e30, 100.0, 1000.0};
+
+    for (double pos : cases) {
+        float l = -1.f, r = -1.f;
+        buf.readFrameInterpolated(pos, l, r);
+        if (std::isnan(l) || std::isnan(r)) {
+            detail = "position produced NaN audio";
+            return false;
+        }
+        if (!(l == 0.f && r == 0.f)) {
+            detail = "out-of-range position did not give silence, got " +
+                     std::to_string(l) + "," + std::to_string(r);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * clear() must not touch the storage.
+ *
+ * Filling the whole allocation is up to 24.6 MB at 96 kHz stereo over the
+ * 32 second cap. Doing that synchronously when a new take starts would stall
+ * the audio thread exactly when recording begins. Resetting the counters
+ * already makes every old sample unreachable, so the fill buys nothing.
+ *
+ * Verified by observing that old samples remain physically present in storage
+ * while being unreachable through the public API.
+ */
+bool bufferClearIsCheap(std::string& detail) {
+    RingBuffer buf(48000, 1.0f, 1);
+    for (std::size_t i = 0; i < 500; i++) buf.write(0.75f, 0.f);
+
+    const float sentinel = buf.rawData()[0];
+    if (sentinel != 0.75f) { detail = "setup failed, storage not written"; return false; }
+
+    buf.clear();
+
+    if (buf.framesStored() != 0)  { detail = "framesStored not reset"; return false; }
+    if (buf.framesWritten() != 0) { detail = "framesWritten not reset"; return false; }
+
+    float l = -1.f, r = -1.f;
+    buf.readFrame(0, l, r);
+    if (l != 0.f || r != 0.f) { detail = "cleared buffer did not read as silence"; return false; }
+
+    if (buf.rawData()[0] != sentinel) {
+        detail = "clear() wrote to storage; it should only reset counters";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /**
@@ -250,6 +319,8 @@ const char* const kCommands[] = {
     "--test-buffer-no-alloc",
     "--test-buffer-interpolate",
     "--test-buffer-capacity",
+    "--test-buffer-non-finite",
+    "--test-buffer-clear-cheap",
 };
 
 int main(int argc, char** argv) {
@@ -323,6 +394,8 @@ int main(int argc, char** argv) {
             {"--test-buffer-no-alloc",    "buffer_no_alloc",    bufferNoAlloc},
             {"--test-buffer-interpolate", "buffer_interpolate", bufferInterpolate},
             {"--test-buffer-capacity",    "buffer_capacity",    bufferCapacity},
+            {"--test-buffer-non-finite",  "buffer_non_finite",  bufferNonFinite},
+            {"--test-buffer-clear-cheap", "buffer_clear_cheap", bufferClearIsCheap},
         };
         for (const auto& c : bufferCases) {
             if (cmd == c.cmd) {
@@ -354,6 +427,8 @@ int main(int argc, char** argv) {
         record(bufferNoAlloc(detail));
         record(bufferInterpolate(detail));
         record(bufferCapacity(detail));
+        record(bufferNonFinite(detail));
+        record(bufferClearIsCheap(detail));
 
         std::cout << "{\"test\": \"self_test\""
                   << ", \"passed\": " << passed
