@@ -91,10 +91,52 @@ class TestFftBackend:
         assert result["passed"] > 0
 
 
+class TestRingBuffer:
+    """The capture buffer.
+
+    Not rack::dsp::RingBuffer, whose capacity is a template parameter and so
+    cannot depend on sample rate. This one allocates once at construction and
+    never reallocates, which is what makes the audio-thread write path safe.
+    """
+
+    def test_written_samples_read_back_bit_exact(self):
+        result = run_test(["--test-buffer-roundtrip"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_wraparound_overwrites_oldest(self):
+        """Writing past capacity must drop the oldest frames, not corrupt or grow.
+
+        Index 0 stays the oldest surviving frame so callers see a stable
+        timeline however far the write head has wrapped.
+        """
+        result = run_test(["--test-buffer-wraparound"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_no_reallocation_after_construction(self):
+        """Capacity and storage address must be stable for the object's life.
+
+        A reallocation on the audio thread would be a real-time violation, and
+        would invalidate any pointer a reader was holding.
+        """
+        result = run_test(["--test-buffer-no-alloc"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_fractional_reads_interpolate(self):
+        """Vari-speed playback reads at fractional positions."""
+        result = run_test(["--test-buffer-interpolate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_capacity_follows_rate_and_duration_cap(self):
+        """Capacity is sampleRate * maxSeconds, which is how the spec's 32
+        second cap is enforced across 44.1k, 48k and 96k."""
+        result = run_test(["--test-buffer-capacity"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 def run_all_tests() -> bool:
     passed = failed = 0
     errors = []
-    for cls in (TestFftBackend,):
+    for cls in (TestFftBackend, TestRingBuffer):
         instance = cls()
         for name in dir(instance):
             if not name.startswith("test_"):

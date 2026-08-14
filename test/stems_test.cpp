@@ -16,10 +16,16 @@
  *   --test-fft-impulse          Impulse has flat unit magnitude across all bins
  *   --test-fft-sine             A bin-centred sine lands in exactly that bin
  *   --test-fft-sizes            Round-trip holds across supported sizes
+ *   --test-buffer-roundtrip     Written samples read back bit-exact
+ *   --test-buffer-wraparound    Writing past capacity overwrites oldest first
+ *   --test-buffer-no-alloc      No allocation after construction
+ *   --test-buffer-interpolate   Fractional reads interpolate correctly
+ *   --test-buffer-capacity      Capacity honours the duration cap
  ******************************************************************************/
 
 #include "common/stems/FftBackend.hpp"
 #include "common/stems/ReferenceFft.hpp"
+#include "common/stems/RingBuffer.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -122,6 +128,107 @@ bool fftSine(std::size_t n, std::size_t bin, double& leakageOut) {
     return leakageOut < 1e-6;
 }
 
+// ---------------------------------------------------------------------------
+// RingBuffer
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::RingBuffer;
+
+/** Every written frame must read back bit-exact. */
+bool bufferRoundtrip(std::string& detail) {
+    RingBuffer buf(48000, /*maxSeconds=*/1.0f, /*channels=*/2);
+    const std::size_t n = 1000;
+    for (std::size_t i = 0; i < n; i++) {
+        buf.write(static_cast<float>(i) * 0.001f, static_cast<float>(i) * -0.001f);
+    }
+    if (buf.framesWritten() != n) { detail = "framesWritten mismatch"; return false; }
+
+    for (std::size_t i = 0; i < n; i++) {
+        float l = 0.f, r = 0.f;
+        buf.readFrame(i, l, r);
+        if (l != static_cast<float>(i) * 0.001f || r != static_cast<float>(i) * -0.001f) {
+            detail = "sample " + std::to_string(i) + " differs";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Writing past capacity must overwrite the oldest frames, not corrupt or grow. */
+bool bufferWraparound(std::string& detail) {
+    RingBuffer buf(1000, /*maxSeconds=*/1.0f, /*channels=*/1);  // capacity 1000
+    const std::size_t cap = buf.capacityFrames();
+    // Write 1.5x capacity. The last `cap` values must survive.
+    const std::size_t total = cap + cap / 2;
+    for (std::size_t i = 0; i < total; i++) buf.write(static_cast<float>(i), 0.f);
+
+    if (buf.framesStored() != cap) { detail = "framesStored should saturate at capacity"; return false; }
+
+    // readFrame(0) is the oldest surviving frame.
+    for (std::size_t i = 0; i < cap; i++) {
+        float l = 0.f, r = 0.f;
+        buf.readFrame(i, l, r);
+        const float expected = static_cast<float>(total - cap + i);
+        if (l != expected) {
+            detail = "wrapped frame " + std::to_string(i) + " expected " +
+                     std::to_string(expected) + " got " + std::to_string(l);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Capacity must be fixed at construction and never change. */
+bool bufferNoAlloc(std::string& detail) {
+    RingBuffer buf(48000, 2.0f, 2);
+    const std::size_t capBefore = buf.capacityFrames();
+    const void* dataBefore = buf.rawData();
+
+    for (std::size_t i = 0; i < capBefore * 3; i++) buf.write(0.5f, -0.5f);
+    buf.clear();
+    for (std::size_t i = 0; i < capBefore; i++) buf.write(0.25f, -0.25f);
+
+    if (buf.capacityFrames() != capBefore) { detail = "capacity changed"; return false; }
+    if (buf.rawData() != dataBefore) { detail = "storage was reallocated"; return false; }
+    return true;
+}
+
+/** Fractional reads must interpolate linearly between neighbouring frames. */
+bool bufferInterpolate(std::string& detail) {
+    RingBuffer buf(48000, 1.0f, 1);
+    for (std::size_t i = 0; i < 100; i++) buf.write(static_cast<float>(i), 0.f);
+
+    struct Case { double pos; float expect; };
+    const Case cases[] = {{0.0, 0.f}, {0.5, 0.5f}, {10.25, 10.25f}, {98.75, 98.75f}};
+    for (const auto& c : cases) {
+        float l = 0.f, r = 0.f;
+        buf.readFrameInterpolated(c.pos, l, r);
+        if (std::abs(l - c.expect) > 1e-4f) {
+            detail = "pos " + std::to_string(c.pos) + " expected " +
+                     std::to_string(c.expect) + " got " + std::to_string(l);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Capacity must follow sampleRate * maxSeconds, which is how the spec's
+    32 second cap is enforced. */
+bool bufferCapacity(std::string& detail) {
+    struct Case { int rate; float seconds; };
+    const Case cases[] = {{44100, 32.f}, {48000, 32.f}, {96000, 32.f}, {48000, 4.f}};
+    for (const auto& c : cases) {
+        RingBuffer buf(c.rate, c.seconds, 2);
+        const std::size_t expected = static_cast<std::size_t>(c.rate * c.seconds);
+        if (buf.capacityFrames() != expected) {
+            detail = "rate " + std::to_string(c.rate) + " expected " +
+                     std::to_string(expected) + " got " + std::to_string(buf.capacityFrames());
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -181,9 +288,30 @@ int main(int argc, char** argv) {
         return allOk ? 0 : 1;
     }
 
+    // RingBuffer commands
+    {
+        struct BufferCase { const char* cmd; const char* name; bool (*fn)(std::string&); };
+        const BufferCase bufferCases[] = {
+            {"--test-buffer-roundtrip",   "buffer_roundtrip",   bufferRoundtrip},
+            {"--test-buffer-wraparound",  "buffer_wraparound",  bufferWraparound},
+            {"--test-buffer-no-alloc",    "buffer_no_alloc",    bufferNoAlloc},
+            {"--test-buffer-interpolate", "buffer_interpolate", bufferInterpolate},
+            {"--test-buffer-capacity",    "buffer_capacity",    bufferCapacity},
+        };
+        for (const auto& c : bufferCases) {
+            if (cmd == c.cmd) {
+                std::string detail;
+                const bool ok = c.fn(detail);
+                emit(c.name, ok, detail.empty() ? "" : ("\"detail\": \"" + detail + "\""));
+                return ok ? 0 : 1;
+            }
+        }
+    }
+
     if (cmd == "--self-test") {
         int passed = 0, failed = 0;
         double err = 0.0, leakage = 0.0;
+        std::string detail;
 
         auto record = [&](bool ok) { ok ? passed++ : failed++; };
         record(fftRoundtrip(2048, err));
@@ -195,6 +323,11 @@ int main(int argc, char** argv) {
             if (!fftRoundtrip(n, e)) sizesOk = false;
         }
         record(sizesOk);
+        record(bufferRoundtrip(detail));
+        record(bufferWraparound(detail));
+        record(bufferNoAlloc(detail));
+        record(bufferInterpolate(detail));
+        record(bufferCapacity(detail));
 
         std::cout << "{\"test\": \"self_test\""
                   << ", \"passed\": " << passed
