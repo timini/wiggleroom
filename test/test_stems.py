@@ -153,10 +153,103 @@ class TestRingBuffer:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestTransport:
+    """Clock tracking and repitch playback.
+
+    Phase-locking rather than free-running estimation: the playhead advances at
+    the measured rate but snaps to the grid on every clock edge, so error is
+    bounded by one clock interval and never accumulates.
+    """
+
+    def test_stays_locked_over_a_long_run(self):
+        """1000 bars at 120 BPM with under one frame of downbeat drift.
+
+        Drift is measured in audio frames, scaled by frames-per-loop. An earlier
+        version scaled only by clocksPerLoop, which measures clock intervals: at
+        120 BPM and 48 kHz that let roughly 24000 frames pass a "1 frame"
+        assertion. Verified to have teeth: removing the phase snap now fails
+        with 27999 frames of drift.
+        """
+        result = run_test(["--test-transport-lock"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_reset_returns_to_downbeat_immediately(self):
+        """Reset must land on the downbeat, not wait for the next clock edge."""
+        result = run_test(["--test-transport-reset"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_clock_division_scales_rate(self):
+        result = run_test(["--test-transport-division"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_loop_bounds_window_the_playhead(self):
+        result = run_test(["--test-transport-loop"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_clock_division_applies_to_edge_snaps(self):
+        """Division must scale the snap grid, not just the free-run rate.
+
+        Snapping to the x1 grid while free-running at x2 drags the playhead
+        backwards on every clock edge.
+        """
+        result = run_test(["--test-transport-division-snap"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_reset_consumes_a_coincident_clock_edge(self):
+        """PreFlightClock in this repo fires clock and reset together on the
+        downbeat, so this is the normal integration. If reset returns early
+        without consuming the edge, the still-high clock registers as fresh on
+        the next sample and steps the phase one clock off the downbeat."""
+        result = run_test(["--test-transport-reset-coincident"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_loop_window_stays_inside_the_buffer(self):
+        """A loop start of 1 is a legal end of the parameter range and must not
+        place the playhead at or beyond the buffer end."""
+        result = run_test(["--test-transport-loop-max-start"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_sample_rate_change_preserves_tempo(self):
+        """The period is stored in seconds and needs no recalculation. Resetting
+        it would play a 30 BPM loop at four times its rate until the next edge."""
+        result = run_test(["--test-transport-samplerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_first_edge_after_idle_sets_origin_only(self):
+        """Otherwise the idle duration is recorded as the clock period and
+        playback crawls until the second edge, then jumps."""
+        result = run_test(["--test-transport-clock-restart"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_clock_jitter_does_not_manufacture_downbeats(self):
+        """A downbeat is an integer loop-boundary crossing, not any backward
+        phase correction. A late edge corrects backwards while still at, say,
+        3/16; treating that as a wrap fired spurious downbeat triggers
+        throughout the loop. Measured 88 downbeats over 10 loops before the fix.
+        """
+        result = run_test(["--test-transport-downbeat-jitter"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_reset_between_edges_preserves_clock_timing(self):
+        """Clearing the elapsed timer on an asynchronous reset made the next
+        edge measure only the reset-to-edge fragment. A reset halfway through a
+        120 BPM interval recorded 0.25 s and doubled playback speed."""
+        result = run_test(["--test-transport-reset-midinterval"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_free_runs_safely_without_a_clock(self):
+        """No clock must not produce NaN or an out-of-range phase.
+
+        This is the state on patch load, before anything is patched.
+        """
+        result = run_test(["--test-transport-no-clock"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 def run_all_tests() -> bool:
     passed = failed = 0
     errors = []
-    for cls in (TestFftBackend, TestRingBuffer):
+    for cls in (TestFftBackend, TestRingBuffer, TestTransport):
         instance = cls()
         for name in dir(instance):
             if not name.startswith("test_"):
