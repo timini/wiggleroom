@@ -54,7 +54,11 @@ def find_executable(name: str) -> Path:
 def discover_commands(source_name: str) -> list[str]:
     """Pull every --test-* subcommand straight out of the C++ dispatcher."""
     src = (project_root / "test" / source_name).read_text()
-    cmds = sorted(set(re.findall(r'cmd == "(--test-[a-z0-9-]+)"', src)))
+    # Capture the whole quoted value rather than assuming a character class.
+    # An earlier lowercase-only pattern silently skipped
+    # --test-getHit-after-construct, which is exactly the kind of gap this file
+    # exists to prevent.
+    cmds = sorted(set(re.findall(r'cmd == "(--test-[^"]+)"', src)))
     if not cmds:
         raise AssertionError(f"No --test-* commands discovered in {source_name}")
     return cmds
