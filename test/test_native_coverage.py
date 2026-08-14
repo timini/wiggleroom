@@ -34,6 +34,7 @@ project_root = Path(__file__).resolve().parent.parent
 SUITES = {
     "euclogic_test.cpp": "euclogic_test",
     "octolfo_test.cpp": "octolfo_test",
+    "stems_test.cpp": "stems_test",
 }
 
 # Commands that are not self-checking assertions and only dump data. They still

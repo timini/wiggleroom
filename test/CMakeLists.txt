@@ -194,3 +194,19 @@ set_target_properties(preflight_clock_test PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
 )
+
+# Stems test executable (standalone C++ test, no Faust/VCV dependencies)
+# The Stems core in src/common/stems/ is framework-free, so this links nothing.
+add_executable(stems_test
+    stems_test.cpp
+)
+
+target_include_directories(stems_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+
+set_target_properties(stems_test PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
