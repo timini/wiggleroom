@@ -305,6 +305,47 @@ int testTruthRandom(int argc, char** argv) {
 }
 
 // Test: Truth table mutation
+// Sweep many seeds in-process. Driving this from Python one subprocess per seed
+// is far too slow to cover the range needed: the double-toggle no-op that this
+// guards against only shows up a few times per thousand seeds.
+int testTruthMutateSweep(int argc, char** argv) {
+    int seeds = parseIntArg(argc, argv, "--seeds=", 2000);
+
+    int noOps = 0;
+    int overBound = 0;
+    int firstNoOpSeed = -1;
+    int maxDifferences = 0;
+
+    for (int s = 1; s <= seeds; s++) {
+        WiggleRoom::TruthTable table;
+        table.setSeed(static_cast<uint32_t>(s));
+        auto original = table.mapping;
+        table.mutate();
+
+        int differences = 0;
+        for (int i = 0; i < 16; i++) {
+            if (table.mapping[i] != original[i]) differences++;
+        }
+        if (differences < 1) {
+            noOps++;
+            if (firstNoOpSeed < 0) firstNoOpSeed = s;
+        }
+        if (differences > 3) overBound++;
+        if (differences > maxDifferences) maxDifferences = differences;
+    }
+
+    std::cout << "{\"test\": \"truth_mutate_sweep\""
+              << ", \"seeds\": " << seeds
+              << ", \"no_ops\": " << noOps
+              << ", \"over_bound\": " << overBound
+              << ", \"first_no_op_seed\": " << firstNoOpSeed
+              << ", \"max_differences\": " << maxDifferences
+              << ", \"passed\": " << ((noOps == 0 && overBound == 0) ? 1 : 0)
+              << ", \"failed\": " << ((noOps == 0 && overBound == 0) ? 0 : 1)
+              << "}" << std::endl;
+    return (noOps == 0 && overBound == 0) ? 0 : 1;
+}
+
 int testTruthMutate(int argc, char** argv) {
     uint32_t seed = static_cast<uint32_t>(parseIntArg(argc, argv, "--seed=", 42));
 
@@ -572,8 +613,11 @@ int testFullModuleTiming(int argc, char** argv) {
         std::cout << std::fixed << std::setprecision(1) << (intervals[i] * 1000);
         if (i < intervals.size() - 1 && i < 11) std::cout << ", ";
     }
-    if (intervals.size() > 12) std::cout << ", ...";
+    // Truncated for readability. The count is reported separately rather than
+    // with a "..." marker, which would make the JSON unparseable.
     std::cout << "]";
+    std::cout << ", \"intervals_shown\": " << (intervals.size() < 12 ? intervals.size() : (size_t)12)
+              << ", \"intervals_total\": " << intervals.size();
 
     if (!intervals.empty()) {
         std::cout << ", \"min_interval_ms\": " << std::fixed << std::setprecision(1) << (minInterval * 1000)
@@ -676,8 +720,11 @@ int testClockSync(int argc, char** argv) {
         std::cout << std::fixed << std::setprecision(1) << (intervals[i] * 1000);
         if (i < intervals.size() - 1 && i < 9) std::cout << ", ";
     }
-    if (intervals.size() > 10) std::cout << ", ...";
+    // Truncated for readability. The count is reported separately rather than
+    // with a "..." marker, which would make the JSON unparseable.
     std::cout << "]";
+    std::cout << ", \"intervals_shown\": " << (intervals.size() < 10 ? intervals.size() : (size_t)10)
+              << ", \"intervals_total\": " << intervals.size();
     if (!intervals.empty()) {
         std::cout << ", \"min_interval_ms\": " << (minInterval * 1000)
                   << ", \"max_interval_ms\": " << (maxInterval * 1000);
@@ -766,8 +813,11 @@ int testSwingTiming(int argc, char** argv) {
         std::cout << std::fixed << std::setprecision(1) << (intervals[i] * 1000);
         if (i < intervals.size() - 1 && i < 9) std::cout << ", ";
     }
-    if (intervals.size() > 10) std::cout << ", ...";
+    // Truncated for readability. The count is reported separately rather than
+    // with a "..." marker, which would make the JSON unparseable.
     std::cout << "]";
+    std::cout << ", \"intervals_shown\": " << (intervals.size() < 10 ? intervals.size() : (size_t)10)
+              << ", \"intervals_total\": " << intervals.size();
 
     // Check for swing pattern (uneven intervals)
     bool hasSwing = false;
@@ -1812,6 +1862,10 @@ int main(int argc, char** argv) {
 
     if (cmd == "--test-truth-mutate") {
         return testTruthMutate(argc, argv);
+    }
+
+    if (cmd == "--test-truth-mutate-sweep") {
+        return testTruthMutateSweep(argc, argv);
     }
 
     if (cmd == "--test-truth-undo") {

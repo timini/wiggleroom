@@ -299,6 +299,26 @@ verify-manifest-tests:
 verify-test-infra:
     cd test && python3 -m pytest test_utils_unit.py test_audio_quality_unit.py -v
 
+# These are standalone binaries with no Rack dependency; they test the
+# framework-free logic in src/common/. Each exits non-zero on failure.
+# Run native C++ tests (requires 'just build' first)
+test-native:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -x build/test/preflight_clock_test ]; then
+        echo "Native test executables not found. Run 'just build' first." >&2
+        exit 1
+    fi
+    echo "== preflight_clock_test =="
+    ./build/test/preflight_clock_test
+    echo "== test_octolfo.py =="
+    python3 test/test_octolfo.py
+    echo "== test_euclogic.py =="
+    python3 test/test_euclogic.py
+    echo "== test_native_coverage.py =="
+    python3 test/test_native_coverage.py
+    echo "All native tests passed."
+
 # Run all verification checks (structural correctness)
 verify-all: verify-manifest verify-manifest-tests verify-test-infra test-faust
     @echo "All verification checks passed!"

@@ -124,6 +124,9 @@ jobs:
       - name: "3.2 Build plugin"
         run: just build
 
+      - name: "3.3 Run native C++ tests"
+        run: just test-native
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
