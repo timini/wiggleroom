@@ -315,6 +315,8 @@ test-native:
     python3 test/test_octolfo.py
     echo "== test_euclogic.py =="
     python3 test/test_euclogic.py
+    echo "== test_native_coverage.py =="
+    python3 test/test_native_coverage.py
     echo "All native tests passed."
 
 # Run all verification checks (structural correctness)

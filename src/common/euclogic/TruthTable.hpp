@@ -218,20 +218,31 @@ struct TruthTableT {
         std::uniform_int_distribution<int> cellDist(0, (int)candidates.size() - 1);
         std::uniform_real_distribution<float> probDist(0.f, 1.f);
 
-        // Flip exactly numFlips cells. Density biases *which* cell is chosen, via
-        // rejection sampling, rather than gating whether the flip happens at all.
+        // Flip exactly numFlips DISTINCT cells. Two properties matter here, and
+        // earlier versions of this code got both wrong:
         //
-        // The previous version drew a cell and then tested probDist(rng) < flipProb
-        // as a second coin toss, skipping the flip when it failed. At the default
-        // density of 0.5 that meant a 50% chance of doing nothing per flip, so with
-        // numFlips == 1 roughly a third of Mutate presses changed nothing at all.
-        // A Mutate button that silently no-ops is a UX bug, so the flip is now
-        // guaranteed.
+        // 1. Density must bias *which* cell is chosen, not whether the flip happens.
+        //    The original tested probDist(rng) < flipProb as a second coin toss and
+        //    skipped the flip when it failed, so at the default density of 0.5 a
+        //    single-flip mutation did nothing roughly half the time.
+        //
+        // 2. Cells must be drawn WITHOUT replacement. Sampling with replacement lets
+        //    two draws pick the same cell and toggle it twice, returning the table to
+        //    its original state while still counting as two flips. That reintroduced
+        //    the no-op for a few seeds per thousand.
+        //
+        // A Mutate button that silently changes nothing is a UX bug, so the guarantee
+        // is that the mapping always differs afterwards.
         int numFlips = countDist(rng);
         int flipped = 0;
         constexpr int MAX_ATTEMPTS = 64;
-        for (int attempt = 0; attempt < MAX_ATTEMPTS && flipped < numFlips; attempt++) {
-            auto& cell = candidates[cellDist(rng)];
+
+        // Pool is consumed as cells are used, so a cell can never be picked twice.
+        std::vector<Cell> pool = candidates;
+        for (int attempt = 0; attempt < MAX_ATTEMPTS && flipped < numFlips && !pool.empty(); attempt++) {
+            std::uniform_int_distribution<int> poolDist(0, (int)pool.size() - 1);
+            int idx = poolDist(rng);
+            const Cell cell = pool[idx];
             bool isOn = (mapping[cell.state] >> cell.bit) & 1;
             float d = densities[cell.bit];
             // Bias: ON→OFF more likely at low density, OFF→ON more likely at high density
@@ -239,12 +250,14 @@ struct TruthTableT {
             if (probDist(rng) < flipProb) {
                 mapping[cell.state] ^= (1 << cell.bit);
                 flipped++;
+                pool[idx] = pool.back();
+                pool.pop_back();
             }
         }
 
-        // Belt and braces. By construction every candidate has flipProb > 0, so the
-        // loop above effectively always succeeds; this guarantees Mutate is never a
-        // no-op even if that ever stops holding.
+        // Belt and braces. Every candidate has flipProb > 0 by construction, so the
+        // loop above effectively always succeeds; this makes the guarantee
+        // unconditional even if that ever stops holding.
         if (flipped == 0) {
             auto& cell = candidates[cellDist(rng)];
             mapping[cell.state] ^= (1 << cell.bit);
