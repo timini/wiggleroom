@@ -33,6 +33,7 @@
 #include "common/stems/FftBackend.hpp"
 #include "common/stems/ReferenceFft.hpp"
 #include "common/stems/RingBuffer.hpp"
+#include "common/stems/Stft.hpp"
 #include "common/stems/Transport.hpp"
 
 #include <cmath>
@@ -695,6 +696,133 @@ bool transportResetMidInterval(std::string& detail) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// STFT
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::Stft;
+
+/**
+ * Analysis then synthesis with no processing must reconstruct the input.
+ *
+ * This is the property everything downstream depends on: if the STFT does not
+ * round-trip, every HPSS mask is applied to a signal that was already wrong.
+ * Tested at lengths that are NOT multiples of the hop, because that is where
+ * overlap-add framing bugs actually live.
+ */
+bool stftReconstruct(std::size_t inputLength, double& maxErrOut) {
+    ReferenceFft fft(2048);
+    Stft stft(fft, /*hop=*/512);
+
+    std::vector<float> input(inputLength);
+    std::mt19937 rng(4242);
+    std::uniform_real_distribution<float> dist(-0.8f, 0.8f);
+    for (auto& v : input) v = dist(rng);
+
+    std::vector<float> output(inputLength, 0.f);
+    stft.process(input.data(), output.data(), inputLength,
+                 [](float*, std::size_t) { /* identity */ });
+
+    // Ignore the first and last window: overlap-add cannot reconstruct the
+    // ramp-in and ramp-out regions without extra padding, which is expected.
+    const std::size_t skip = stft.frameSize();
+    if (inputLength <= 2 * skip) { maxErrOut = 0.0; return true; }
+
+    double maxErr = 0.0;
+    for (std::size_t i = skip; i < inputLength - skip; i++) {
+        maxErr = std::max(maxErr, std::abs(static_cast<double>(output[i] - input[i])));
+    }
+    maxErrOut = maxErr;
+    return maxErr < 1e-4;
+}
+
+bool stftReconstructDefault(std::string& detail) {
+    double err = 0.0;
+    const bool ok = stftReconstruct(48000, err);
+    if (!ok) detail = "max error " + std::to_string(err);
+    return ok;
+}
+
+/** Framing must be correct at lengths that are not multiples of the hop. */
+bool stftReconstructOddLengths(std::string& detail) {
+    const std::size_t lengths[] = {4096, 4097, 5000, 6143, 8191, 12345, 20000};
+    for (std::size_t len : lengths) {
+        double err = 0.0;
+        if (!stftReconstruct(len, err)) {
+            detail = "length " + std::to_string(len) + " max error " + std::to_string(err);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Zeroing every bin must yield silence, proving the mask path is wired up. */
+bool stftZeroMask(std::string& detail) {
+    ReferenceFft fft(2048);
+    Stft stft(fft, 512);
+
+    std::vector<float> input(20000, 0.5f);
+    std::vector<float> output(20000, 1.f);
+    stft.process(input.data(), output.data(), input.size(),
+                 [](float* spectrum, std::size_t len) {
+                     for (std::size_t i = 0; i < len; i++) spectrum[i] = 0.f;
+                 });
+
+    for (std::size_t i = 0; i < output.size(); i++) {
+        if (std::abs(output[i]) > 1e-6f) {
+            detail = "sample " + std::to_string(i) + " is " + std::to_string(output[i]);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** An empty or very short input must not read out of bounds or emit NaN. */
+bool stftShortInput(std::string& detail) {
+    ReferenceFft fft(2048);
+    Stft stft(fft, 512);
+
+    for (std::size_t len : {std::size_t(0), std::size_t(1), std::size_t(100), std::size_t(2047)}) {
+        std::vector<float> input(len, 0.3f);
+        std::vector<float> output(len, 0.f);
+        stft.process(input.empty() ? nullptr : input.data(),
+                     output.empty() ? nullptr : output.data(),
+                     len, [](float*, std::size_t) {});
+        for (std::size_t i = 0; i < len; i++) {
+            if (!std::isfinite(output[i])) {
+                detail = "non-finite output at length " + std::to_string(len);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/** The window must satisfy COLA at hop = frameSize/4, which is what makes
+ *  overlap-add reconstruct rather than amplitude-modulate the signal. */
+bool stftCola(std::string& detail) {
+    ReferenceFft fft(2048);
+    Stft stft(fft, 512);
+
+    const std::size_t n = stft.frameSize();
+    const std::size_t hop = stft.hopSize();
+    std::vector<double> sum(n * 4, 0.0);
+    for (std::size_t start = 0; start + n <= sum.size(); start += hop) {
+        for (std::size_t i = 0; i < n; i++) sum[start + i] += stft.windowGain(i);
+    }
+    // Inspect the steady-state region only.
+    double lo = 1e9, hi = -1e9;
+    for (std::size_t i = n; i < sum.size() - n; i++) {
+        lo = std::min(lo, sum[i]);
+        hi = std::max(hi, sum[i]);
+    }
+    if (std::abs(hi - lo) > 1e-6) {
+        detail = "window sum ripples between " + std::to_string(lo) + " and " + std::to_string(hi);
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /**
@@ -730,6 +858,11 @@ const char* const kCommands[] = {
     "--test-transport-clock-restart",
     "--test-transport-downbeat-jitter",
     "--test-transport-reset-midinterval",
+    "--test-stft-reconstruct",
+    "--test-stft-odd-lengths",
+    "--test-stft-zero-mask",
+    "--test-stft-short-input",
+    "--test-stft-cola",
 };
 
 int main(int argc, char** argv) {
@@ -817,6 +950,11 @@ int main(int argc, char** argv) {
             {"--test-transport-clock-restart",   "transport_clock_restart",   transportClockRestart},
             {"--test-transport-downbeat-jitter", "transport_downbeat_jitter", transportDownbeatJitter},
             {"--test-transport-reset-midinterval","transport_reset_midinterval",transportResetMidInterval},
+            {"--test-stft-reconstruct",   "stft_reconstruct",   stftReconstructDefault},
+            {"--test-stft-odd-lengths",   "stft_odd_lengths",   stftReconstructOddLengths},
+            {"--test-stft-zero-mask",     "stft_zero_mask",     stftZeroMask},
+            {"--test-stft-short-input",   "stft_short_input",   stftShortInput},
+            {"--test-stft-cola",          "stft_cola",          stftCola},
         };
         for (const auto& c : bufferCases) {
             if (cmd == c.cmd) {
@@ -862,6 +1000,11 @@ int main(int argc, char** argv) {
         record(transportClockRestart(detail));
         record(transportDownbeatJitter(detail));
         record(transportResetMidInterval(detail));
+        record(stftReconstructDefault(detail));
+        record(stftReconstructOddLengths(detail));
+        record(stftZeroMask(detail));
+        record(stftShortInput(detail));
+        record(stftCola(detail));
 
         std::cout << "{\"test\": \"self_test\""
                   << ", \"passed\": " << passed
