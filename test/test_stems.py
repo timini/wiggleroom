@@ -385,10 +385,64 @@ class TestHpss:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestSeparationWorker:
+    """Background separation and safe publication.
+
+    The first threaded code in this repository. Verified clean under
+    ThreadSanitizer, not just observed to pass.
+    """
+
+    def test_publishes_a_result(self):
+        result = run_test(["--test-worker-publishes"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_superseded_job_never_publishes(self):
+        """A take superseded mid-separation must be discarded, not published.
+
+        The test waits until the worker has actually BEGUN the first job before
+        submitting the second. Submitting back to back does not exercise this:
+        the pending slot is overwritten and the first job never starts, so the
+        post-separation generation check is never reached. An earlier version of
+        this test made exactly that mistake and passed with the check removed.
+
+        Verified to have teeth: removing the check now fails with "no job was
+        discarded".
+        """
+        result = run_test(["--test-worker-stale"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_retired_sets_are_freed_on_the_worker(self):
+        """A multi-megabyte deallocation must never land on the audio thread.
+
+        Every free goes through one funnel that records the freeing thread, so
+        the counter this asserts on is genuinely wired up rather than a constant
+        zero.
+        """
+        result = run_test(["--test-worker-retire"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_acquire_before_any_job_is_safe(self):
+        """This is the state on patch load."""
+        result = run_test(["--test-worker-empty"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_concurrent_submit_and_acquire(self):
+        """A reader standing in for the audio thread hammers acquire/release
+        while jobs are submitted, checking for races and for frees landing on
+        the wrong thread."""
+        result = run_test(["--test-worker-hammer"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_shutdown_is_prompt_and_complete(self):
+        result = run_test(["--test-worker-shutdown"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 def run_all_tests() -> bool:
     passed = failed = 0
     errors = []
-    for cls in (TestFftBackend, TestRingBuffer, TestTransport, TestStft, TestHpss):
+    for cls in (TestFftBackend, TestRingBuffer, TestTransport, TestStft, TestHpss,
+                TestSeparationWorker):
         instance = cls()
         for name in dir(instance):
             if not name.startswith("test_"):

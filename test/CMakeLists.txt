@@ -210,3 +210,8 @@ set_target_properties(stems_test PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
 )
+
+# SeparationWorker is the first threaded code in the repo, so stems_test needs
+# a threading library. Still no Rack SDK linkage.
+find_package(Threads REQUIRED)
+target_link_libraries(stems_test PRIVATE Threads::Threads)

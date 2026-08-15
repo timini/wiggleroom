@@ -34,6 +34,7 @@
 #include "common/stems/ReferenceFft.hpp"
 #include "common/stems/RingBuffer.hpp"
 #include "common/stems/Hpss.hpp"
+#include "common/stems/SeparationWorker.hpp"
 #include "common/stems/Stft.hpp"
 #include "common/stems/Transport.hpp"
 
@@ -42,7 +43,10 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <atomic>
+#include <chrono>
 #include <random>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -1211,6 +1215,227 @@ bool hpssSubFrameInput(std::string& detail) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// SeparationWorker
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::SeparationWorker;
+using WiggleRoom::stems::StemSet;
+
+namespace {
+/** Deterministic test signal. */
+std::vector<float> makeJobInput(std::size_t n, unsigned seed) {
+    std::vector<float> v(n);
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(-0.4f, 0.4f);
+    for (auto& x : v) x = dist(rng);
+    return v;
+}
+
+/** Spin until pred() or the deadline passes. Returns whether pred() held. */
+template <typename Pred>
+bool waitFor(Pred pred, int milliseconds = 15000) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(milliseconds);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (pred()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return pred();
+}
+}  // namespace
+
+/** A submitted job must eventually publish a stem set the audio side can see. */
+bool workerPublishes(std::string& detail) {
+    SeparationWorker worker;
+    worker.start();
+
+    auto input = makeJobInput(16384, 1);
+    const uint64_t gen = worker.submit(input.data(), input.size(), 48000);
+    if (gen == 0) { detail = "submit returned generation 0"; worker.stop(); return false; }
+
+    const bool got = waitFor([&] {
+        const StemSet* s = worker.acquire();
+        const bool ok = (s != nullptr && s->generation == gen);
+        worker.release(s);
+        return ok;
+    });
+    if (!got) { detail = "no stem set published within the timeout"; worker.stop(); return false; }
+
+    const StemSet* s = worker.acquire();
+    bool sized = s && s->layer[0].size() == input.size();
+    worker.release(s);
+    worker.stop();
+    if (!sized) { detail = "published layers are the wrong size"; return false; }
+    return true;
+}
+
+/** A superseded job must never publish over a newer take. */
+bool workerDiscardsStale(std::string& detail) {
+    SeparationWorker worker;
+    worker.start();
+
+    // Big enough that separation takes real time, so the second job genuinely
+    // arrives mid-flight. Submitting back to back does NOT exercise this path:
+    // the pending slot is overwritten and the worker never starts the first job
+    // at all, so the post-separation generation check is never reached.
+    auto first  = makeJobInput(262144, 2);
+    auto second = makeJobInput(8192, 3);
+
+    const uint64_t genA = worker.submit(first.data(), first.size(), 48000);
+
+    // Wait until the worker has actually BEGUN genA before superseding it.
+    if (!waitFor([&] { return worker.debugJobsStarted() >= 1; }, 5000)) {
+        detail = "worker never started the first job";
+        worker.stop();
+        return false;
+    }
+
+    const uint64_t genB = worker.submit(second.data(), second.size(), 48000);
+    if (genB <= genA) { detail = "generations did not advance"; worker.stop(); return false; }
+
+    const bool got = waitFor([&] {
+        const StemSet* s = worker.acquire();
+        const bool ok = (s != nullptr && s->generation == genB);
+        worker.release(s);
+        return ok;
+    });
+    if (!got) { detail = "newer job never published"; worker.stop(); return false; }
+
+    // The in-flight genA must have been discarded rather than published.
+    if (worker.debugJobsDiscarded() == 0) {
+        detail = "no job was discarded; the superseded take was not detected";
+        worker.stop();
+        return false;
+    }
+
+    // Give any straggler a chance to overwrite, then confirm it did not.
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    const StemSet* s = worker.acquire();
+    const bool stillNew = (s != nullptr && s->generation == genB &&
+                           s->layer[0].size() == second.size());
+    worker.release(s);
+    worker.stop();
+    if (!stillNew) { detail = "a stale job published over the newer take"; return false; }
+    return true;
+}
+
+/** Retired sets must be destroyed by the worker, never by the audio side. */
+bool workerRetiresOffAudioThread(std::string& detail) {
+    SeparationWorker worker;
+    worker.start();
+
+    auto input = makeJobInput(8192, 4);
+    for (int i = 0; i < 6; i++) {
+        const uint64_t gen = worker.submit(input.data(), input.size(), 48000);
+        if (!waitFor([&] {
+                const StemSet* s = worker.acquire();
+                const bool ok = (s != nullptr && s->generation == gen);
+                worker.release(s);
+                return ok;
+            })) {
+            detail = "job " + std::to_string(i) + " never published";
+            worker.stop();
+            return false;
+        }
+    }
+
+    // Every set but the live one must have been reclaimed on the worker.
+    const bool reclaimed = waitFor([&] { return worker.liveSetCount() <= 1; });
+    const std::size_t freedOnAudio = worker.debugFreedOnAcquireThread();
+    worker.stop();
+
+    if (!reclaimed) { detail = "retired sets were not reclaimed"; return false; }
+    if (freedOnAudio != 0) {
+        detail = std::to_string(freedOnAudio) + " sets were freed on the acquiring thread";
+        return false;
+    }
+    return true;
+}
+
+/** acquire() must be safe before anything has ever been published. */
+bool workerEmptyAcquire(std::string& detail) {
+    SeparationWorker worker;
+    const StemSet* s = worker.acquire();
+    if (s != nullptr) { detail = "acquire returned non-null before any job"; worker.release(s); return false; }
+    worker.release(s);
+
+    worker.start();
+    const StemSet* s2 = worker.acquire();
+    const bool ok = (s2 == nullptr);
+    worker.release(s2);
+    worker.stop();
+    if (!ok) { detail = "acquire returned non-null before any job was submitted"; return false; }
+    return true;
+}
+
+/** Hammer submit and acquire concurrently, looking for races and leaks. */
+bool workerConcurrentHammer(std::string& detail) {
+    SeparationWorker worker;
+    worker.start();
+
+    auto input = makeJobInput(4096, 5);
+    std::atomic<bool> stop{false};
+    std::atomic<uint64_t> reads{0};
+
+    // Stand in for the audio thread: acquire, read, release, forever.
+    std::thread reader([&] {
+        while (!stop.load(std::memory_order_relaxed)) {
+            const StemSet* s = worker.acquire();
+            if (s) {
+                volatile float sink = 0.f;
+                for (int L = 0; L < 4; L++) {
+                    if (!s->layer[L].empty()) sink += s->layer[L][0];
+                }
+                (void)sink;
+                reads.fetch_add(1, std::memory_order_relaxed);
+            }
+            worker.release(s);
+        }
+    });
+
+    for (int i = 0; i < 40; i++) {
+        worker.submit(input.data(), input.size(), 48000);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    stop.store(true);
+    reader.join();
+
+    const std::size_t freedOnAudio = worker.debugFreedOnAcquireThread();
+    worker.stop();
+
+    if (reads.load() == 0) { detail = "reader never saw a published set"; return false; }
+    if (freedOnAudio != 0) {
+        detail = std::to_string(freedOnAudio) + " sets freed on the reader thread";
+        return false;
+    }
+    return true;
+}
+
+/** stop() must terminate promptly and free everything. */
+bool workerCleanShutdown(std::string& detail) {
+    SeparationWorker worker;
+    worker.start();
+    auto input = makeJobInput(32768, 6);
+    worker.submit(input.data(), input.size(), 48000);
+
+    const auto begin = std::chrono::steady_clock::now();
+    worker.stop();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - begin).count();
+
+    if (elapsed > 5000) {
+        detail = "stop() took " + std::to_string(elapsed) + " ms";
+        return false;
+    }
+    if (worker.liveSetCount() != 0) {
+        detail = std::to_string(worker.liveSetCount()) + " sets still live after stop()";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /**
@@ -1260,6 +1485,12 @@ const char* const kCommands[] = {
     "--test-hpss-low-split-boundary",
     "--test-hpss-margin",
     "--test-hpss-subframe",
+    "--test-worker-publishes",
+    "--test-worker-stale",
+    "--test-worker-retire",
+    "--test-worker-empty",
+    "--test-worker-hammer",
+    "--test-worker-shutdown",
 };
 
 int main(int argc, char** argv) {
@@ -1363,6 +1594,12 @@ int main(int argc, char** argv) {
             {"--test-hpss-low-split-boundary","hpss_low_split_boundary",hpssLowSplitBoundary},
             {"--test-hpss-margin",        "hpss_margin",        hpssMarginBeforeExponent},
             {"--test-hpss-subframe",      "hpss_subframe",      hpssSubFrameInput},
+            {"--test-worker-publishes",   "worker_publishes",   workerPublishes},
+            {"--test-worker-stale",       "worker_stale",       workerDiscardsStale},
+            {"--test-worker-retire",      "worker_retire",      workerRetiresOffAudioThread},
+            {"--test-worker-empty",       "worker_empty",       workerEmptyAcquire},
+            {"--test-worker-hammer",      "worker_hammer",      workerConcurrentHammer},
+            {"--test-worker-shutdown",    "worker_shutdown",    workerCleanShutdown},
         };
         for (const auto& c : bufferCases) {
             if (cmd == c.cmd) {
@@ -1422,6 +1659,12 @@ int main(int argc, char** argv) {
         record(hpssLowSplitBoundary(detail));
         record(hpssMarginBeforeExponent(detail));
         record(hpssSubFrameInput(detail));
+        record(workerPublishes(detail));
+        record(workerDiscardsStale(detail));
+        record(workerRetiresOffAudioThread(detail));
+        record(workerEmptyAcquire(detail));
+        record(workerConcurrentHammer(detail));
+        record(workerCleanShutdown(detail));
 
         std::cout << "{\"test\": \"self_test\""
                   << ", \"passed\": " << passed
