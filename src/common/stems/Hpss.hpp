@@ -75,10 +75,17 @@ public:
         for (int L = 0; L < kNumLayers; L++) out.layer[L].assign(length, 0.f);
         if (!input || length == 0) return;
 
+        // Detect sub-frame input BEFORE analysis. Stft pads a whole frame on
+        // both sides, so analyse() always yields frames and a frames_ == 0
+        // check here would be unreachable; short recordings would be smeared
+        // spectrally across all four layers instead of passing through.
+        if (length < fft_.size()) {
+            std::copy(input, input + length, out.layer[(int)StemLayer::Residual].begin());
+            return;
+        }
+
         analyse(input, length);
         if (frames_ == 0) {
-            // Too short for a single frame. Route everything to Residual so the
-            // layers still sum to the source rather than silently dropping it.
             std::copy(input, input + length, out.layer[(int)StemLayer::Residual].begin());
             return;
         }
@@ -88,6 +95,13 @@ public:
         for (int L = 0; L < kNumLayers; L++) {
             synthesise(input, length, L, out.layer[L]);
         }
+    }
+
+    /** Expose the share computation so its algebra can be tested directly. */
+    void debugShares(float h, float p, float& harm, float& perc, float& res) const {
+        harm = shareOf(h, p);
+        perc = shareOf(p, h);
+        res  = std::max(0.f, 1.f - harm - perc);
     }
 
     // --- Introspection for cross-validation against a reference implementation.
@@ -149,14 +163,31 @@ private:
         lowSplitBin_ = std::min(lowSplitBin_, bins);
     }
 
+    /**
+     * scipy.ndimage 'reflect' index mapping: (d c b a | a b c d | d c b a).
+     *
+     * Dropping out-of-range neighbours instead would leave edge windows shorter
+     * than the kernel, and sometimes even-length, so the first and last
+     * kernel/2 frames would be filtered differently from the interior. With the
+     * default kernel that is 15 frames at each end, which is exactly where loop
+     * boundaries live.
+     */
+    static std::size_t reflectIndex(long long i, long long n) {
+        if (n <= 1) return 0;
+        const long long period = 2 * n;
+        long long m = ((i % period) + period) % period;   // wrap into [0, 2n)
+        if (m >= n) m = period - 1 - m;                   // fold the upper half
+        return static_cast<std::size_t>(m);
+    }
+
     float medianAlongTime(std::size_t f, std::size_t b, std::size_t bins,
                           std::vector<float>& scratch) const {
         const int half = kernel_ / 2;
         int count = 0;
         for (int k = -half; k <= half; k++) {
-            const long long idx = static_cast<long long>(f) + k;
-            if (idx < 0 || idx >= static_cast<long long>(frames_)) continue;
-            scratch[count++] = magnitude_[static_cast<std::size_t>(idx) * bins + b];
+            const std::size_t idx =
+                reflectIndex(static_cast<long long>(f) + k, static_cast<long long>(frames_));
+            scratch[count++] = magnitude_[idx * bins + b];
         }
         return medianOf(scratch, count);
     }
@@ -166,9 +197,9 @@ private:
         const int half = kernel_ / 2;
         int count = 0;
         for (int k = -half; k <= half; k++) {
-            const long long idx = static_cast<long long>(b) + k;
-            if (idx < 0 || idx >= static_cast<long long>(bins)) continue;
-            scratch[count++] = magnitude_[f * bins + static_cast<std::size_t>(idx)];
+            const std::size_t idx =
+                reflectIndex(static_cast<long long>(b) + k, static_cast<long long>(bins));
+            scratch[count++] = magnitude_[f * bins + idx];
         }
         return medianOf(scratch, count);
     }
@@ -218,9 +249,7 @@ private:
 
         const float h = harmMedian_[f * bins + b];
         const float p = percMedian_[f * bins + b];
-        const float hp = std::pow(h, power_);
-        const float pp = std::pow(p, power_);
-        const float denom = hp + pp;
+        const float denom = std::pow(h, power_) + std::pow(p, power_);
 
         if (!(denom > 1e-20f)) {
             // No energy to attribute. Give it to Residual so the masks still
@@ -228,12 +257,12 @@ private:
             return (layer == (int)StemLayer::Residual) ? 1.f : 0.f;
         }
 
-        // Margin-weighted soft masks. At margin 1 these reduce to hp/denom and
-        // pp/denom and sum to exactly 1. Above 1, both are attenuated where the
-        // two medians are comparable, and what neither claims is Residual. That
-        // is what stops the fourth layer being permanently silent.
-        const float harmShare = hp / (hp + margin_ * pp);
-        const float percShare = pp / (pp + margin_ * hp);
+        // Margin-weighted soft masks. The margin scales the COMPETING median
+        // before the exponent, matching the reference: h^p / (h^p + (m*p)^p).
+        // Applying it afterwards gives a weaker effective margin than
+        // configured, and correspondingly less residual.
+        const float harmShare = shareOf(h, p);
+        const float percShare = shareOf(p, h);
 
         switch (static_cast<StemLayer>(layer)) {
             case StemLayer::Percussive: return percShare;
@@ -244,6 +273,14 @@ private:
                 return std::max(0.f, 1.f - harmShare - percShare);
             default:                    return 0.f;
         }
+    }
+
+    /** mine^power / (mine^power + (margin * other)^power). */
+    float shareOf(float mine, float other) const {
+        const float a = std::pow(mine, power_);
+        const float b = std::pow(margin_ * other, power_);
+        const float denom = a + b;
+        return (denom > 1e-20f) ? (a / denom) : 0.f;
     }
 
     FftBackend& fft_;

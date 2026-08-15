@@ -1145,6 +1145,72 @@ bool hpssLowSplitBoundary(std::string& detail) {
     return true;
 }
 
+/** The margin must scale the competing median BEFORE the soft-mask exponent.
+ *
+ *  The reference computes h^p / (h^p + (margin*p)^p). Applying the margin
+ *  afterwards, as h^p / (h^p + margin*p^p), gives a weaker effective margin
+ *  than configured and leaves less residual than the algorithm specifies.
+ */
+bool hpssMarginBeforeExponent(std::string& detail) {
+    ReferenceFft fft(256);
+    Hpss hpss(fft);
+    hpss.setPower(2.f);
+    hpss.setMargin(2.f);
+
+    // Equal medians: the maximally ambiguous case, where the margin bites most.
+    float harm = 0.f, perc = 0.f, res = 0.f;
+    hpss.debugShares(1.f, 1.f, harm, perc, res);
+
+    // h^2 / (h^2 + (2p)^2) = 1 / (1 + 4) = 0.2
+    const float expected = 1.f / 5.f;
+    if (std::abs(harm - expected) > 1e-4f) {
+        detail = "equal medians gave share " + std::to_string(harm) +
+                 ", expected " + std::to_string(expected) +
+                 " (margin applied after the exponent gives 0.333)";
+        return false;
+    }
+    if (std::abs(res - (1.f - 2.f * expected)) > 1e-4f) {
+        detail = "residual " + std::to_string(res) + " inconsistent with shares";
+        return false;
+    }
+    return true;
+}
+
+/** Input shorter than one FFT frame must be copied intact to Residual.
+ *
+ *  Stft pads by a whole frame on both sides, so analyse() always produces
+ *  frames and the sub-frame branch was unreachable; short recordings were
+ *  being spectrally smeared across all four layers instead.
+ */
+bool hpssSubFrameInput(std::string& detail) {
+    const std::size_t n = 500;          // well under a 2048 frame
+    std::vector<float> in(n);
+    for (std::size_t i = 0; i < n; i++) in[i] = 0.25f + 0.01f * static_cast<float>(i % 7);
+
+    ReferenceFft fft(2048);
+    Hpss hpss(fft);
+    Hpss::Result out;
+    hpss.separate(in.data(), n, 48000, out);
+
+    for (std::size_t i = 0; i < n; i++) {
+        if (std::abs(out.layer[(int)StemLayer::Residual][i] - in[i]) > 1e-6f) {
+            detail = "residual sample " + std::to_string(i) + " is " +
+                     std::to_string(out.layer[(int)StemLayer::Residual][i]) +
+                     ", expected " + std::to_string(in[i]);
+            return false;
+        }
+    }
+    for (int L : {(int)StemLayer::Low, (int)StemLayer::Percussive, (int)StemLayer::Harmonic}) {
+        for (std::size_t i = 0; i < n; i++) {
+            if (std::abs(out.layer[L][i]) > 1e-6f) {
+                detail = "layer " + std::to_string(L) + " should be silent for sub-frame input";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 /**
@@ -1192,6 +1258,8 @@ const char* const kCommands[] = {
     "--test-hpss-degenerate",
     "--test-hpss-residual",
     "--test-hpss-low-split-boundary",
+    "--test-hpss-margin",
+    "--test-hpss-subframe",
 };
 
 int main(int argc, char** argv) {
@@ -1293,6 +1361,8 @@ int main(int argc, char** argv) {
             {"--test-hpss-degenerate",    "hpss_degenerate",    hpssDegenerate},
             {"--test-hpss-residual",      "hpss_residual",      hpssResidualPopulated},
             {"--test-hpss-low-split-boundary","hpss_low_split_boundary",hpssLowSplitBoundary},
+            {"--test-hpss-margin",        "hpss_margin",        hpssMarginBeforeExponent},
+            {"--test-hpss-subframe",      "hpss_subframe",      hpssSubFrameInput},
         };
         for (const auto& c : bufferCases) {
             if (cmd == c.cmd) {
@@ -1350,6 +1420,8 @@ int main(int argc, char** argv) {
         record(hpssDegenerate(detail));
         record(hpssResidualPopulated(detail));
         record(hpssLowSplitBoundary(detail));
+        record(hpssMarginBeforeExponent(detail));
+        record(hpssSubFrameInput(detail));
 
         std::cout << "{\"test\": \"self_test\""
                   << ", \"passed\": " << passed

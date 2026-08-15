@@ -42,11 +42,15 @@ except ImportError:  # pragma: no cover - environment without scipy
 
 project_root = Path(__file__).resolve().parent.parent
 
-# The C++ filter drops out-of-range neighbours and takes the median of what
-# remains, which is equivalent to scipy's "nearest"-free truncation only in the
-# interior. Edges are therefore compared with a wider tolerance and reported
-# separately rather than silently skipped.
-INTERIOR_TOLERANCE = 1e-5
+# The C++ filter reflection-pads exactly as scipy.ndimage does under its default
+# "reflect" mode, so the WHOLE array is comparable, edges included.
+#
+# An earlier version of this file compared only the interior, which hid a real
+# defect: dropping out-of-range neighbours left edge windows shorter than the
+# kernel, and sometimes even-length, so the first and last kernel/2 frames were
+# filtered differently from the interior. With the default kernel of 31 that is
+# 15 frames at each end, which is exactly where loop boundaries live.
+TOLERANCE = 1e-5
 
 
 def get_test_executable() -> Path:
@@ -72,45 +76,44 @@ def reshape(dump: dict, key: str) -> np.ndarray:
     return np.asarray(dump[key], dtype=np.float64).reshape(dump["frames"], dump["bins"])
 
 
-def interior_slice(kernel: int) -> slice:
-    """Rows/columns far enough from the edge that boundary handling is irrelevant."""
-    half = kernel // 2
-    return slice(half, -half if half else None)
-
-
 def test_harmonic_median_matches_reference():
-    """Median across TIME must match scipy, in the interior."""
+    """Median across TIME must match scipy over the whole array, edges included."""
     dump = load_dump()
     mag = reshape(dump, "magnitude")
     ours = reshape(dump, "harmonic_median")
     kernel = dump["kernel"]
 
-    # Median along the frame (time) axis.
-    expected = median_filter(mag, size=(kernel, 1), mode="nearest")
+    # Median along the frame (time) axis, full array including edges.
+    expected = median_filter(mag, size=(kernel, 1), mode="reflect")
 
-    sl = interior_slice(kernel)
-    diff = np.abs(ours[sl, :] - expected[sl, :])
-    worst = float(diff.max())
-    assert worst < INTERIOR_TOLERANCE, (
-        f"harmonic median differs from scipy by up to {worst} in the interior"
-    )
+    worst = float(np.abs(ours - expected).max())
+    assert worst < TOLERANCE, f"harmonic median differs from scipy by up to {worst}"
+
+    # Report the edges separately so a boundary-only regression is obvious.
+    half = kernel // 2
+    edge = np.concatenate([ours[:half, :].ravel(), ours[-half:, :].ravel()])
+    edge_expected = np.concatenate([expected[:half, :].ravel(), expected[-half:, :].ravel()])
+    worst_edge = float(np.abs(edge - edge_expected).max())
+    assert worst_edge < TOLERANCE, f"harmonic median edges differ by up to {worst_edge}"
 
 
 def test_percussive_median_matches_reference():
-    """Median across FREQUENCY must match scipy, in the interior."""
+    """Median across FREQUENCY must match scipy over the whole array, edges included."""
     dump = load_dump()
     mag = reshape(dump, "magnitude")
     ours = reshape(dump, "percussive_median")
     kernel = dump["kernel"]
 
-    expected = median_filter(mag, size=(1, kernel), mode="nearest")
+    expected = median_filter(mag, size=(1, kernel), mode="reflect")
 
-    sl = interior_slice(kernel)
-    diff = np.abs(ours[:, sl] - expected[:, sl])
-    worst = float(diff.max())
-    assert worst < INTERIOR_TOLERANCE, (
-        f"percussive median differs from scipy by up to {worst} in the interior"
-    )
+    worst = float(np.abs(ours - expected).max())
+    assert worst < TOLERANCE, f"percussive median differs from scipy by up to {worst}"
+
+    half = kernel // 2
+    edge = np.concatenate([ours[:, :half].ravel(), ours[:, -half:].ravel()])
+    edge_expected = np.concatenate([expected[:, :half].ravel(), expected[:, -half:].ravel()])
+    worst_edge = float(np.abs(edge - edge_expected).max())
+    assert worst_edge < TOLERANCE, f"percussive median edges differ by up to {worst_edge}"
 
 
 def test_the_two_medians_are_actually_different():

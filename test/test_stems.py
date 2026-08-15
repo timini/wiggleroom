@@ -360,6 +360,23 @@ class TestHpss:
         result = run_test(["--test-hpss-low-split-boundary"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_margin_scales_before_the_exponent(self):
+        """The margin must scale the competing median BEFORE the soft-mask
+        exponent: h^p / (h^p + (m*p)^p). Applying it afterwards gives a weaker
+        effective margin than configured and correspondingly less residual.
+        With power 2 and margin 2, equal medians must give a share of 0.2, not
+        the 0.333 the post-exponent form produces."""
+        result = run_test(["--test-hpss-margin"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_sub_frame_input_passes_through_to_residual(self):
+        """Stft pads a whole frame on both sides, so analysis always yields
+        frames and a frames == 0 check would be unreachable. Short recordings
+        must be detected by length and copied intact rather than smeared
+        spectrally across all four layers."""
+        result = run_test(["--test-hpss-subframe"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_degenerate_inputs_are_safe(self):
         """Empty, silent and sub-frame inputs must give correctly sized,
         finite output. Input too short for a single frame is routed to Residual
