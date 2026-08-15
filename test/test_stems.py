@@ -246,10 +246,68 @@ class TestTransport:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestStft:
+    """Short-time Fourier transform front end.
+
+    Parameters match librosa defaults (n_fft 2048, hop 512) so HPSS results can
+    be cross-checked against a reference implementation in S6 rather than only
+    against themselves.
+    """
+
+    def test_reconstructs_the_input(self):
+        """Analysis then synthesis with no processing must return the input.
+
+        Asserted over the WHOLE signal including the first and last samples.
+        An earlier version skipped a frame at each end, which concealed a real
+        boundary gap: without padding the tail after the last complete frame is
+        silent, and the first sample is never covered because the Hann window
+        is zero there.
+
+        Everything downstream depends on this: if the STFT does not round-trip,
+        every HPSS mask is applied to a signal that was already wrong. Verified
+        to have teeth twice: removing the window-sum normalisation fails at 0.4,
+        removing the padding fails at 0.8.
+        """
+        result = run_test(["--test-stft-reconstruct"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_reconstructs_at_lengths_that_are_not_hop_multiples(self):
+        """Framing bugs live at lengths that are not multiples of the hop."""
+        result = run_test(["--test-stft-odd-lengths"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_zeroing_every_bin_gives_silence(self):
+        """Proves the modify callback is actually wired into the round-trip."""
+        result = run_test(["--test-stft-zero-mask"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_short_and_empty_input_is_safe(self):
+        """Inputs shorter than one frame must not read out of bounds or emit NaN."""
+        result = run_test(["--test-stft-short-input"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_tiny_fft_does_not_hang(self):
+        """A size-2 backend derives hop = size/4 = 0, and the frame loop would
+        never advance, hanging the worker thread forever. FftBackend permits
+        sizes that small, so the hop is clamped to at least one sample."""
+        result = run_test(["--test-stft-tiny-fft"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_window_satisfies_cola(self):
+        """The squared Hann window must sum to a constant at hop = n/4.
+
+        Without this, overlap-add amplitude-modulates the signal instead of
+        reconstructing it. Verified to have teeth: the symmetric Hann variant,
+        a common mistake, ripples and fails.
+        """
+        result = run_test(["--test-stft-cola"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 def run_all_tests() -> bool:
     passed = failed = 0
     errors = []
-    for cls in (TestFftBackend, TestRingBuffer, TestTransport):
+    for cls in (TestFftBackend, TestRingBuffer, TestTransport, TestStft):
         instance = cls()
         for name in dir(instance):
             if not name.startswith("test_"):
