@@ -304,10 +304,91 @@ class TestStft:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestHpss:
+    """Tier 0 separation: median-filter HPSS plus a low band split.
+
+    Chosen over a neural model because the instrument needs material that
+    differs from itself, not correctly labelled instruments. That keeps ML
+    deployment off the critical path entirely.
+
+    The median filter itself is cross-validated against scipy in
+    test_hpss_reference.py.
+    """
+
+    def test_separates_percussive_from_sustained(self):
+        """Clicks must land in the percussive layer and a sine in the harmonic.
+
+        Measured by correlation against the known sources rather than by ear.
+        Verified to have teeth: swapping the two masks makes the percussive
+        layer correlate 0.9995 with the sine.
+        """
+        result = run_test(["--test-hpss-separates"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_layers_are_disjoint_and_sum_to_source(self):
+        """All four layers at unity must reconstruct the source.
+
+        The spec requires disjoint masks: an earlier draft defined Harmonic
+        without excluding the Low band, so the default all-faders-at-unity
+        state would have double-counted bass.
+        """
+        result = run_test(["--test-hpss-sum"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_low_layer_captures_low_frequencies(self):
+        result = run_test(["--test-hpss-low-band"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_residual_layer_is_populated(self):
+        """The fourth layer must carry energy for ordinary dense audio.
+
+        Pure soft masks make the harmonic and percussive shares sum to exactly
+        1, leaving Residual permanently silent and the four-layer interface a
+        fiction. A margin above 1 attenuates both where the medians are
+        comparable, and the unclaimed remainder becomes Residual.
+        """
+        result = run_test(["--test-hpss-residual"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_low_split_includes_bins_below_the_split(self):
+        """The split converts to a bin by ceiling, not rounding.
+
+        Rounding excluded bins whose centre is still below the split: at
+        44.1 kHz with a 2048-point FFT and a 200 Hz split, bin 9 sits at about
+        193.8 Hz and was being left out of the Low layer.
+        """
+        result = run_test(["--test-hpss-low-split-boundary"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_margin_scales_before_the_exponent(self):
+        """The margin must scale the competing median BEFORE the soft-mask
+        exponent: h^p / (h^p + (m*p)^p). Applying it afterwards gives a weaker
+        effective margin than configured and correspondingly less residual.
+        With power 2 and margin 2, equal medians must give a share of 0.2, not
+        the 0.333 the post-exponent form produces."""
+        result = run_test(["--test-hpss-margin"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_sub_frame_input_passes_through_to_residual(self):
+        """Stft pads a whole frame on both sides, so analysis always yields
+        frames and a frames == 0 check would be unreachable. Short recordings
+        must be detected by length and copied intact rather than smeared
+        spectrally across all four layers."""
+        result = run_test(["--test-hpss-subframe"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_degenerate_inputs_are_safe(self):
+        """Empty, silent and sub-frame inputs must give correctly sized,
+        finite output. Input too short for a single frame is routed to Residual
+        so the layers still sum to the source rather than dropping it."""
+        result = run_test(["--test-hpss-degenerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 def run_all_tests() -> bool:
     passed = failed = 0
     errors = []
-    for cls in (TestFftBackend, TestRingBuffer, TestTransport, TestStft):
+    for cls in (TestFftBackend, TestRingBuffer, TestTransport, TestStft, TestHpss):
         instance = cls()
         for name in dir(instance):
             if not name.startswith("test_"):
