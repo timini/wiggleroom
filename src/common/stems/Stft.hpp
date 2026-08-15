@@ -39,10 +39,15 @@ public:
     Stft(FftBackend& fft, std::size_t hop = 0)
         : fft_(fft),
           frameSize_(fft.size()),
-          hopSize_(hop ? hop : fft.size() / 4) {
+          // Never allow a zero hop. FftBackend permits sizes down to 2, where
+          // size/4 truncates to 0 and process() would loop forever without
+          // advancing, hanging the worker thread.
+          hopSize_(std::max<std::size_t>(1, hop ? hop : fft.size() / 4)) {
         buildWindow();
         frame_.resize(frameSize_);
         spectrum_.resize(fft_.spectrumLength());
+        padded_.clear();
+        accum_.clear();
         windowSum_.clear();
     }
 
@@ -68,18 +73,27 @@ public:
     void process(const float* input, float* output, std::size_t length, ModifyFn modify) {
         if (!input || !output || length == 0) return;
 
-        std::fill(output, output + length, 0.f);
-        windowSum_.assign(length, 0.f);
+        // Zero-pad by a whole frame at each end and run the analysis over the
+        // padded signal.
+        //
+        // Without padding, two regions are silently lost: the tail after the
+        // last frame that fits (a 5000 sample input at hop 512 goes silent from
+        // 4608), and the first sample, where the Hann window is zero so no
+        // frame contributes. Both would show up as missing audio and
+        // discontinuities at loop boundaries, which is the worst possible place
+        // for them. Excluding a frame at each end in the tests merely hid this.
+        const std::size_t pad = frameSize_;
+        const std::size_t paddedLength = length + 2 * pad;
 
-        if (length < frameSize_) {
-            // Too short for even one frame. Leave silence rather than reading
-            // out of bounds; the caller sees a defined result.
-            return;
-        }
+        padded_.assign(paddedLength, 0.f);
+        std::copy(input, input + length, padded_.begin() + pad);
 
-        for (std::size_t start = 0; start + frameSize_ <= length; start += hopSize_) {
+        accum_.assign(paddedLength, 0.f);
+        windowSum_.assign(paddedLength, 0.f);
+
+        for (std::size_t start = 0; start + frameSize_ <= paddedLength; start += hopSize_) {
             for (std::size_t i = 0; i < frameSize_; i++) {
-                frame_[i] = input[start + i] * static_cast<float>(window_[i]);
+                frame_[i] = padded_[start + i] * static_cast<float>(window_[i]);
             }
 
             fft_.forward(frame_.data(), spectrum_.data());
@@ -87,16 +101,16 @@ public:
             fft_.inverse(spectrum_.data(), frame_.data());
 
             for (std::size_t i = 0; i < frameSize_; i++) {
-                output[start + i]     += frame_[i] * static_cast<float>(window_[i]);
+                accum_[start + i]     += frame_[i] * static_cast<float>(window_[i]);
                 windowSum_[start + i] += static_cast<float>(window_[i] * window_[i]);
             }
         }
 
-        // Normalise by the accumulated squared window. Doing this per sample
-        // rather than by a constant gain makes the ramp-in and ramp-out regions
-        // correct too, instead of only the steady state.
+        // Normalise by the accumulated squared window. Per sample rather than
+        // by a constant gain, so partial-overlap regions are corrected too.
         for (std::size_t i = 0; i < length; i++) {
-            if (windowSum_[i] > 1e-8f) output[i] /= windowSum_[i];
+            const float w = windowSum_[pad + i];
+            output[i] = (w > 1e-8f) ? (accum_[pad + i] / w) : 0.f;
         }
     }
 
@@ -119,6 +133,8 @@ private:
     std::vector<double> window_;
     std::vector<float> frame_;
     std::vector<float> spectrum_;
+    std::vector<float> padded_;
+    std::vector<float> accum_;
     std::vector<float> windowSum_;
 };
 

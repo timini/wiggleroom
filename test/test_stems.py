@@ -257,9 +257,16 @@ class TestStft:
     def test_reconstructs_the_input(self):
         """Analysis then synthesis with no processing must return the input.
 
+        Asserted over the WHOLE signal including the first and last samples.
+        An earlier version skipped a frame at each end, which concealed a real
+        boundary gap: without padding the tail after the last complete frame is
+        silent, and the first sample is never covered because the Hann window
+        is zero there.
+
         Everything downstream depends on this: if the STFT does not round-trip,
         every HPSS mask is applied to a signal that was already wrong. Verified
-        to have teeth: removing the window-sum normalisation fails at 0.4.
+        to have teeth twice: removing the window-sum normalisation fails at 0.4,
+        removing the padding fails at 0.8.
         """
         result = run_test(["--test-stft-reconstruct"])
         assert result["failed"] == 0, result.get("detail", "")
@@ -277,6 +284,13 @@ class TestStft:
     def test_short_and_empty_input_is_safe(self):
         """Inputs shorter than one frame must not read out of bounds or emit NaN."""
         result = run_test(["--test-stft-short-input"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_tiny_fft_does_not_hang(self):
+        """A size-2 backend derives hop = size/4 = 0, and the frame loop would
+        never advance, hanging the worker thread forever. FftBackend permits
+        sizes that small, so the hop is clamped to at least one sample."""
+        result = run_test(["--test-stft-tiny-fft"])
         assert result["failed"] == 0, result.get("detail", "")
 
     def test_window_satisfies_cola(self):

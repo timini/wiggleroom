@@ -723,13 +723,11 @@ bool stftReconstruct(std::size_t inputLength, double& maxErrOut) {
     stft.process(input.data(), output.data(), inputLength,
                  [](float*, std::size_t) { /* identity */ });
 
-    // Ignore the first and last window: overlap-add cannot reconstruct the
-    // ramp-in and ramp-out regions without extra padding, which is expected.
-    const std::size_t skip = stft.frameSize();
-    if (inputLength <= 2 * skip) { maxErrOut = 0.0; return true; }
-
+    // Assert over the WHOLE signal, including the first and last samples.
+    // Skipping a frame at each end conceals boundary gaps: an unpadded
+    // implementation leaves the tail after the last complete frame silent.
     double maxErr = 0.0;
-    for (std::size_t i = skip; i < inputLength - skip; i++) {
+    for (std::size_t i = 0; i < inputLength; i++) {
         maxErr = std::max(maxErr, std::abs(static_cast<double>(output[i] - input[i])));
     }
     maxErrOut = maxErr;
@@ -823,6 +821,26 @@ bool stftCola(std::string& detail) {
     return true;
 }
 
+/** A tiny FFT must not derive a zero hop and hang the worker forever. */
+bool stftTinyFft(std::string& detail) {
+    for (std::size_t n : {std::size_t(2), std::size_t(4), std::size_t(8)}) {
+        ReferenceFft fft(n);
+        Stft stft(fft);
+        if (stft.hopSize() < 1) {
+            detail = "fft size " + std::to_string(n) + " derived hop " +
+                     std::to_string(stft.hopSize()) + "; process() would never advance";
+            return false;
+        }
+        // Must terminate.
+        std::vector<float> in(64, 0.25f), out(64, 0.f);
+        stft.process(in.data(), out.data(), in.size(), [](float*, std::size_t) {});
+        for (float v : out) {
+            if (!std::isfinite(v)) { detail = "non-finite output at fft size " + std::to_string(n); return false; }
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 /**
@@ -863,6 +881,7 @@ const char* const kCommands[] = {
     "--test-stft-zero-mask",
     "--test-stft-short-input",
     "--test-stft-cola",
+    "--test-stft-tiny-fft",
 };
 
 int main(int argc, char** argv) {
@@ -955,6 +974,7 @@ int main(int argc, char** argv) {
             {"--test-stft-zero-mask",     "stft_zero_mask",     stftZeroMask},
             {"--test-stft-short-input",   "stft_short_input",   stftShortInput},
             {"--test-stft-cola",          "stft_cola",          stftCola},
+            {"--test-stft-tiny-fft",      "stft_tiny_fft",      stftTinyFft},
         };
         for (const auto& c : bufferCases) {
             if (cmd == c.cmd) {
@@ -1005,6 +1025,7 @@ int main(int argc, char** argv) {
         record(stftZeroMask(detail));
         record(stftShortInput(detail));
         record(stftCola(detail));
+        record(stftTinyFft(detail));
 
         std::cout << "{\"test\": \"self_test\""
                   << ", \"passed\": " << passed
