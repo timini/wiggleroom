@@ -118,6 +118,9 @@ jobs:
           sudo apt-get install -y faust
           faust --version
 
+      - name: Install Python test dependencies
+        run: pip install numpy scipy
+
       - name: "3.1 Test Faust DSP compilation"
         run: just test-faust
 

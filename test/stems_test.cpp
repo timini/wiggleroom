@@ -33,6 +33,7 @@
 #include "common/stems/FftBackend.hpp"
 #include "common/stems/ReferenceFft.hpp"
 #include "common/stems/RingBuffer.hpp"
+#include "common/stems/Hpss.hpp"
 #include "common/stems/Stft.hpp"
 #include "common/stems/Transport.hpp"
 
@@ -841,6 +842,243 @@ bool stftTinyFft(std::string& detail) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// HPSS (Tier 0 separation)
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::Hpss;
+using WiggleRoom::stems::StemLayer;
+
+namespace {
+/** Energy of a signal. */
+double energy(const std::vector<float>& x) {
+    double e = 0.0;
+    for (float v : x) e += static_cast<double>(v) * v;
+    return e;
+}
+
+/** A click train: broadband transients, sparse in time. */
+void makeClicks(std::vector<float>& out, int sampleRate, int count) {
+    std::fill(out.begin(), out.end(), 0.f);
+    const std::size_t spacing = out.size() / static_cast<std::size_t>(count);
+    for (int c = 0; c < count; c++) {
+        const std::size_t at = c * spacing;
+        for (std::size_t i = 0; i < 24 && at + i < out.size(); i++) {
+            out[at + i] = (i % 2 == 0 ? 1.f : -1.f) * (1.f - static_cast<float>(i) / 24.f);
+        }
+    }
+    (void)sampleRate;
+}
+
+/** A steady sine: narrowband, sustained in time. */
+void makeSine(std::vector<float>& out, int sampleRate, double freq) {
+    for (std::size_t i = 0; i < out.size(); i++) {
+        out[i] = 0.5f * static_cast<float>(
+            std::sin(2.0 * kPi * freq * static_cast<double>(i) / sampleRate));
+    }
+}
+}  // namespace
+
+/**
+ * The core separation claim: percussive material lands in the percussive
+ * layer and sustained material in the harmonic layer.
+ *
+ * Measured as an energy ratio rather than judged by ear, so the threshold is
+ * falsifiable.
+ */
+bool hpssSeparates(std::string& detail) {
+    const int sampleRate = 48000;
+    const std::size_t n = 48000;
+
+    std::vector<float> clicks(n), sine(n), mix(n);
+    makeClicks(clicks, sampleRate, 8);
+    makeSine(sine, sampleRate, 440.0);
+    for (std::size_t i = 0; i < n; i++) mix[i] = clicks[i] + sine[i];
+
+    ReferenceFft fft(2048);
+    Hpss hpss(fft);
+    Hpss::Result out;
+    hpss.separate(mix.data(), n, sampleRate, out);
+
+    // The sine sits at 440 Hz, above the default low split, so it should land
+    // in the harmonic layer rather than the low layer.
+    const double percEnergy = energy(out.layer[(int)StemLayer::Percussive]);
+    const double harmEnergy = energy(out.layer[(int)StemLayer::Harmonic]);
+
+    // Correlate each layer against the two sources to see where they went.
+    auto correlate = [&](const std::vector<float>& a, const std::vector<float>& b) {
+        double num = 0.0;
+        for (std::size_t i = 0; i < n; i++) num += static_cast<double>(a[i]) * b[i];
+        return num / std::sqrt(energy(a) * energy(b) + 1e-20);
+    };
+
+    const double percVsClicks = correlate(out.layer[(int)StemLayer::Percussive], clicks);
+    const double percVsSine   = correlate(out.layer[(int)StemLayer::Percussive], sine);
+    const double harmVsSine   = correlate(out.layer[(int)StemLayer::Harmonic], sine);
+    const double harmVsClicks = correlate(out.layer[(int)StemLayer::Harmonic], clicks);
+
+    if (percVsClicks < 0.5 || std::abs(percVsSine) > 0.2) {
+        detail = "percussive layer: clicks corr " + std::to_string(percVsClicks) +
+                 ", sine corr " + std::to_string(percVsSine);
+        return false;
+    }
+    if (harmVsSine < 0.5 || std::abs(harmVsClicks) > 0.3) {
+        detail = "harmonic layer: sine corr " + std::to_string(harmVsSine) +
+                 ", clicks corr " + std::to_string(harmVsClicks);
+        return false;
+    }
+    if (percEnergy <= 0.0 || harmEnergy <= 0.0) {
+        detail = "a layer is empty";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The four layers must be DISJOINT so unity sum reconstructs the source.
+ *
+ * The spec requires this explicitly: an earlier draft defined Harmonic without
+ * excluding the Low band, so summing all four at unity double-counted bass.
+ */
+bool hpssLayersSumToSource(std::string& detail) {
+    const int sampleRate = 48000;
+    const std::size_t n = 24000;
+
+    std::vector<float> mix(n);
+    std::mt19937 rng(99);
+    std::uniform_real_distribution<float> dist(-0.4f, 0.4f);
+    for (std::size_t i = 0; i < n; i++) {
+        mix[i] = dist(rng) + 0.3f * static_cast<float>(
+            std::sin(2.0 * kPi * 110.0 * static_cast<double>(i) / sampleRate));
+    }
+
+    ReferenceFft fft(2048);
+    Hpss hpss(fft);
+    Hpss::Result out;
+    hpss.separate(mix.data(), n, sampleRate, out);
+
+    std::vector<float> sum(n, 0.f);
+    for (int L = 0; L < Hpss::kNumLayers; L++) {
+        for (std::size_t i = 0; i < n; i++) sum[i] += out.layer[L][i];
+    }
+
+    const double srcE = energy(mix);
+    double errE = 0.0;
+    for (std::size_t i = 0; i < n; i++) {
+        const double d = static_cast<double>(sum[i]) - mix[i];
+        errE += d * d;
+    }
+    const double errDb = 10.0 * std::log10((errE + 1e-20) / (srcE + 1e-20));
+    if (errDb > -20.0) {
+        detail = "layer sum differs from source by " + std::to_string(errDb) +
+                 " dB relative; layers are not disjoint";
+        return false;
+    }
+    return true;
+}
+
+/** The low layer must actually capture low-frequency content. */
+bool hpssLowBand(std::string& detail) {
+    const int sampleRate = 48000;
+    const std::size_t n = 24000;
+
+    std::vector<float> low(n), high(n), mix(n);
+    makeSine(low, sampleRate, 60.0);
+    makeSine(high, sampleRate, 3000.0);
+    for (std::size_t i = 0; i < n; i++) mix[i] = low[i] + high[i];
+
+    ReferenceFft fft(2048);
+    Hpss hpss(fft);
+    Hpss::Result out;
+    hpss.separate(mix.data(), n, sampleRate, out);
+
+    auto correlate = [&](const std::vector<float>& a, const std::vector<float>& b) {
+        double num = 0.0;
+        for (std::size_t i = 0; i < n; i++) num += static_cast<double>(a[i]) * b[i];
+        return num / std::sqrt(energy(a) * energy(b) + 1e-20);
+    };
+
+    const double lowVs60 = correlate(out.layer[(int)StemLayer::Low], low);
+    const double lowVs3k = correlate(out.layer[(int)StemLayer::Low], high);
+    if (lowVs60 < 0.5) {
+        detail = "low layer correlates only " + std::to_string(lowVs60) + " with 60 Hz";
+        return false;
+    }
+    if (std::abs(lowVs3k) > 0.2) {
+        detail = "low layer leaked 3 kHz, corr " + std::to_string(lowVs3k);
+        return false;
+    }
+    return true;
+}
+
+/** Empty, silent and very short inputs must produce defined output. */
+bool hpssDegenerate(std::string& detail) {
+    ReferenceFft fft(2048);
+    Hpss hpss(fft);
+    Hpss::Result out;
+
+    for (std::size_t n : {std::size_t(0), std::size_t(1), std::size_t(500), std::size_t(4096)}) {
+        std::vector<float> in(n, 0.f);
+        hpss.separate(n ? in.data() : nullptr, n, 48000, out);
+        for (int L = 0; L < Hpss::kNumLayers; L++) {
+            if (out.layer[L].size() != n) {
+                detail = "layer " + std::to_string(L) + " size " +
+                         std::to_string(out.layer[L].size()) + " for input " + std::to_string(n);
+                return false;
+            }
+            for (float v : out.layer[L]) {
+                if (!std::isfinite(v)) { detail = "non-finite output at n=" + std::to_string(n); return false; }
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * Dump the magnitude spectrogram and both median-filtered versions, so a
+ * reference implementation can recompute the medians from the SAME input and
+ * compare. Comparing filtered output rather than final audio isolates the
+ * median filter from any STFT or FFT differences between implementations.
+ */
+int dumpHpssMedians() {
+    const int sampleRate = 48000;
+    const std::size_t n = 8192;
+    std::vector<float> mix(n);
+    std::mt19937 rng(2024);
+    std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+    for (std::size_t i = 0; i < n; i++) {
+        mix[i] = dist(rng) + 0.4f * static_cast<float>(
+            std::sin(2.0 * kPi * 440.0 * static_cast<double>(i) / sampleRate));
+    }
+
+    ReferenceFft fft(256);            // small, so the dump stays manageable
+    Hpss hpss(fft);
+    hpss.setKernelSize(7);
+    Hpss::Result out;
+    hpss.separate(mix.data(), n, sampleRate, out);
+
+    const std::size_t F = hpss.debugFrames();
+    const std::size_t B = hpss.debugBins();
+
+    auto emitArray = [](const char* name, const std::vector<float>& v,
+                        std::size_t count, bool last) {
+        std::cout << "\"" << name << "\": [";
+        for (std::size_t i = 0; i < count; i++) {
+            std::cout << std::setprecision(9) << v[i];
+            if (i + 1 < count) std::cout << ",";
+        }
+        std::cout << "]" << (last ? "" : ",");
+    };
+
+    std::cout << "{\"frames\": " << F << ", \"bins\": " << B
+              << ", \"kernel\": " << hpss.debugKernel() << ", ";
+    emitArray("magnitude", hpss.debugMagnitude(), F * B, false);
+    emitArray("harmonic_median", hpss.debugHarmonicMedian(), F * B, false);
+    emitArray("percussive_median", hpss.debugPercussiveMedian(), F * B, true);
+    std::cout << "}" << std::endl;
+    return 0;
+}
+
 }  // namespace
 
 /**
@@ -882,10 +1120,16 @@ const char* const kCommands[] = {
     "--test-stft-short-input",
     "--test-stft-cola",
     "--test-stft-tiny-fft",
+    "--test-hpss-separates",
+    "--test-hpss-sum",
+    "--test-hpss-low-band",
+    "--test-hpss-degenerate",
 };
 
 int main(int argc, char** argv) {
     const std::string cmd = (argc > 1) ? argv[1] : "--self-test";
+
+    if (cmd == "--dump-hpss-medians") return dumpHpssMedians();
 
     if (cmd == "--list-commands") {
         for (const char* c : kCommands) std::cout << c << "\n";
@@ -975,6 +1219,10 @@ int main(int argc, char** argv) {
             {"--test-stft-short-input",   "stft_short_input",   stftShortInput},
             {"--test-stft-cola",          "stft_cola",          stftCola},
             {"--test-stft-tiny-fft",      "stft_tiny_fft",      stftTinyFft},
+            {"--test-hpss-separates",     "hpss_separates",     hpssSeparates},
+            {"--test-hpss-sum",           "hpss_sum",           hpssLayersSumToSource},
+            {"--test-hpss-low-band",      "hpss_low_band",      hpssLowBand},
+            {"--test-hpss-degenerate",    "hpss_degenerate",    hpssDegenerate},
         };
         for (const auto& c : bufferCases) {
             if (cmd == c.cmd) {
@@ -1026,6 +1274,10 @@ int main(int argc, char** argv) {
         record(stftShortInput(detail));
         record(stftCola(detail));
         record(stftTinyFft(detail));
+        record(hpssSeparates(detail));
+        record(hpssLayersSumToSource(detail));
+        record(hpssLowBand(detail));
+        record(hpssDegenerate(detail));
 
         std::cout << "{\"test\": \"self_test\""
                   << ", \"passed\": " << passed

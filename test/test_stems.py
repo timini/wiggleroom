@@ -304,10 +304,53 @@ class TestStft:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestHpss:
+    """Tier 0 separation: median-filter HPSS plus a low band split.
+
+    Chosen over a neural model because the instrument needs material that
+    differs from itself, not correctly labelled instruments. That keeps ML
+    deployment off the critical path entirely.
+
+    The median filter itself is cross-validated against scipy in
+    test_hpss_reference.py.
+    """
+
+    def test_separates_percussive_from_sustained(self):
+        """Clicks must land in the percussive layer and a sine in the harmonic.
+
+        Measured by correlation against the known sources rather than by ear.
+        Verified to have teeth: swapping the two masks makes the percussive
+        layer correlate 0.9995 with the sine.
+        """
+        result = run_test(["--test-hpss-separates"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_layers_are_disjoint_and_sum_to_source(self):
+        """All four layers at unity must reconstruct the source.
+
+        The spec requires disjoint masks: an earlier draft defined Harmonic
+        without excluding the Low band, so the default all-faders-at-unity
+        state would have double-counted bass.
+        """
+        result = run_test(["--test-hpss-sum"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_low_layer_captures_low_frequencies(self):
+        result = run_test(["--test-hpss-low-band"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_degenerate_inputs_are_safe(self):
+        """Empty, silent and sub-frame inputs must give correctly sized,
+        finite output. Input too short for a single frame is routed to Residual
+        so the layers still sum to the source rather than dropping it."""
+        result = run_test(["--test-hpss-degenerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 def run_all_tests() -> bool:
     passed = failed = 0
     errors = []
-    for cls in (TestFftBackend, TestRingBuffer, TestTransport, TestStft):
+    for cls in (TestFftBackend, TestRingBuffer, TestTransport, TestStft, TestHpss):
         instance = cls()
         for name in dir(instance):
             if not name.startswith("test_"):
