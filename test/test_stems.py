@@ -339,6 +339,27 @@ class TestHpss:
         result = run_test(["--test-hpss-low-band"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_residual_layer_is_populated(self):
+        """The fourth layer must carry energy for ordinary dense audio.
+
+        Pure soft masks make the harmonic and percussive shares sum to exactly
+        1, leaving Residual permanently silent and the four-layer interface a
+        fiction. A margin above 1 attenuates both where the medians are
+        comparable, and the unclaimed remainder becomes Residual.
+        """
+        result = run_test(["--test-hpss-residual"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_low_split_includes_bins_below_the_split(self):
+        """The split converts to a bin by ceiling, not rounding.
+
+        Rounding excluded bins whose centre is still below the split: at
+        44.1 kHz with a 2048-point FFT and a 200 Hz split, bin 9 sits at about
+        193.8 Hz and was being left out of the Low layer.
+        """
+        result = run_test(["--test-hpss-low-split-boundary"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_degenerate_inputs_are_safe(self):
         """Empty, silent and sub-frame inputs must give correctly sized,
         finite output. Input too short for a single frame is routed to Residual

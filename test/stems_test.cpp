@@ -1079,6 +1079,72 @@ int dumpHpssMedians() {
     return 0;
 }
 
+/** The Residual layer must actually carry energy for ordinary dense audio.
+ *
+ *  With pure soft masks the harmonic and percussive shares sum to exactly 1,
+ *  leaving Residual permanently silent and the four-layer interface a fiction.
+ */
+bool hpssResidualPopulated(std::string& detail) {
+    const int sampleRate = 48000;
+    const std::size_t n = 24000;
+
+    // Dense material: noise plus a sustained tone, the ambiguous case.
+    std::vector<float> mix(n);
+    std::mt19937 rng(31337);
+    std::uniform_real_distribution<float> dist(-0.4f, 0.4f);
+    for (std::size_t i = 0; i < n; i++) {
+        mix[i] = dist(rng) + 0.4f * static_cast<float>(
+            std::sin(2.0 * kPi * 700.0 * static_cast<double>(i) / sampleRate));
+    }
+
+    ReferenceFft fft(2048);
+    Hpss hpss(fft);
+    Hpss::Result out;
+    hpss.separate(mix.data(), n, sampleRate, out);
+
+    const double total = energy(mix);
+    const double res = energy(out.layer[(int)StemLayer::Residual]);
+    const double frac = res / (total + 1e-20);
+    if (frac < 0.001) {
+        detail = "residual holds " + std::to_string(frac * 100.0) +
+                 "% of source energy; the layer is effectively silent";
+        return false;
+    }
+    return true;
+}
+
+/** Bins whose centre is below the split must land in the Low layer.
+ *
+ *  Rounding the split to the nearest bin excludes a bin whose centre is still
+ *  below the split: at 44.1 kHz with a 2048-point FFT and a 200 Hz split, bin 9
+ *  is centred at about 193.8 Hz and was being left out.
+ */
+bool hpssLowSplitBoundary(std::string& detail) {
+    const int sampleRate = 44100;
+    const std::size_t n = 24000;
+    const std::size_t fftSize = 2048;
+    const double binHz = static_cast<double>(sampleRate) / static_cast<double>(fftSize);
+    const double bin9Hz = 9.0 * binHz;   // about 193.8 Hz, below the 200 Hz split
+
+    std::vector<float> tone(n);
+    makeSine(tone, sampleRate, bin9Hz);
+
+    ReferenceFft fft(fftSize);
+    Hpss hpss(fft);
+    Hpss::Result out;
+    hpss.separate(tone.data(), n, sampleRate, out);
+
+    const double lowE = energy(out.layer[(int)StemLayer::Low]);
+    const double totalE = energy(tone);
+    const double frac = lowE / (totalE + 1e-20);
+    if (frac < 0.5) {
+        detail = "a tone at " + std::to_string(bin9Hz) + " Hz (below the 200 Hz split) "
+                 "put only " + std::to_string(frac * 100.0) + "% of its energy in the Low layer";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /**
@@ -1124,6 +1190,8 @@ const char* const kCommands[] = {
     "--test-hpss-sum",
     "--test-hpss-low-band",
     "--test-hpss-degenerate",
+    "--test-hpss-residual",
+    "--test-hpss-low-split-boundary",
 };
 
 int main(int argc, char** argv) {
@@ -1223,6 +1291,8 @@ int main(int argc, char** argv) {
             {"--test-hpss-sum",           "hpss_sum",           hpssLayersSumToSource},
             {"--test-hpss-low-band",      "hpss_low_band",      hpssLowBand},
             {"--test-hpss-degenerate",    "hpss_degenerate",    hpssDegenerate},
+            {"--test-hpss-residual",      "hpss_residual",      hpssResidualPopulated},
+            {"--test-hpss-low-split-boundary","hpss_low_split_boundary",hpssLowSplitBoundary},
         };
         for (const auto& c : bufferCases) {
             if (cmd == c.cmd) {
@@ -1278,6 +1348,8 @@ int main(int argc, char** argv) {
         record(hpssLayersSumToSource(detail));
         record(hpssLowBand(detail));
         record(hpssDegenerate(detail));
+        record(hpssResidualPopulated(detail));
+        record(hpssLowSplitBoundary(detail));
 
         std::cout << "{\"test\": \"self_test\""
                   << ", \"passed\": " << passed

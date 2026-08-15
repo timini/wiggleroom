@@ -54,6 +54,16 @@ public:
     /** Mask exponent. librosa's default is 2.0. */
     void setPower(float power) { power_ = std::max(0.f, power); }
 
+    /**
+     * Separation margin. At 1.0 the harmonic and percussive shares sum to
+     * exactly 1 and nothing is left over, which is librosa's behaviour but
+     * leaves our fourth layer permanently silent. Above 1.0 each share is
+     * attenuated where the two are comparable, and the unclaimed remainder
+     * becomes Residual. This is the Driedger/Muller/Disch margin idea in soft
+     * form.
+     */
+    void setMargin(float margin) { margin_ = std::max(1.f, margin); }
+
     /** Split frequency below which content is routed to the Low layer. */
     void setLowSplitHz(float hz) { lowSplitHz_ = std::max(0.f, hz); }
 
@@ -130,8 +140,12 @@ private:
         }
 
         // Bin index of the low split.
+        // Ceiling, not rounding. lowSplitBin_ is the first bin AT OR ABOVE the
+        // split, so `b < lowSplitBin_` keeps every bin whose centre is below it.
+        // Rounding excluded such bins: at 44.1 kHz with a 2048-point FFT and a
+        // 200 Hz split it gave bin 9, whose centre is about 193.8 Hz.
         const double binHz = static_cast<double>(sampleRate) / static_cast<double>(fft_.size());
-        lowSplitBin_ = static_cast<std::size_t>(std::lround(lowSplitHz_ / binHz));
+        lowSplitBin_ = static_cast<std::size_t>(std::ceil(lowSplitHz_ / binHz));
         lowSplitBin_ = std::min(lowSplitBin_, bins);
     }
 
@@ -214,13 +228,20 @@ private:
             return (layer == (int)StemLayer::Residual) ? 1.f : 0.f;
         }
 
-        const float harmShare = hp / denom;
-        const float percShare = pp / denom;
+        // Margin-weighted soft masks. At margin 1 these reduce to hp/denom and
+        // pp/denom and sum to exactly 1. Above 1, both are attenuated where the
+        // two medians are comparable, and what neither claims is Residual. That
+        // is what stops the fourth layer being permanently silent.
+        const float harmShare = hp / (hp + margin_ * pp);
+        const float percShare = pp / (pp + margin_ * hp);
 
         switch (static_cast<StemLayer>(layer)) {
             case StemLayer::Percussive: return percShare;
             case StemLayer::Harmonic:   return harmShare;
-            case StemLayer::Residual:   return 0.f;  // shares already total 1
+            case StemLayer::Residual:
+                // Whatever the two shares leave unclaimed. Clamped because
+                // rounding can push the sum a hair over 1.
+                return std::max(0.f, 1.f - harmShare - percShare);
             default:                    return 0.f;
         }
     }
@@ -231,6 +252,8 @@ private:
     int kernel_ = 31;
     float power_ = 2.f;
     float lowSplitHz_ = 200.f;
+    // Above 1 so Residual carries the ambiguous energy rather than being silent.
+    float margin_ = 2.f;
     std::size_t lowSplitBin_ = 0;
 
     std::size_t frames_ = 0;

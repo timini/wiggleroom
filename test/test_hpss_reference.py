@@ -26,6 +26,8 @@ Run:  python3 test/test_hpss_reference.py
       pytest test/test_hpss_reference.py -v
 """
 
+from __future__ import annotations
+
 import json
 import subprocess
 import sys
