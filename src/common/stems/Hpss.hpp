@@ -76,7 +76,10 @@ public:
      * for many seconds, because clearing a running_ flag cannot interrupt a
      * separate() already in progress.
      */
-    void setAbortFlag(const std::atomic<bool>* flag) { abort_ = flag; }
+    void setAbortFlag(const std::atomic<bool>* flag) {
+        abort_ = flag;
+        stft_.setAbortFlag(flag);
+    }
 
     /** True when the last separate() returned early because of the abort flag. */
     bool wasAborted() const { return aborted_; }

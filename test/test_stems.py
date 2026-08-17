@@ -462,9 +462,10 @@ class TestSeparationWorker:
         """stop() must not wait for a whole separation to finish.
 
         Clearing a running flag cannot interrupt work already inside
-        Hpss::separate, so cancellation is checked at frame granularity instead.
-        Verified to have teeth: unwiring the abort flag makes stop() wait 7898 ms
-        against a budget of 1500.
+        Hpss::separate, so cancellation is polled once per STFT frame, which is
+        where a separation actually spends its time. Measured latency is 14 ms.
+        Verified to have teeth: unwiring the abort flag makes stop() wait
+        7898 ms against a budget of 2000.
         """
         result = run_test(["--test-worker-abort"])
         assert result["failed"] == 0, result.get("detail", "")

@@ -1607,7 +1607,16 @@ bool workerAbortsInFlightSeparation(std::string& detail) {
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - begin).count();
 
-    if (elapsed > 1500) {
+    // Measured latency is 14 ms, because cancellation is checked once per STFT
+    // frame. The budget is set two orders of magnitude above that so a slow or
+    // loaded CI runner cannot turn this into a timing flake, and it is still far
+    // below the uncancelled cost: unwiring the abort flag makes this same job
+    // take 7898 ms locally and longer on a runner.
+    //
+    // An earlier version checked only between whole layers and came in at
+    // roughly a second locally, which failed on CI at 1630 ms. Raising the
+    // threshold would have hidden that; the granularity was the real problem.
+    if (elapsed > 2000) {
         detail = "stop() waited " + std::to_string(elapsed) +
                  " ms for the in-flight separation";
         return false;
