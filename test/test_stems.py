@@ -482,6 +482,109 @@ class TestSeparationWorker:
         result = run_test(["--test-worker-reclaim-release"])
         assert result["failed"] == 0, result.get("detail", "")
 
+class TestStemMixer:
+    """Four-channel stem playback, the fallback path and the analyser tap."""
+
+    def test_four_unity_faders_reconstruct_the_source(self):
+        """Straight sum, not equal power.
+
+        The HPSS masks are disjoint, so the layers already add up to the source.
+        An equal-power law would lift each pair by 3 dB. Verified to have teeth:
+        inserting a sqrt(2) factor fails at 3.01 dB against a 0.5 dB budget.
+        The check is sample by sample as well as by level, so four layers with
+        the right total energy in the wrong proportions would still fail.
+        """
+        result = run_test(["--test-mixer-unity-sum"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_mute_ramps_rather_than_steps(self):
+        """Driven with DC layers so any jump in the output is the gain, not the
+        material. Verified to have teeth: a hard mute steps by the full 0.25.
+        """
+        result = run_test(["--test-mixer-mute"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_stem_select_does_not_step_the_tap(self):
+        """The tap is a live signal feeding the wavetable, so a hard switch
+        between two stems is an audible click. Verified to have teeth: switching
+        outright steps by 2.0 between the two constant stems used here.
+        """
+        result = run_test(["--test-mixer-select"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_rapid_stem_select_is_still_continuous(self):
+        """Switching again before the previous crossfade finishes.
+
+        This is the case a crossfade between two stem indices gets wrong: the
+        outgoing index still names the original stem, so the fade restarts from
+        that stem's current sample rather than from the half-mixed value
+        actually being emitted. Verified to have teeth: the index-based version
+        steps by 1.58, while the ordinary single-switch test still passes.
+        """
+        result = run_test(["--test-mixer-select-rapid"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_withdrawing_the_stems_fades_out(self):
+        """The stems cannot be read once the set is gone, so zeroing them would
+        collapse that side of the mix in a single sample while the fallback was
+        still fading in. Verified to have teeth: zeroing steps by 0.24 against a
+        material step of 0.07.
+        """
+        result = run_test(["--test-mixer-withdraw"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_fallback_uses_channel_one_only(self):
+        """Spec scenario 15. Routing the unseparated buffer to all four unity
+        channels sums four identical copies. Verified to have teeth: widening
+        the routing gives 2.0 where 0.5 is expected.
+        """
+        result = run_test(["--test-mixer-fallback"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_level_is_preserved_across_the_transition(self):
+        """The level during separation and after stems arrive must match.
+
+        Verified to have teeth: routing the fallback to all four channels fails
+        at -12.04 dB, which is exactly the step the spec warns about.
+        """
+        result = run_test(["--test-mixer-fallback-level"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_transition_ramps(self):
+        """Separate from the level test, and deliberately so.
+
+        In the level test the fallback is the same recording the layers sum to,
+        so a hard switch is already continuous there and removing the crossfade
+        changes nothing. Here the fallback is a different signal of the same
+        RMS. Verified to have teeth: switching outright steps by 0.38 against a
+        material step of 0.07.
+        """
+        result = run_test(["--test-mixer-crossfade"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_stereo_sets_keep_both_channels(self):
+        """Also covers a set flagged stereo whose right channel is missing,
+        which must fall back to the left rather than index out of range."""
+        result = run_test(["--test-mixer-stereo"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_non_finite_playhead_gives_silence(self):
+        """Casting NaN or infinity to size_t is undefined, and NaN slips past a
+        bare `< 0` comparison. The RingBuffer had exactly this defect."""
+        result = run_test(["--test-mixer-non-finite"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_empty_stem_set_is_silent(self):
+        """This is the state on patch load."""
+        result = run_test(["--test-mixer-empty"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_fade_time_does_not_change_with_sample_rate(self):
+        """Fades are held in seconds. Verified to have teeth: pinning the step
+        to 48 kHz halves every fade at 96 kHz."""
+        result = run_test(["--test-mixer-samplerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_concurrent_submit_and_acquire(self):
         """A reader standing in for the audio thread hammers acquire/release
         while jobs are submitted, checking for races and for frees landing on
