@@ -35,6 +35,7 @@
 #include "common/stems/RingBuffer.hpp"
 #include "common/stems/Hpss.hpp"
 #include "common/stems/SeparationWorker.hpp"
+#include "common/stems/StemMixer.hpp"
 #include "common/stems/Stft.hpp"
 #include "common/stems/Transport.hpp"
 
@@ -1703,6 +1704,400 @@ bool workerReclaimsAfterReaderLeaves(std::string& detail) {
  * table-driven dispatch that does not look like `cmd == "..."` at all. An
  * executable declaring its own commands cannot drift from itself.
  */
+
+// ---------------------------------------------------------------------------
+// StemMixer
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::StemMixer;
+
+namespace {
+/** Four distinct layers whose straight sum is a known source signal. */
+struct MixerFixture {
+    StemSet set;
+    std::vector<float> source;
+
+    explicit MixerFixture(std::size_t n = 4096, bool stereo = false) {
+        source.assign(n, 0.f);
+        set.channels = stereo ? 2 : 1;
+        for (int L = 0; L < StemSet::kNumLayers; L++) {
+            set.layer[L].channel[0].assign(n, 0.f);
+            if (stereo) set.layer[L].channel[1].assign(n, 0.f);
+        }
+        for (std::size_t i = 0; i < n; i++) {
+            const double t = (double)i / 48000.0;
+            // Four unrelated components, so a mixer that double-counted or
+            // dropped one would not cancel out by accident.
+            const float parts[4] = {
+                (float)(0.30 * std::sin(2 * M_PI * 110.0 * t)),
+                (float)(0.20 * std::sin(2 * M_PI * 523.0 * t)),
+                (float)(0.15 * std::sin(2 * M_PI * 1400.0 * t)),
+                (float)(0.05 * std::sin(2 * M_PI * 3300.0 * t)),
+            };
+            float sum = 0.f;
+            for (int L = 0; L < StemSet::kNumLayers; L++) {
+                set.layer[L].channel[0][i] = parts[L];
+                if (stereo) set.layer[L].channel[1][i] = parts[L] * 0.5f;
+                sum += parts[L];
+            }
+            source[i] = sum;
+        }
+    }
+};
+
+double rms(const std::vector<float>& v) {
+    if (v.empty()) return 0.0;
+    double acc = 0.0;
+    for (float x : v) acc += (double)x * x;
+    return std::sqrt(acc / (double)v.size());
+}
+
+double maxStep(const std::vector<float>& v) {
+    double worst = 0.0;
+    for (std::size_t i = 1; i < v.size(); i++) {
+        worst = std::max(worst, std::fabs((double)v[i] - (double)v[i - 1]));
+    }
+    return worst;
+}
+}  // namespace
+
+/** Four unity faders must reconstruct the source, not lift or attenuate it. */
+bool mixerUnitySum(std::string& detail) {
+    MixerFixture fx;
+    StemMixer mixer(48000);
+    mixer.snapToTargets(/*haveStems=*/true);
+
+    std::vector<float> out;
+    out.reserve(fx.source.size());
+    for (std::size_t i = 0; i < fx.source.size(); i++) {
+        out.push_back(mixer.process(&fx.set, (double)i, 0.f, 0.f).left);
+    }
+
+    const double refRms = rms(fx.source);
+    const double outRms = rms(out);
+    if (refRms < 1e-9) { detail = "reference signal is silent"; return false; }
+    const double dB = 20.0 * std::log10(outRms / refRms);
+    if (std::fabs(dB) > 0.5) {
+        detail = "unity sum is " + std::to_string(dB) + " dB from the source";
+        return false;
+    }
+
+    // Level is not enough on its own: four layers scaled to the right total
+    // energy but in the wrong proportions would pass an RMS check. Compare
+    // sample by sample.
+    double worst = 0.0;
+    for (std::size_t i = 0; i < out.size(); i++) {
+        worst = std::max(worst, std::fabs((double)out[i] - (double)fx.source[i]));
+    }
+    if (worst > 1e-5) {
+        detail = "unity sum differs from the source by up to " + std::to_string(worst);
+        return false;
+    }
+    return true;
+}
+
+/** Muting must ramp, not step. */
+bool mixerMuteIsClickFree(std::string& detail) {
+    MixerFixture fx;
+    StemMixer mixer(48000);
+    mixer.snapToTargets(true);
+
+    // A DC layer makes a step unmistakable: the signal itself contributes no
+    // sample-to-sample change, so any jump in the output is the gain.
+    const std::size_t n = fx.set.layer[0].channel[0].size();
+    for (int L = 0; L < StemSet::kNumLayers; L++) {
+        fx.set.layer[L].channel[0].assign(n, 0.25f);
+    }
+
+    std::vector<float> out;
+    for (std::size_t i = 0; i < 4000; i++) {
+        if (i == 1000) mixer.setMute(0, true);
+        if (i == 2500) mixer.setMute(0, false);
+        out.push_back(mixer.process(&fx.set, (double)i, 0.f, 0.f).left);
+    }
+
+    // A hard mute would step by a full 0.25 in one sample. The ramp covers
+    // 10 ms, so the per-sample change is 0.25 / 480.
+    const double worst = maxStep(out);
+    if (worst > 0.002) {
+        detail = "mute stepped by " + std::to_string(worst) + " in one sample";
+        return false;
+    }
+    // And it must actually reach silence on that channel, not merely ramp.
+    if (std::fabs(out[2400] - 0.75f) > 1e-3) {
+        detail = "muted channel did not reach silence; output was " +
+                 std::to_string(out[2400]);
+        return false;
+    }
+    return true;
+}
+
+/** Changing the analyser tap must not step. */
+bool mixerSelectIsContinuous(std::string& detail) {
+    MixerFixture fx;
+    const std::size_t n = fx.set.layer[0].channel[0].size();
+    // Two constant, maximally different stems, so a hard switch is a step of 2.
+    fx.set.layer[0].channel[0].assign(n, 1.f);
+    fx.set.layer[3].channel[0].assign(n, -1.f);
+
+    StemMixer mixer(48000);
+    mixer.snapToTargets(true);
+
+    std::vector<float> taps;
+    for (std::size_t i = 0; i < 3000; i++) {
+        if (i == 500) mixer.setStemSelect(0);
+        mixer.process(&fx.set, (double)i, 0.f, 0.f);
+        taps.push_back(mixer.tap());
+    }
+
+    const double worst = maxStep(taps);
+    if (worst > 0.005) {
+        detail = "stem select stepped the tap by " + std::to_string(worst);
+        return false;
+    }
+    if (std::fabs(taps[2500] - 1.f) > 1e-3) {
+        detail = "tap did not settle on the selected stem; got " +
+                 std::to_string(taps[2500]);
+        return false;
+    }
+    return true;
+}
+
+/** While separating, the unseparated buffer goes to channel 1 alone. */
+bool mixerFallbackIsSingleChannel(std::string& detail) {
+    StemMixer mixer(48000);
+    mixer.snapToTargets(/*haveStems=*/false);
+
+    float out = 0.f;
+    for (int i = 0; i < 500; i++) {
+        out = mixer.process(nullptr, 0.0, 0.5f, 0.5f).left;
+    }
+    // Routing to all four unity channels would give 2.0, a 12 dB lift.
+    if (std::fabs(out - 0.5f) > 1e-4) {
+        detail = "fallback output was " + std::to_string(out) + ", expected 0.5";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The level before and after stems arrive must match, with no jump.
+ *
+ * This is spec scenario 15. It is the test that catches routing the fallback to
+ * all four channels, which reads as a 12 dB step at the transition.
+ */
+bool mixerFallbackLevelIsPreserved(std::string& detail) {
+    // Long enough that the settled window after the 50 ms crossfade is a real
+    // measurement. The default fixture is 4096 samples, which is shorter than
+    // the fade plus a useful tail.
+    MixerFixture fx(24000);
+    StemMixer mixer(48000);
+    mixer.snapToTargets(false);
+
+    std::vector<float> during, after, all;
+    const std::size_t n = fx.source.size();
+    const std::size_t switchAt = n / 2;
+
+    // The playhead runs CONTINUOUSLY across the two phases. Restarting it at
+    // zero for the second phase puts a discontinuity in the test signal itself,
+    // right where the measurement is taken, which has nothing to do with the
+    // mixer.
+    for (std::size_t i = 0; i < n; i++) {
+        const bool separated = (i >= switchAt);
+        const float v = mixer.process(separated ? &fx.set : nullptr, (double)i,
+                                      fx.source[i], fx.source[i]).left;
+        all.push_back(v);
+        if (!separated) during.push_back(v);
+        // Skip the crossfade itself when measuring the settled level: 50 ms is
+        // 2400 samples at 48 kHz.
+        else if (i > switchAt + 4800) after.push_back(v);
+    }
+
+    const double a = rms(during);
+    const double b = rms(after);
+    if (a < 1e-9 || b < 1e-9) { detail = "one phase was silent"; return false; }
+    const double dB = 20.0 * std::log10(b / a);
+    if (std::fabs(dB) > 1.0) {
+        detail = "level changed by " + std::to_string(dB) + " dB across the transition";
+        return false;
+    }
+
+    // No jump either: the largest sample-to-sample change across the whole run
+    // must be no worse than the source material's own.
+    const double sourceStep = maxStep(fx.source);
+    const double worst = maxStep(all);
+    if (worst > sourceStep * 1.5 + 1e-4) {
+        detail = "transition stepped by " + std::to_string(worst) +
+                 " against a source step of " + std::to_string(sourceStep);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The transition between the fallback and the stems must RAMP.
+ *
+ * The level test above cannot show this. There the fallback is the same
+ * recording the four layers sum to, so switching hard between them is already
+ * continuous and removing the crossfade changes nothing. Here the fallback is a
+ * different signal of the same RMS, which is the realistic case once the
+ * playhead, the separation residual and the loop window are taken into account.
+ * A hard switch then steps by up to the full amplitude of both signals.
+ */
+bool mixerSourceCrossfadeRamps(std::string& detail) {
+    MixerFixture fx(24000);
+    const std::size_t n = fx.source.size();
+
+    // Same RMS as the stem sum, entirely different sample values.
+    std::vector<float> fallback(n, 0.f);
+    for (std::size_t i = 0; i < n; i++) {
+        const double t = (double)i / 48000.0;
+        fallback[i] = (float)(0.35 * std::sin(2 * M_PI * 77.0 * t + 1.1));
+    }
+    const double ratio = rms(fx.source) / std::max(1e-12, rms(fallback));
+    for (auto& x : fallback) x = (float)(x * ratio);
+
+    StemMixer mixer(48000);
+    mixer.snapToTargets(false);
+
+    // Continuous playhead across the switch, for the reason given in the level
+    // test: restarting it would put a step in the material rather than in the
+    // mixer.
+    const std::size_t switchAt = n / 2;
+    std::vector<float> out;
+    for (std::size_t i = 0; i < n; i++) {
+        const bool separated = (i >= switchAt);
+        out.push_back(mixer.process(separated ? &fx.set : nullptr, (double)i,
+                                    fallback[i], fallback[i]).left);
+    }
+
+    // The transition must not step by more than the material itself does.
+    const double material = std::max(maxStep(fx.source), maxStep(fallback));
+    const double worst = maxStep(out);
+    if (worst > material * 1.5 + 1e-4) {
+        detail = "transition stepped by " + std::to_string(worst) +
+                 " against a material step of " + std::to_string(material);
+        return false;
+    }
+    // And it must actually complete: the tail is the stems, not the fallback.
+    double tailDiff = 0.0;
+    for (std::size_t i = switchAt + 6000; i < out.size(); i++) {
+        tailDiff = std::max(tailDiff, std::fabs((double)out[i] - (double)fx.source[i]));
+    }
+    if (tailDiff > 1e-4) {
+        detail = "the crossfade never reached the stems; tail differs by " +
+                 std::to_string(tailDiff);
+        return false;
+    }
+    return true;
+}
+
+/** A stereo set must not collapse to mono, and a mono set must not read past its end. */
+bool mixerStereoAndMono(std::string& detail) {
+    MixerFixture stereo(2048, /*stereo=*/true);
+    StemMixer mixer(48000);
+    mixer.snapToTargets(true);
+    bool sawDifference = false;
+    for (std::size_t i = 0; i < 2048; i++) {
+        const auto f = mixer.process(&stereo.set, (double)i, 0.f, 0.f);
+        if (std::fabs(f.left - f.right) > 1e-4) sawDifference = true;
+    }
+    if (!sawDifference) { detail = "stereo set produced identical channels"; return false; }
+
+    // A set flagged stereo but missing its right channel must fall back to the
+    // left rather than index out of range.
+    MixerFixture broken(2048, true);
+    for (int L = 0; L < StemSet::kNumLayers; L++) broken.set.layer[L].channel[1].clear();
+    StemMixer m2(48000);
+    m2.snapToTargets(true);
+    for (std::size_t i = 0; i < 2048; i++) {
+        const auto f = m2.process(&broken.set, (double)i, 0.f, 0.f);
+        if (!std::isfinite(f.left) || !std::isfinite(f.right)) {
+            detail = "a stereo set with no right channel produced a non-finite sample";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * A non-finite or out-of-range playhead must give silence.
+ *
+ * Casting a NaN or an infinity to size_t is undefined, and NaN slips past a
+ * bare `< 0` comparison. The RingBuffer had exactly this defect.
+ */
+bool mixerNonFinitePosition(std::string& detail) {
+    MixerFixture fx;
+    StemMixer mixer(48000);
+    mixer.snapToTargets(true);
+
+    const double bad[] = {std::nan(""), std::numeric_limits<double>::infinity(),
+                          -std::numeric_limits<double>::infinity(), -1.0, -0.5,
+                          (double)fx.source.size(), (double)fx.source.size() + 100.0,
+                          1e300};
+    for (double p : bad) {
+        const auto f = mixer.process(&fx.set, p, 0.f, 0.f);
+        if (!std::isfinite(f.left) || !std::isfinite(f.right)) {
+            detail = "non-finite output for position " + std::to_string(p);
+            return false;
+        }
+        if (std::fabs(f.left) > 1e-6f || std::fabs(f.right) > 1e-6f) {
+            detail = "expected silence for position " + std::to_string(p);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** An empty set must be silent rather than reading out of range. */
+bool mixerEmptySet(std::string& detail) {
+    StemSet empty;
+    StemMixer mixer(48000);
+    mixer.snapToTargets(true);
+    for (int i = 0; i < 100; i++) {
+        const auto f = mixer.process(&empty, (double)i, 0.f, 0.f);
+        if (f.left != 0.f || f.right != 0.f) {
+            detail = "an empty stem set produced output";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Fade durations are in seconds, so they must not change with sample rate. */
+bool mixerFadeIsSampleRateInvariant(std::string& detail) {
+    auto measureMuteFade = [](int sampleRate) {
+        MixerFixture fx;
+        const std::size_t n = fx.set.layer[0].channel[0].size();
+        for (int L = 0; L < StemSet::kNumLayers; L++) {
+            fx.set.layer[L].channel[0].assign(n, 0.f);
+        }
+        fx.set.layer[0].channel[0].assign(n, 1.f);
+
+        StemMixer mixer(sampleRate);
+        mixer.snapToTargets(true);
+        mixer.setMute(0, true);
+        int samples = 0;
+        for (std::size_t i = 0; i < n; i++) {
+            const float v = mixer.process(&fx.set, (double)i, 0.f, 0.f).left;
+            samples++;
+            if (v <= 1e-6f) break;
+        }
+        return (double)samples / sampleRate;
+    };
+
+    const double at48 = measureMuteFade(48000);
+    const double at96 = measureMuteFade(96000);
+    if (at48 < 1e-6) { detail = "fade at 48 kHz took no time"; return false; }
+    const double ratio = at96 / at48;
+    if (ratio < 0.9 || ratio > 1.1) {
+        detail = "fade took " + std::to_string(at48) + " s at 48 kHz and " +
+                 std::to_string(at96) + " s at 96 kHz";
+        return false;
+    }
+    return true;
+}
+
 struct TestCase {
     const char* cmd;
     const char* name;
@@ -1763,6 +2158,16 @@ const TestCase kCases[] = {
     {"--test-worker-reclaim-release", "worker_reclaim_release", workerReclaimsAfterReaderLeaves},
     {"--test-worker-hammer",      "worker_hammer",      workerConcurrentHammer},
     {"--test-worker-shutdown",    "worker_shutdown",    workerCleanShutdown},
+    {"--test-mixer-unity-sum",    "mixer_unity_sum",    mixerUnitySum},
+    {"--test-mixer-mute",         "mixer_mute",         mixerMuteIsClickFree},
+    {"--test-mixer-select",       "mixer_select",       mixerSelectIsContinuous},
+    {"--test-mixer-fallback",     "mixer_fallback",     mixerFallbackIsSingleChannel},
+    {"--test-mixer-fallback-level","mixer_fallback_level",mixerFallbackLevelIsPreserved},
+    {"--test-mixer-crossfade",    "mixer_crossfade",    mixerSourceCrossfadeRamps},
+    {"--test-mixer-stereo",       "mixer_stereo",       mixerStereoAndMono},
+    {"--test-mixer-non-finite",   "mixer_non_finite",   mixerNonFinitePosition},
+    {"--test-mixer-empty",        "mixer_empty",        mixerEmptySet},
+    {"--test-mixer-samplerate",   "mixer_samplerate",   mixerFadeIsSampleRateInvariant},
 };
 
 /** The FFT checks take different arguments, so they are named separately. */
