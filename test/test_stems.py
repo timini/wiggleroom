@@ -512,6 +512,27 @@ class TestStemMixer:
         result = run_test(["--test-mixer-select"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_rapid_stem_select_is_still_continuous(self):
+        """Switching again before the previous crossfade finishes.
+
+        This is the case a crossfade between two stem indices gets wrong: the
+        outgoing index still names the original stem, so the fade restarts from
+        that stem's current sample rather than from the half-mixed value
+        actually being emitted. Verified to have teeth: the index-based version
+        steps by 1.58, while the ordinary single-switch test still passes.
+        """
+        result = run_test(["--test-mixer-select-rapid"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_withdrawing_the_stems_fades_out(self):
+        """The stems cannot be read once the set is gone, so zeroing them would
+        collapse that side of the mix in a single sample while the fallback was
+        still fading in. Verified to have teeth: zeroing steps by 0.24 against a
+        material step of 0.07.
+        """
+        result = run_test(["--test-mixer-withdraw"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_fallback_uses_channel_one_only(self):
         """Spec scenario 15. Routing the unseparated buffer to all four unity
         channels sums four identical copies. Verified to have teeth: widening

@@ -1863,6 +1863,81 @@ bool mixerSelectIsContinuous(std::string& detail) {
     return true;
 }
 
+/**
+ * Switching the tap again before the previous crossfade finishes must still be
+ * continuous.
+ *
+ * This is the case a crossfade between two stem INDICES gets wrong. Halfway
+ * through a fade from A to B the emitted value is half of each, but the
+ * outgoing index still names A, so restarting the fade towards C begins from
+ * A's current sample and steps by half the distance between A and B.
+ */
+bool mixerRapidSelectIsContinuous(std::string& detail) {
+    MixerFixture fx;
+    const std::size_t n = fx.set.layer[0].channel[0].size();
+    // Four constants spread as far apart as possible.
+    const float values[4] = {1.f, -1.f, 0.75f, -0.75f};
+    for (int L = 0; L < StemSet::kNumLayers; L++) {
+        fx.set.layer[L].channel[0].assign(n, values[L]);
+    }
+
+    StemMixer mixer(48000);
+    mixer.snapToTargets(true);
+
+    std::vector<float> taps;
+    // Switch every 200 samples. The fade is 20 ms, which is 960 samples, so
+    // every switch lands in the middle of the previous one.
+    int next = 0;
+    for (std::size_t i = 0; i < 4000; i++) {
+        if (i % 200 == 0) {
+            mixer.setStemSelect(next % StemSet::kNumLayers);
+            next++;
+        }
+        mixer.process(&fx.set, (double)i, 0.f, 0.f);
+        taps.push_back(mixer.tap());
+    }
+
+    const double worst = maxStep(taps);
+    if (worst > 0.01) {
+        detail = "rapid stem select stepped the tap by " + std::to_string(worst);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Withdrawing the stems must fade out rather than drop.
+ *
+ * The stems cannot be read once the set is gone, so zeroing them would collapse
+ * that side of the mix in a single sample while the fallback was still fading
+ * in, leaving a dip almost to silence at the exact moment the module is
+ * supposed to be degrading gracefully.
+ */
+bool mixerStemsWithdrawalFadesOut(std::string& detail) {
+    MixerFixture fx(24000);
+    const std::size_t n = fx.source.size();
+    const std::size_t switchAt = n / 2;
+
+    StemMixer mixer(48000);
+    mixer.snapToTargets(true);
+
+    std::vector<float> out;
+    for (std::size_t i = 0; i < n; i++) {
+        // Fallback is silent here, so any dip is unmistakable.
+        const bool haveStems = (i < switchAt);
+        out.push_back(mixer.process(haveStems ? &fx.set : nullptr, (double)i, 0.f, 0.f).left);
+    }
+
+    const double material = maxStep(fx.source);
+    const double worst = maxStep(out);
+    if (worst > material * 1.5 + 1e-4) {
+        detail = "withdrawal stepped by " + std::to_string(worst) +
+                 " against a material step of " + std::to_string(material);
+        return false;
+    }
+    return true;
+}
+
 /** While separating, the unseparated buffer goes to channel 1 alone. */
 bool mixerFallbackIsSingleChannel(std::string& detail) {
     StemMixer mixer(48000);
@@ -2161,6 +2236,8 @@ const TestCase kCases[] = {
     {"--test-mixer-unity-sum",    "mixer_unity_sum",    mixerUnitySum},
     {"--test-mixer-mute",         "mixer_mute",         mixerMuteIsClickFree},
     {"--test-mixer-select",       "mixer_select",       mixerSelectIsContinuous},
+    {"--test-mixer-select-rapid", "mixer_select_rapid", mixerRapidSelectIsContinuous},
+    {"--test-mixer-withdraw",     "mixer_withdraw",     mixerStemsWithdrawalFadesOut},
     {"--test-mixer-fallback",     "mixer_fallback",     mixerFallbackIsSingleChannel},
     {"--test-mixer-fallback-level","mixer_fallback_level",mixerFallbackLevelIsPreserved},
     {"--test-mixer-crossfade",    "mixer_crossfade",    mixerSourceCrossfadeRamps},

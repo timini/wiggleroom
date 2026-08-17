@@ -80,7 +80,16 @@ public:
         // Start a crossfade rather than switching outright. The tap is a live
         // audio signal, so a hard switch between two unrelated stems is a step
         // discontinuity, audible as a click through the wavetable voice.
-        tapPrevious_ = tapCurrent_;
+        //
+        // The fade runs from the VALUE last emitted, not from the index of the
+        // outgoing stem. Fading between two indices reads better on paper and is
+        // wrong the moment a second switch arrives mid-fade: the outgoing index
+        // still names the original stem, so the fade restarts from that stem's
+        // current sample rather than from the half-mixed value actually being
+        // emitted, and the tap steps by up to the full difference between them.
+        // Starting from the emitted value is continuous however often the
+        // selection changes.
+        tapFrom_ = tap_;
         tapTarget_ = clamped;
         tapFade_ = 0.f;
     }
@@ -107,9 +116,17 @@ public:
         float outLeft = 0.f, outRight = 0.f;
 
         for (int c = 0; c < kNumChannels; c++) {
-            float stemLeft = 0.f, stemRight = 0.f;
-            if (set != nullptr) readStem(*set, c, position, stemLeft, stemRight);
-            stemLeft_[c] = stemLeft;
+            float stemLeft = stemLeft_[c], stemRight = stemRight_[c];
+            if (set != nullptr) {
+                readStem(*set, c, position, stemLeft, stemRight);
+                stemLeft_[c] = stemLeft;
+                stemRight_[c] = stemRight;
+            }
+            // When the set goes away the last samples are HELD for the duration
+            // of the fade out. Zeroing them instead would drop the stems path in
+            // one sample while the fallback was still fading in, so the output
+            // would dip almost to silence at exactly the moment the module is
+            // meant to degrade gracefully.
 
             // The unseparated recording goes to channel 1 alone. See note 2 in
             // the header. This is the ONLY place that routing is expressed, so
@@ -136,11 +153,9 @@ public:
         // but the first would otherwise starve the analyser and the wavetable
         // until stems arrived.
         tapFade_ = std::min(1.f, tapFade_ + tapStep_);
-        const float outgoing = stemLeft_[tapPrevious_];
-        const float incoming = stemLeft_[tapTarget_];
-        const float stemTap = outgoing + (incoming - outgoing) * tapFade_;
-        if (tapFade_ >= 1.f) tapCurrent_ = tapTarget_;
-        tap_ = stemTap * sourceMix_ + fallbackLeft * fallbackMix;
+        const float incoming = stemLeft_[tapTarget_] * sourceMix_ + fallbackLeft * fallbackMix;
+        tap_ = tapFrom_ + (incoming - tapFrom_) * tapFade_;
+        if (tapFade_ >= 1.f) tapFrom_ = tap_;
 
         Frame out;
         out.left = outLeft;
@@ -175,8 +190,7 @@ public:
             gain_[c] = mute_[c] ? 0.f : level_[c];
         }
         tapFade_ = 1.f;
-        tapCurrent_ = tapTarget_;
-        tapPrevious_ = tapTarget_;
+        tapFrom_ = tap_;
     }
 
 private:
@@ -229,13 +243,13 @@ private:
     float gain_[kNumChannels] = {1.f, 1.f, 1.f, 1.f};
 
     float stemLeft_[kNumChannels] = {0.f, 0.f, 0.f, 0.f};
+    float stemRight_[kNumChannels] = {0.f, 0.f, 0.f, 0.f};
 
     float sourceMix_ = 0.f;
     float sourceTargetSeen_ = 0.f;
 
     int tapTarget_ = kNumChannels - 1;
-    int tapCurrent_ = kNumChannels - 1;
-    int tapPrevious_ = kNumChannels - 1;
+    float tapFrom_ = 0.f;
     float tapFade_ = 1.f;
     float tap_ = 0.f;
 };
