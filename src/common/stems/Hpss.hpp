@@ -29,6 +29,7 @@
 #include "Stft.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <vector>
@@ -68,12 +69,30 @@ public:
     void setLowSplitHz(float hz) { lowSplitHz_ = std::max(0.f, hz); }
 
     /**
+     * Optional cancellation flag, polled at frame granularity.
+     *
+     * Without this, stop() has to wait for a whole separation to finish. At the
+     * 32 second buffer limit that can freeze module removal or host shutdown
+     * for many seconds, because clearing a running_ flag cannot interrupt a
+     * separate() already in progress.
+     */
+    void setAbortFlag(const std::atomic<bool>* flag) {
+        abort_ = flag;
+        stft_.setAbortFlag(flag);
+    }
+
+    /** True when the last separate() returned early because of the abort flag. */
+    bool wasAborted() const { return aborted_; }
+
+    /**
      * Separate @p input into four disjoint layers.
      * Each output layer is resized to @p length.
      */
     void separate(const float* input, std::size_t length, int sampleRate, Result& out) {
+        aborted_ = false;
         for (int L = 0; L < kNumLayers; L++) out.layer[L].assign(length, 0.f);
         if (!input || length == 0) return;
+        if (aborting()) { aborted_ = true; return; }
 
         // Detect sub-frame input BEFORE analysis. Stft pads a whole frame on
         // both sides, so analyse() always yields frames and a frames_ == 0
@@ -90,9 +109,11 @@ public:
             return;
         }
 
+        if (aborting()) { aborted_ = true; return; }
         buildMasks(sampleRate);
 
         for (int L = 0; L < kNumLayers; L++) {
+            if (aborting()) { aborted_ = true; return; }
             synthesise(input, length, L, out.layer[L]);
         }
     }
@@ -142,12 +163,14 @@ private:
         // Median across TIME enhances sustained content (harmonic).
         std::vector<float> window(kernel_);
         for (std::size_t b = 0; b < bins; b++) {
+            if (aborting()) return;
             for (std::size_t f = 0; f < frames_; f++) {
                 harmMedian_[f * bins + b] = medianAlongTime(f, b, bins, window);
             }
         }
         // Median across FREQUENCY enhances transient content (percussive).
         for (std::size_t f = 0; f < frames_; f++) {
+            if (aborting()) return;
             for (std::size_t b = 0; b < bins; b++) {
                 percMedian_[f * bins + b] = medianAlongFreq(f, b, bins, window);
             }
@@ -275,6 +298,10 @@ private:
         }
     }
 
+    bool aborting() const {
+        return abort_ && abort_->load(std::memory_order_relaxed);
+    }
+
     /** mine^power / (mine^power + (margin * other)^power). */
     float shareOf(float mine, float other) const {
         const float a = std::pow(mine, power_);
@@ -292,6 +319,9 @@ private:
     // Above 1 so Residual carries the ambiguous energy rather than being silent.
     float margin_ = 2.f;
     std::size_t lowSplitBin_ = 0;
+
+    const std::atomic<bool>* abort_ = nullptr;
+    bool aborted_ = false;
 
     std::size_t frames_ = 0;
     std::vector<float> magnitude_;

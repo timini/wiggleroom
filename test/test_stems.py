@@ -385,10 +385,120 @@ class TestHpss:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestSeparationWorker:
+    """Background separation and safe publication.
+
+    The first threaded code in this repository. Verified clean under
+    ThreadSanitizer, not just observed to pass.
+    """
+
+    def test_publishes_a_result(self):
+        result = run_test(["--test-worker-publishes"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_superseded_job_never_publishes(self):
+        """A take superseded mid-separation must be discarded, not published.
+
+        The test waits until the worker has actually BEGUN the first job before
+        submitting the second. Submitting back to back does not exercise this:
+        the pending slot is overwritten and the first job never starts, so the
+        post-separation generation check is never reached. An earlier version of
+        this test made exactly that mistake and passed with the check removed.
+
+        Verified to have teeth: removing the check now fails with "no job was
+        discarded".
+        """
+        result = run_test(["--test-worker-stale"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_retired_sets_are_freed_on_the_worker(self):
+        """A multi-megabyte deallocation must never land on the audio thread.
+
+        Every free goes through one funnel that records the freeing thread, so
+        the counter this asserts on is genuinely wired up rather than a constant
+        zero.
+        """
+        result = run_test(["--test-worker-retire"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_acquire_before_any_job_is_safe(self):
+        """This is the state on patch load."""
+        result = run_test(["--test-worker-empty"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_stereo_stems_keep_both_channels(self):
+        """Four stereo stems, not one side dropped and not the two interleaved.
+
+        The two submitted channels are unrelated signals, so a worker that
+        copied one over the other, or read them interleaved as a single signal,
+        produces identical layers and fails. Verified to have teeth: making
+        submit() copy the left channel into the right fails with "left and right
+        layers are identical".
+        """
+        result = run_test(["--test-worker-stereo"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_separation_failure_is_non_fatal(self):
+        """An exception must not escape the thread entry and kill the host.
+
+        Driven by an FFT backend that always throws. Verified to have teeth:
+        narrowing the catch so the exception escapes aborts the whole test
+        binary with "terminating due to uncaught exception".
+        """
+        result = run_test(["--test-worker-failure"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_injected_fft_backend_is_the_one_used(self):
+        """ReferenceFft is the test reference, not the production backend.
+
+        Without an injection point every host would be forced onto a double
+        precision radix-2 implementation for every frame of a recording up to 32
+        seconds long.
+        """
+        result = run_test(["--test-worker-fft-injection"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_shutdown_interrupts_an_in_flight_separation(self):
+        """stop() must not wait for a whole separation to finish.
+
+        Clearing a running flag cannot interrupt work already inside
+        Hpss::separate, so cancellation is polled once per STFT frame, which is
+        where a separation actually spends its time. Measured latency is 14 ms.
+        Verified to have teeth: unwiring the abort flag makes stop() wait
+        7898 ms against a budget of 2000.
+        """
+        result = run_test(["--test-worker-abort"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_retired_set_is_reclaimed_when_the_reader_leaves(self):
+        """Reclaiming only at publication time leaked until shutdown.
+
+        A set retired while the audio thread held it cannot be freed at that
+        moment. If nothing then triggers a revisit, and no further recording is
+        made, those buffers stay allocated for the life of the module. Verified
+        to have teeth: removing the worker's reclaim poll fails with "never
+        reclaimed after the reader released it".
+        """
+        result = run_test(["--test-worker-reclaim-release"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_concurrent_submit_and_acquire(self):
+        """A reader standing in for the audio thread hammers acquire/release
+        while jobs are submitted, checking for races and for frees landing on
+        the wrong thread."""
+        result = run_test(["--test-worker-hammer"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_shutdown_is_prompt_and_complete(self):
+        result = run_test(["--test-worker-shutdown"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 def run_all_tests() -> bool:
     passed = failed = 0
     errors = []
-    for cls in (TestFftBackend, TestRingBuffer, TestTransport, TestStft, TestHpss):
+    for cls in (TestFftBackend, TestRingBuffer, TestTransport, TestStft, TestHpss,
+                TestSeparationWorker):
         instance = cls()
         for name in dir(instance):
             if not name.startswith("test_"):

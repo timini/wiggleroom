@@ -23,6 +23,7 @@
 #include "FftBackend.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <vector>
@@ -54,6 +55,16 @@ public:
     std::size_t frameSize() const { return frameSize_; }
     std::size_t hopSize() const { return hopSize_; }
     std::size_t numBins() const { return fft_.numBins(); }
+
+    /**
+     * Optional cancellation flag, polled once per frame.
+     *
+     * This is where a separation actually spends its time: four layers of
+     * synthesis over roughly a thousand frames each, one forward and one inverse
+     * transform per frame. Checking only between whole layers left shutdown
+     * waiting on a full layer, which on a slow machine is over a second.
+     */
+    void setAbortFlag(const std::atomic<bool>* flag) { abort_ = flag; }
 
     /** Analysis window value at index i, exposed so tests can check COLA. */
     double windowGain(std::size_t i) const {
@@ -92,6 +103,7 @@ public:
         windowSum_.assign(paddedLength, 0.f);
 
         for (std::size_t start = 0; start + frameSize_ <= paddedLength; start += hopSize_) {
+            if (abort_ && abort_->load(std::memory_order_relaxed)) return;
             for (std::size_t i = 0; i < frameSize_; i++) {
                 frame_[i] = padded_[start + i] * static_cast<float>(window_[i]);
             }
@@ -127,6 +139,7 @@ private:
 
     static constexpr double kPi = 3.14159265358979323846;
 
+    const std::atomic<bool>* abort_ = nullptr;
     FftBackend& fft_;
     std::size_t frameSize_;
     std::size_t hopSize_;
