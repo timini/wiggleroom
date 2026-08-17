@@ -24,10 +24,23 @@
  *     megabytes there; keeping every old set leaks. Retired pointers go back to
  *     the worker and are destroyed there.
  *
- * Reclamation uses an epoch counter rather than reference counting, so the
- * audio side pays only two relaxed atomic stores per block and never touches an
- * allocator. A retired set is destroyed once the reader has been observed to
- * enter a later critical section than the one that could still hold it.
+ * Reclamation uses HAZARD POINTERS, not an epoch counter. The first version of
+ * this file used two independent atomics, a reader epoch and the published
+ * pointer, and that is unsound: on a weakly ordered machine the reader can bump
+ * the epoch and still load the OLD pointer while the worker exchanges the
+ * pointer and still observes the preceding EVEN epoch, so the worker frees a
+ * set the reader is about to dereference. That is a plain store-buffering
+ * outcome, entirely legal, and ThreadSanitizer does not report it because no
+ * execution it observes actually races. The fix is for the reader to publish the
+ * exact pointer it took, and to re-read after publishing:
+ *
+ *     do { p = published_; hazard_ = p; } while (p != published_);
+ *
+ * with both the hazard store and the re-read sequentially consistent. That gives
+ * a single total order over the two operations, so either the worker sees the
+ * hazard and keeps the set, or the reader sees the new pointer and retries. The
+ * loop spins only when a publication lands in the same instant, which happens at
+ * most once per separation.
  *
  * Audio-thread contract: acquire() and release() allocate nothing, take no
  * locks, and never free. Everything else runs on the worker or the UI thread.
@@ -38,9 +51,11 @@
 #include "ReferenceFft.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -53,12 +68,39 @@ namespace stems {
 /** An immutable, fully-formed separation result. */
 struct StemSet {
     static constexpr int kNumLayers = Hpss::kNumLayers;
-    std::vector<float> layer[kNumLayers];
+    static constexpr int kMaxChannels = 2;
+
+    /**
+     * One layer, one vector per channel.
+     *
+     * Stereo is carried explicitly rather than by interleaving. Handing HPSS an
+     * interleaved buffer would make it read alternating left and right samples
+     * as a single signal, which corrupts every median window and every phase;
+     * handing it one side only would silently discard the other. The module has
+     * stereo inputs and stereo loop outputs, so the published set has to be
+     * stereo all the way through.
+     */
+    struct Layer {
+        std::vector<float> channel[kMaxChannels];
+    };
+
+    Layer layer[kNumLayers];
+    int channels = 1;
     uint64_t generation = 0;
+
+    /** Channel @p ch of layer @p L, falling back to channel 0 when mono. */
+    const std::vector<float>& samples(int L, int ch) const {
+        return layer[L].channel[(channels > 1 && ch > 0) ? 1 : 0];
+    }
+
+    std::size_t length() const { return layer[0].channel[0].size(); }
 };
 
 class SeparationWorker {
 public:
+    /** Builds an FFT backend of the requested size. Called on the worker. */
+    using FftFactory = std::function<std::unique_ptr<FftBackend>(std::size_t)>;
+
     SeparationWorker() = default;
 
     ~SeparationWorker() { stop(); }
@@ -66,13 +108,36 @@ public:
     SeparationWorker(const SeparationWorker&) = delete;
     SeparationWorker& operator=(const SeparationWorker&) = delete;
 
+    /**
+     * Supply the FFT implementation the worker should use. Must be called
+     * before start().
+     *
+     * Without this the worker falls back to ReferenceFft, which exists as the
+     * self-contained test reference: it is double precision, radix-2 only and
+     * makes no attempt at speed. Running a 32 second recording through it frame
+     * by frame is far slower than necessary, and lengthens the shutdown wait
+     * accordingly. Host adapters inject a real backend here (pffft under VCV,
+     * juce::dsp::FFT under JUCE), which is the entire reason FftBackend is an
+     * interface rather than a concrete type.
+     */
+    void setFftFactory(FftFactory factory) { fftFactory_ = std::move(factory); }
+
     void start() {
         if (running_.exchange(true)) return;
+        abort_.store(false, std::memory_order_release);
         thread_ = std::thread([this] { run(); });
     }
 
-    /** Join the worker and free everything. Not audio-thread safe. */
+    /**
+     * Join the worker and free everything. Not audio-thread safe.
+     *
+     * The abort flag is what makes this prompt. running_ alone cannot interrupt
+     * a separate() already in progress, so a stop() landing just after a job
+     * started would block for the whole separation. At the 32 second buffer
+     * limit that is a multi-second freeze on module removal or host quit.
+     */
     void stop() {
+        abort_.store(true, std::memory_order_release);
         if (!running_.exchange(false)) {
             reclaimAll();
             return;
@@ -86,25 +151,46 @@ public:
     }
 
     /**
-     * Queue a separation job from an immutable copy of @p input.
+     * Queue a separation job from an immutable copy of the input.
      *
      * The copy is taken here, on the calling thread, precisely so the worker
      * never reads a buffer that process() may be writing.
      *
+     * @param left   Left/mono channel. Required.
+     * @param right  Right channel, or nullptr for mono.
      * @return the generation ID assigned to this job. Generations start at 1,
      *         so 0 is always "nothing submitted".
      */
-    uint64_t submit(const float* input, std::size_t length, int sampleRate) {
-        const uint64_t gen = nextGeneration_.fetch_add(1, std::memory_order_relaxed) + 1;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            pending_.assign(input, input + length);
-            pendingRate_ = sampleRate;
-            pendingGeneration_ = gen;
-            hasPending_ = true;
+    uint64_t submit(const float* left, const float* right, std::size_t length,
+                    int sampleRate) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Generation is advanced under the same lock the worker holds while it
+        // makes its final check and publishes. Bumping it outside meant a
+        // submit() could land between the worker's last validation and its
+        // pointer swap, so the worker published a result it had just been told
+        // was superseded, and that stale set then stayed visible for the whole
+        // of the newer job.
+        const uint64_t gen = nextGeneration_.load(std::memory_order_relaxed) + 1;
+        nextGeneration_.store(gen, std::memory_order_relaxed);
+
+        pendingLeft_.assign(left, left + length);
+        if (right) {
+            pendingRight_.assign(right, right + length);
+            pendingChannels_ = 2;
+        } else {
+            pendingRight_.clear();
+            pendingChannels_ = 1;
         }
+        pendingRate_ = sampleRate;
+        pendingGeneration_ = gen;
+        hasPending_ = true;
         wake_.notify_one();
         return gen;
+    }
+
+    /** Mono convenience overload. */
+    uint64_t submit(const float* input, std::size_t length, int sampleRate) {
+        return submit(input, nullptr, length, sampleRate);
     }
 
     /** Generation of the most recently submitted job. */
@@ -119,16 +205,30 @@ public:
      * Must be paired with release(). Allocation-free and lock-free.
      */
     const StemSet* acquire() {
-        // Enter a critical section: publish an odd epoch so the worker knows a
-        // reader may be holding whatever is currently live.
-        readerEpoch_.fetch_add(1, std::memory_order_acq_rel);
-        return published_.load(std::memory_order_acquire);
+        // Hazard pointer: publish the exact pointer taken, then confirm it is
+        // still the live one. See the header comment for why an epoch counter
+        // cannot do this job.
+        const StemSet* candidate;
+        for (;;) {
+            candidate = published_.load(std::memory_order_acquire);
+            hazard_.store(candidate, std::memory_order_seq_cst);
+            if (candidate == published_.load(std::memory_order_seq_cst)) break;
+        }
+        return candidate;
     }
 
     void release(const StemSet* /*set*/) {
-        // Leave the critical section: back to an even epoch. The worker can now
-        // reclaim anything retired before this section began.
-        readerEpoch_.fetch_add(1, std::memory_order_acq_rel);
+        // Clearing the hazard is the whole of the audio-side release. A set
+        // retired while this section was open is then reclaimed by the worker's
+        // poll, which is why the worker never sleeps indefinitely while
+        // anything is retired: with no further recording, the old multi-megabyte
+        // buffers would otherwise stay allocated until shutdown, and successive
+        // publications that each coincide with an active audio block would stack
+        // several retired sets up.
+        //
+        // No condition_variable notify here. notify_one takes the internal lock
+        // and is not something to do from the audio thread.
+        hazard_.store(nullptr, std::memory_order_seq_cst);
     }
 
     /** Sets currently allocated, live plus awaiting reclamation. Diagnostics. */
@@ -152,25 +252,55 @@ public:
     /** Jobs discarded after separation because they had been superseded. */
     uint64_t debugJobsDiscarded() const { return jobsDiscarded_.load(std::memory_order_relaxed); }
 
+    /** Jobs abandoned because separation threw. Non-fatal by design. */
+    uint64_t debugJobsFailed() const { return jobsFailed_.load(std::memory_order_relaxed); }
+
+    /** Sets still waiting for the reader to let go. Diagnostics. */
+    std::size_t debugRetiredCount() const {
+        std::lock_guard<std::mutex> lock(retiredMutex_);
+        return retired_.size();
+    }
+
 private:
     void run() {
         workerId_.store(std::this_thread::get_id(), std::memory_order_release);
-        ReferenceFft fft(2048);
-        Hpss hpss(fft);
+
+        std::unique_ptr<FftBackend> fft =
+            fftFactory_ ? fftFactory_(kFftSize)
+                        : std::unique_ptr<FftBackend>(new ReferenceFft(kFftSize));
+        Hpss hpss(*fft);
+        hpss.setAbortFlag(&abort_);
 
         while (running_.load(std::memory_order_acquire)) {
-            std::vector<float> input;
+            std::vector<float> left, right;
+            int channels = 1;
             int sampleRate = 48000;
             uint64_t generation = 0;
 
             {
                 std::unique_lock<std::mutex> lock(mutex_);
-                wake_.wait(lock, [this] {
+                auto ready = [this] {
                     return hasPending_ || !running_.load(std::memory_order_acquire);
-                });
+                };
+                if (hasRetired()) {
+                    // Something is waiting to be freed, so do not sleep
+                    // indefinitely: the reader may release its pin without any
+                    // further job arriving to wake us.
+                    wake_.wait_for(lock, std::chrono::milliseconds(kReclaimPollMs), ready);
+                } else {
+                    wake_.wait(lock, ready);
+                }
                 if (!running_.load(std::memory_order_acquire)) break;
-                input = std::move(pending_);
-                pending_.clear();
+                if (!hasPending_) {
+                    lock.unlock();
+                    tryReclaim();
+                    continue;
+                }
+                left = std::move(pendingLeft_);
+                right = std::move(pendingRight_);
+                pendingLeft_.clear();
+                pendingRight_.clear();
+                channels = pendingChannels_;
                 sampleRate = pendingRate_;
                 generation = pendingGeneration_;
                 hasPending_ = false;
@@ -184,50 +314,93 @@ private:
             }
             jobsStarted_.fetch_add(1, std::memory_order_relaxed);
 
-            auto set = std::unique_ptr<StemSet>(new StemSet());
-            set->generation = generation;
+            std::unique_ptr<StemSet> set;
+            bool aborted = false;
 
-            Hpss::Result result;
-            hpss.separate(input.data(), input.size(), sampleRate, result);
-            for (int L = 0; L < StemSet::kNumLayers; L++) {
-                set->layer[L] = std::move(result.layer[L]);
+            // Exception boundary. An exception escaping a thread entry point
+            // calls std::terminate and takes the whole host down with it, and
+            // the largest allocations in the module happen right here: HPSS
+            // scratch and four output layers over a recording up to 32 seconds
+            // long, doubled for stereo. The spec requires separation failure to
+            // be non-fatal and to leave the unseparated fallback in place, so
+            // the failure is recorded and the generation abandoned.
+            try {
+                set = separate(hpss, left, right, channels, sampleRate, generation, aborted);
+            } catch (...) {
+                jobsFailed_.fetch_add(1, std::memory_order_relaxed);
+                set.reset();
             }
 
-            // Check again: separation is slow, and the take may have been
-            // superseded while it ran. Publishing now would overwrite a newer
-            // result with an older one.
-            if (generation != currentGeneration()) {
-                jobsDiscarded_.fetch_add(1, std::memory_order_relaxed);
+            if (!set || aborted) {
                 tryReclaim();
                 continue;
             }
 
-            publish(set.release());
+            {
+                // Final generation check and the pointer swap happen under the
+                // same lock submit() uses, so no submission can slip between
+                // them.
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (generation != nextGeneration_.load(std::memory_order_relaxed)) {
+                    jobsDiscarded_.fetch_add(1, std::memory_order_relaxed);
+                    set.reset();
+                } else {
+                    publishLocked(set.release());
+                }
+            }
             tryReclaim();
         }
     }
 
-    void publish(StemSet* fresh) {
-        StemSet* old = published_.exchange(fresh, std::memory_order_acq_rel);
-        if (!old) return;
-        // Record the epoch at retirement. The set becomes reclaimable once the
-        // reader is observed outside any critical section that began at or
-        // before this point.
-        std::lock_guard<std::mutex> lock(retiredMutex_);
-        retired_.push_back({old, readerEpoch_.load(std::memory_order_acquire)});
+    /** Run HPSS over each channel independently and assemble the set. */
+    std::unique_ptr<StemSet> separate(Hpss& hpss, const std::vector<float>& left,
+                                      const std::vector<float>& right, int channels,
+                                      int sampleRate, uint64_t generation, bool& aborted) {
+        std::unique_ptr<StemSet> set(new StemSet());
+        set->generation = generation;
+        set->channels = (channels > 1) ? 2 : 1;
+
+        Hpss::Result result;
+        hpss.separate(left.data(), left.size(), sampleRate, result);
+        if (hpss.wasAborted()) { aborted = true; return set; }
+        for (int L = 0; L < StemSet::kNumLayers; L++) {
+            set->layer[L].channel[0] = std::move(result.layer[L]);
+        }
+
+        if (set->channels == 2) {
+            // Separate the right channel on its own. Shared-mask stereo HPSS is
+            // a refinement, not a requirement, and doing it per channel is the
+            // variant that cannot silently mix the two sides together.
+            Hpss::Result rightResult;
+            hpss.separate(right.data(), right.size(), sampleRate, rightResult);
+            if (hpss.wasAborted()) { aborted = true; return set; }
+            for (int L = 0; L < StemSet::kNumLayers; L++) {
+                set->layer[L].channel[1] = std::move(rightResult.layer[L]);
+            }
+        }
+        return set;
     }
 
-    /** Free retired sets the reader can no longer be holding. Worker only. */
+    /** Swap in a fresh set and retire the old one. Caller holds mutex_. */
+    void publishLocked(StemSet* fresh) {
+        StemSet* old = published_.exchange(fresh, std::memory_order_acq_rel);
+        if (!old) return;
+        std::lock_guard<std::mutex> lock(retiredMutex_);
+        retired_.push_back(old);
+    }
+
+    bool hasRetired() const {
+        std::lock_guard<std::mutex> lock(retiredMutex_);
+        return !retired_.empty();
+    }
+
+    /** Free retired sets the reader is not pinning. Worker only. */
     void tryReclaim() {
         std::lock_guard<std::mutex> lock(retiredMutex_);
-        const uint64_t now = readerEpoch_.load(std::memory_order_acquire);
+        const StemSet* pinned = hazard_.load(std::memory_order_seq_cst);
         for (auto it = retired_.begin(); it != retired_.end();) {
-            // Even epoch means the reader is not inside a critical section.
-            // A strictly later epoch means it has entered and left at least one
-            // since retirement, so it cannot still hold this pointer.
-            const bool readerIdle = (now % 2 == 0);
-            if (readerIdle && now >= it->epoch) {
-                destroySet(it->set, /*shuttingDown=*/false);
+            if (*it != pinned) {
+                destroySet(*it, /*shuttingDown=*/false);
                 it = retired_.erase(it);
             } else {
                 ++it;
@@ -242,7 +415,7 @@ private:
         // has been joined and no reader remains, so they are not counted.
         destroySet(live, /*shuttingDown=*/true);
         std::lock_guard<std::mutex> lock(retiredMutex_);
-        for (auto& entry : retired_) destroySet(entry.set, /*shuttingDown=*/true);
+        for (auto* set : retired_) destroySet(set, /*shuttingDown=*/true);
         retired_.clear();
     }
 
@@ -261,31 +434,34 @@ private:
         delete set;
     }
 
-    struct Retired {
-        StemSet* set;
-        uint64_t epoch;
-    };
+    static constexpr std::size_t kFftSize = 2048;
+    static constexpr int kReclaimPollMs = 20;
 
     std::atomic<bool> running_{false};
+    std::atomic<bool> abort_{false};
     std::thread thread_;
+    FftFactory fftFactory_;
 
     mutable std::mutex mutex_;
     std::condition_variable wake_;
-    std::vector<float> pending_;
+    std::vector<float> pendingLeft_;
+    std::vector<float> pendingRight_;
+    int pendingChannels_ = 1;
     int pendingRate_ = 48000;
     uint64_t pendingGeneration_ = 0;
     bool hasPending_ = false;
 
     std::atomic<uint64_t> nextGeneration_{0};
     std::atomic<StemSet*> published_{nullptr};
-    std::atomic<uint64_t> readerEpoch_{0};
+    std::atomic<const StemSet*> hazard_{nullptr};
 
     mutable std::mutex retiredMutex_;
-    std::vector<Retired> retired_;
+    std::vector<StemSet*> retired_;
     std::atomic<std::size_t> freedOffWorker_{0};
     std::atomic<std::thread::id> workerId_{};
     std::atomic<uint64_t> jobsStarted_{0};
     std::atomic<uint64_t> jobsDiscarded_{0};
+    std::atomic<uint64_t> jobsFailed_{0};
 };
 
 }  // namespace stems

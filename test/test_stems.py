@@ -426,6 +426,61 @@ class TestSeparationWorker:
         result = run_test(["--test-worker-empty"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_stereo_stems_keep_both_channels(self):
+        """Four stereo stems, not one side dropped and not the two interleaved.
+
+        The two submitted channels are unrelated signals, so a worker that
+        copied one over the other, or read them interleaved as a single signal,
+        produces identical layers and fails. Verified to have teeth: making
+        submit() copy the left channel into the right fails with "left and right
+        layers are identical".
+        """
+        result = run_test(["--test-worker-stereo"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_separation_failure_is_non_fatal(self):
+        """An exception must not escape the thread entry and kill the host.
+
+        Driven by an FFT backend that always throws. Verified to have teeth:
+        narrowing the catch so the exception escapes aborts the whole test
+        binary with "terminating due to uncaught exception".
+        """
+        result = run_test(["--test-worker-failure"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_injected_fft_backend_is_the_one_used(self):
+        """ReferenceFft is the test reference, not the production backend.
+
+        Without an injection point every host would be forced onto a double
+        precision radix-2 implementation for every frame of a recording up to 32
+        seconds long.
+        """
+        result = run_test(["--test-worker-fft-injection"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_shutdown_interrupts_an_in_flight_separation(self):
+        """stop() must not wait for a whole separation to finish.
+
+        Clearing a running flag cannot interrupt work already inside
+        Hpss::separate, so cancellation is checked at frame granularity instead.
+        Verified to have teeth: unwiring the abort flag makes stop() wait 7898 ms
+        against a budget of 1500.
+        """
+        result = run_test(["--test-worker-abort"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_retired_set_is_reclaimed_when_the_reader_leaves(self):
+        """Reclaiming only at publication time leaked until shutdown.
+
+        A set retired while the audio thread held it cannot be freed at that
+        moment. If nothing then triggers a revisit, and no further recording is
+        made, those buffers stay allocated for the life of the module. Verified
+        to have teeth: removing the worker's reclaim poll fails with "never
+        reclaimed after the reader released it".
+        """
+        result = run_test(["--test-worker-reclaim-release"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_concurrent_submit_and_acquire(self):
         """A reader standing in for the audio thread hammers acquire/release
         while jobs are submitted, checking for races and for frees landing on

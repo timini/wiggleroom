@@ -46,6 +46,7 @@
 #include <atomic>
 #include <chrono>
 #include <random>
+#include <stdexcept>
 #include <thread>
 #include <string>
 #include <vector>
@@ -1263,7 +1264,7 @@ bool workerPublishes(std::string& detail) {
     if (!got) { detail = "no stem set published within the timeout"; worker.stop(); return false; }
 
     const StemSet* s = worker.acquire();
-    bool sized = s && s->layer[0].size() == input.size();
+    bool sized = s && s->layer[0].channel[0].size() == input.size();
     worker.release(s);
     worker.stop();
     if (!sized) { detail = "published layers are the wrong size"; return false; }
@@ -1313,7 +1314,7 @@ bool workerDiscardsStale(std::string& detail) {
     std::this_thread::sleep_for(std::chrono::milliseconds(400));
     const StemSet* s = worker.acquire();
     const bool stillNew = (s != nullptr && s->generation == genB &&
-                           s->layer[0].size() == second.size());
+                           s->layer[0].channel[0].size() == second.size());
     worker.release(s);
     worker.stop();
     if (!stillNew) { detail = "a stale job published over the newer take"; return false; }
@@ -1385,7 +1386,7 @@ bool workerConcurrentHammer(std::string& detail) {
             if (s) {
                 volatile float sink = 0.f;
                 for (int L = 0; L < 4; L++) {
-                    if (!s->layer[L].empty()) sink += s->layer[L][0];
+                    if (!s->layer[L].channel[0].empty()) sink += s->layer[L].channel[0][0];
                 }
                 (void)sink;
                 reads.fetch_add(1, std::memory_order_relaxed);
@@ -1436,6 +1437,252 @@ bool workerCleanShutdown(std::string& detail) {
     return true;
 }
 
+/**
+ * Stereo input must produce four stereo stems, not one channel silently
+ * dropped and not the two sides interleaved into one signal.
+ */
+bool workerStereo(std::string& detail) {
+    SeparationWorker worker;
+    worker.start();
+
+    // Deliberately UNRELATED channels. If the worker interleaved them, or
+    // copied one over the other, the two sides would come out identical.
+    auto left  = makeJobInput(16384, 11);
+    auto right = makeJobInput(16384, 12);
+
+    const uint64_t gen = worker.submit(left.data(), right.data(), left.size(), 48000);
+    if (!waitFor([&] {
+            const StemSet* s = worker.acquire();
+            const bool ok = (s != nullptr && s->generation == gen);
+            worker.release(s);
+            return ok;
+        })) {
+        detail = "stereo job never published";
+        worker.stop();
+        return false;
+    }
+
+    const StemSet* s = worker.acquire();
+    std::string why;
+    if (s->channels != 2) {
+        why = "published set reports " + std::to_string(s->channels) + " channels";
+    } else {
+        double worstDiff = 0.0;
+        double sumLeftEnergy = 0.0;
+        double sumRightEnergy = 0.0;
+        for (int L = 0; L < StemSet::kNumLayers && why.empty(); L++) {
+            const auto& lc = s->layer[L].channel[0];
+            const auto& rc = s->layer[L].channel[1];
+            if (lc.size() != left.size() || rc.size() != right.size()) {
+                why = "layer " + std::to_string(L) + " has the wrong length";
+                break;
+            }
+            for (std::size_t i = 0; i < lc.size(); i++) {
+                worstDiff = std::max(worstDiff, std::fabs((double)lc[i] - (double)rc[i]));
+                sumLeftEnergy  += (double)lc[i] * lc[i];
+                sumRightEnergy += (double)rc[i] * rc[i];
+            }
+        }
+        if (why.empty() && worstDiff < 1e-4) {
+            why = "left and right layers are identical; one channel was dropped or copied";
+        }
+        if (why.empty() && sumRightEnergy < 1e-6) {
+            why = "right channel is silent";
+        }
+        if (why.empty() && sumLeftEnergy < 1e-6) {
+            why = "left channel is silent";
+        }
+    }
+    worker.release(s);
+    worker.stop();
+    if (!why.empty()) { detail = why; return false; }
+    return true;
+}
+
+namespace {
+/** An FFT backend that always throws, to drive the failure path. */
+struct ThrowingFft : WiggleRoom::stems::FftBackend {
+    explicit ThrowingFft(std::size_t n) : n_(n) {}
+    std::size_t size() const override { return n_; }
+    void forward(const float*, float*) override { throw std::runtime_error("fft failed"); }
+    void inverse(const float*, float*) override { throw std::runtime_error("fft failed"); }
+    std::size_t n_;
+};
+
+/** Counts how many backends were built, so injection can be proved. */
+std::atomic<int> g_injectedBackends{0};
+}  // namespace
+
+/**
+ * A separation that throws must be recorded and abandoned, not allowed to
+ * escape the thread entry point and call std::terminate.
+ */
+bool workerSeparationFailureIsNonFatal(std::string& detail) {
+    SeparationWorker worker;
+    worker.setFftFactory([](std::size_t n) {
+        return std::unique_ptr<WiggleRoom::stems::FftBackend>(new ThrowingFft(n));
+    });
+    worker.start();
+
+    auto input = makeJobInput(8192, 13);
+    worker.submit(input.data(), input.size(), 48000);
+
+    if (!waitFor([&] { return worker.debugJobsFailed() >= 1; }, 5000)) {
+        detail = "the failing job was never recorded as failed";
+        worker.stop();
+        return false;
+    }
+
+    // Nothing must have been published, and the worker must still be alive and
+    // able to take another job.
+    const StemSet* s = worker.acquire();
+    const bool publishedNothing = (s == nullptr);
+    worker.release(s);
+
+    worker.submit(input.data(), input.size(), 48000);
+    const bool stillAlive = waitFor([&] { return worker.debugJobsFailed() >= 2; }, 5000);
+    worker.stop();
+
+    if (!publishedNothing) { detail = "a failed separation published a set"; return false; }
+    if (!stillAlive) { detail = "the worker stopped accepting jobs after a failure"; return false; }
+    return true;
+}
+
+/** The injected FFT backend must actually be the one the worker uses. */
+bool workerUsesInjectedFft(std::string& detail) {
+    g_injectedBackends.store(0);
+    SeparationWorker worker;
+    worker.setFftFactory([](std::size_t n) {
+        g_injectedBackends.fetch_add(1);
+        return std::unique_ptr<WiggleRoom::stems::FftBackend>(new ReferenceFft(n));
+    });
+    worker.start();
+
+    auto input = makeJobInput(8192, 14);
+    const uint64_t gen = worker.submit(input.data(), input.size(), 48000);
+    const bool got = waitFor([&] {
+        const StemSet* s = worker.acquire();
+        const bool ok = (s != nullptr && s->generation == gen);
+        worker.release(s);
+        return ok;
+    });
+    worker.stop();
+
+    if (!got) { detail = "job never published with the injected backend"; return false; }
+    if (g_injectedBackends.load() != 1) {
+        detail = "factory was called " + std::to_string(g_injectedBackends.load()) +
+                 " times; the worker is not using the injected backend";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * stop() must interrupt a separation already in flight.
+ *
+ * The plain shutdown test uses a small buffer that finishes almost instantly,
+ * so it passes whether or not cancellation exists. This one submits a job large
+ * enough that running it to completion takes many seconds, waits until the
+ * worker has definitely begun it, and only then calls stop().
+ */
+bool workerAbortsInFlightSeparation(std::string& detail) {
+    // Sized from a measured run: separating this uncancelled takes several
+    // seconds through ReferenceFft, well past the budget asserted below.
+    auto input = makeJobInput(600000, 15);
+
+    SeparationWorker worker;
+    worker.start();
+    worker.submit(input.data(), input.size(), 48000);
+
+    if (!waitFor([&] { return worker.debugJobsStarted() >= 1; }, 5000)) {
+        detail = "worker never started the long job";
+        worker.stop();
+        return false;
+    }
+    // Let it get properly into the separation rather than stopping at the door.
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+    const auto begin = std::chrono::steady_clock::now();
+    worker.stop();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - begin).count();
+
+    if (elapsed > 1500) {
+        detail = "stop() waited " + std::to_string(elapsed) +
+                 " ms for the in-flight separation";
+        return false;
+    }
+    if (worker.liveSetCount() != 0) {
+        detail = "sets still live after an aborted shutdown";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * A set retired while the reader held it must be reclaimed once the reader
+ * lets go, WITHOUT waiting for another job.
+ *
+ * Reclaiming only at publication time meant that if every publication happened
+ * to coincide with an active audio block, retired sets accumulated and the last
+ * one stayed allocated until shutdown.
+ */
+bool workerReclaimsAfterReaderLeaves(std::string& detail) {
+    SeparationWorker worker;
+    worker.start();
+
+    auto input = makeJobInput(8192, 16);
+    const uint64_t genA = worker.submit(input.data(), input.size(), 48000);
+    if (!waitFor([&] {
+            const StemSet* s = worker.acquire();
+            const bool ok = (s != nullptr && s->generation == genA);
+            worker.release(s);
+            return ok;
+        })) {
+        detail = "first job never published";
+        worker.stop();
+        return false;
+    }
+
+    // Pin the live set and hold it across the next publication.
+    const StemSet* pinned = worker.acquire();
+    if (!pinned) { detail = "acquire returned null for a published set"; worker.stop(); return false; }
+
+    const uint64_t genB = worker.submit(input.data(), input.size(), 48000);
+    if (!waitFor([&] { return worker.currentGeneration() == genB &&
+                              worker.debugRetiredCount() >= 1; }, 15000)) {
+        detail = "the pinned set was never retired";
+        worker.release(pinned);
+        worker.stop();
+        return false;
+    }
+
+    // While still pinned it must NOT be freed.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    if (worker.debugRetiredCount() == 0) {
+        detail = "a set the reader was still holding was reclaimed";
+        worker.release(pinned);
+        worker.stop();
+        return false;
+    }
+
+    // Let go, and submit nothing further. Reclamation must still happen.
+    worker.release(pinned);
+    const bool reclaimed = waitFor([&] { return worker.debugRetiredCount() == 0; }, 5000);
+    const std::size_t freedOnAudio = worker.debugFreedOnAcquireThread();
+    worker.stop();
+
+    if (!reclaimed) {
+        detail = "the retired set was never reclaimed after the reader released it";
+        return false;
+    }
+    if (freedOnAudio != 0) {
+        detail = std::to_string(freedOnAudio) + " sets were freed on the reader thread";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /**
@@ -1447,50 +1694,74 @@ bool workerCleanShutdown(std::string& detail) {
  * table-driven dispatch that does not look like `cmd == "..."` at all. An
  * executable declaring its own commands cannot drift from itself.
  */
-const char* const kCommands[] = {
+struct TestCase {
+    const char* cmd;
+    const char* name;
+    bool (*fn)(std::string&);
+};
+
+/**
+ * Every check with the plain bool(std::string&) signature.
+ *
+ * Dispatch, --list-commands and --self-test all read this ONE table. They used
+ * to be three separate lists, and they drifted: five worker checks were added to
+ * dispatch and to --list-commands but not to the hand-written --self-test
+ * sequence, so --self-test kept reporting the old count and silently skipped
+ * them. A single table cannot drift from itself.
+ */
+const TestCase kCases[] = {
+    {"--test-buffer-roundtrip",   "buffer_roundtrip",   bufferRoundtrip},
+    {"--test-buffer-wraparound",  "buffer_wraparound",  bufferWraparound},
+    {"--test-buffer-no-alloc",    "buffer_no_alloc",    bufferNoAlloc},
+    {"--test-buffer-interpolate", "buffer_interpolate", bufferInterpolate},
+    {"--test-buffer-capacity",    "buffer_capacity",    bufferCapacity},
+    {"--test-buffer-non-finite",  "buffer_non_finite",  bufferNonFinite},
+    {"--test-buffer-clear-cheap", "buffer_clear_cheap", bufferClearIsCheap},
+    {"--test-transport-lock",     "transport_lock",     transportLock},
+    {"--test-transport-reset",    "transport_reset",    transportReset},
+    {"--test-transport-division", "transport_division", transportDivision},
+    {"--test-transport-loop",     "transport_loop",     transportLoop},
+    {"--test-transport-no-clock", "transport_no_clock", transportNoClock},
+    {"--test-transport-division-snap",   "transport_division_snap",   transportDivisionSnap},
+    {"--test-transport-reset-coincident","transport_reset_coincident",transportResetCoincident},
+    {"--test-transport-loop-max-start",  "transport_loop_max_start",  transportLoopMaxStart},
+    {"--test-transport-samplerate",      "transport_samplerate",      transportSampleRateChange},
+    {"--test-transport-clock-restart",   "transport_clock_restart",   transportClockRestart},
+    {"--test-transport-downbeat-jitter", "transport_downbeat_jitter", transportDownbeatJitter},
+    {"--test-transport-reset-midinterval","transport_reset_midinterval",transportResetMidInterval},
+    {"--test-stft-reconstruct",   "stft_reconstruct",   stftReconstructDefault},
+    {"--test-stft-odd-lengths",   "stft_odd_lengths",   stftReconstructOddLengths},
+    {"--test-stft-zero-mask",     "stft_zero_mask",     stftZeroMask},
+    {"--test-stft-short-input",   "stft_short_input",   stftShortInput},
+    {"--test-stft-cola",          "stft_cola",          stftCola},
+    {"--test-stft-tiny-fft",      "stft_tiny_fft",      stftTinyFft},
+    {"--test-hpss-separates",     "hpss_separates",     hpssSeparates},
+    {"--test-hpss-sum",           "hpss_sum",           hpssLayersSumToSource},
+    {"--test-hpss-low-band",      "hpss_low_band",      hpssLowBand},
+    {"--test-hpss-degenerate",    "hpss_degenerate",    hpssDegenerate},
+    {"--test-hpss-residual",      "hpss_residual",      hpssResidualPopulated},
+    {"--test-hpss-low-split-boundary","hpss_low_split_boundary",hpssLowSplitBoundary},
+    {"--test-hpss-margin",        "hpss_margin",        hpssMarginBeforeExponent},
+    {"--test-hpss-subframe",      "hpss_subframe",      hpssSubFrameInput},
+    {"--test-worker-publishes",   "worker_publishes",   workerPublishes},
+    {"--test-worker-stale",       "worker_stale",       workerDiscardsStale},
+    {"--test-worker-retire",      "worker_retire",      workerRetiresOffAudioThread},
+    {"--test-worker-empty",       "worker_empty",       workerEmptyAcquire},
+    {"--test-worker-stereo",      "worker_stereo",      workerStereo},
+    {"--test-worker-failure",     "worker_failure",     workerSeparationFailureIsNonFatal},
+    {"--test-worker-fft-injection", "worker_fft_injection", workerUsesInjectedFft},
+    {"--test-worker-abort",       "worker_abort",       workerAbortsInFlightSeparation},
+    {"--test-worker-reclaim-release", "worker_reclaim_release", workerReclaimsAfterReaderLeaves},
+    {"--test-worker-hammer",      "worker_hammer",      workerConcurrentHammer},
+    {"--test-worker-shutdown",    "worker_shutdown",    workerCleanShutdown},
+};
+
+/** The FFT checks take different arguments, so they are named separately. */
+const char* const kFftCommands[] = {
     "--test-fft-roundtrip",
     "--test-fft-impulse",
     "--test-fft-sine",
     "--test-fft-sizes",
-    "--test-buffer-roundtrip",
-    "--test-buffer-wraparound",
-    "--test-buffer-no-alloc",
-    "--test-buffer-interpolate",
-    "--test-buffer-capacity",
-    "--test-buffer-non-finite",
-    "--test-buffer-clear-cheap",
-    "--test-transport-lock",
-    "--test-transport-reset",
-    "--test-transport-division",
-    "--test-transport-loop",
-    "--test-transport-no-clock",
-    "--test-transport-division-snap",
-    "--test-transport-reset-coincident",
-    "--test-transport-loop-max-start",
-    "--test-transport-samplerate",
-    "--test-transport-clock-restart",
-    "--test-transport-downbeat-jitter",
-    "--test-transport-reset-midinterval",
-    "--test-stft-reconstruct",
-    "--test-stft-odd-lengths",
-    "--test-stft-zero-mask",
-    "--test-stft-short-input",
-    "--test-stft-cola",
-    "--test-stft-tiny-fft",
-    "--test-hpss-separates",
-    "--test-hpss-sum",
-    "--test-hpss-low-band",
-    "--test-hpss-degenerate",
-    "--test-hpss-residual",
-    "--test-hpss-low-split-boundary",
-    "--test-hpss-margin",
-    "--test-hpss-subframe",
-    "--test-worker-publishes",
-    "--test-worker-stale",
-    "--test-worker-retire",
-    "--test-worker-empty",
-    "--test-worker-hammer",
-    "--test-worker-shutdown",
 };
 
 int main(int argc, char** argv) {
@@ -1499,7 +1770,8 @@ int main(int argc, char** argv) {
     if (cmd == "--dump-hpss-medians") return dumpHpssMedians();
 
     if (cmd == "--list-commands") {
-        for (const char* c : kCommands) std::cout << c << "\n";
+        for (const char* c : kFftCommands) std::cout << c << "\n";
+        for (const auto& c : kCases) std::cout << c.cmd << "\n";
         return 0;
     }
 
@@ -1557,64 +1829,18 @@ int main(int argc, char** argv) {
         return allOk ? 0 : 1;
     }
 
-    // RingBuffer commands
-    {
-        struct BufferCase { const char* cmd; const char* name; bool (*fn)(std::string&); };
-        const BufferCase bufferCases[] = {
-            {"--test-buffer-roundtrip",   "buffer_roundtrip",   bufferRoundtrip},
-            {"--test-buffer-wraparound",  "buffer_wraparound",  bufferWraparound},
-            {"--test-buffer-no-alloc",    "buffer_no_alloc",    bufferNoAlloc},
-            {"--test-buffer-interpolate", "buffer_interpolate", bufferInterpolate},
-            {"--test-buffer-capacity",    "buffer_capacity",    bufferCapacity},
-            {"--test-buffer-non-finite",  "buffer_non_finite",  bufferNonFinite},
-            {"--test-buffer-clear-cheap", "buffer_clear_cheap", bufferClearIsCheap},
-            {"--test-transport-lock",     "transport_lock",     transportLock},
-            {"--test-transport-reset",    "transport_reset",    transportReset},
-            {"--test-transport-division", "transport_division", transportDivision},
-            {"--test-transport-loop",     "transport_loop",     transportLoop},
-            {"--test-transport-no-clock", "transport_no_clock", transportNoClock},
-            {"--test-transport-division-snap",   "transport_division_snap",   transportDivisionSnap},
-            {"--test-transport-reset-coincident","transport_reset_coincident",transportResetCoincident},
-            {"--test-transport-loop-max-start",  "transport_loop_max_start",  transportLoopMaxStart},
-            {"--test-transport-samplerate",      "transport_samplerate",      transportSampleRateChange},
-            {"--test-transport-clock-restart",   "transport_clock_restart",   transportClockRestart},
-            {"--test-transport-downbeat-jitter", "transport_downbeat_jitter", transportDownbeatJitter},
-            {"--test-transport-reset-midinterval","transport_reset_midinterval",transportResetMidInterval},
-            {"--test-stft-reconstruct",   "stft_reconstruct",   stftReconstructDefault},
-            {"--test-stft-odd-lengths",   "stft_odd_lengths",   stftReconstructOddLengths},
-            {"--test-stft-zero-mask",     "stft_zero_mask",     stftZeroMask},
-            {"--test-stft-short-input",   "stft_short_input",   stftShortInput},
-            {"--test-stft-cola",          "stft_cola",          stftCola},
-            {"--test-stft-tiny-fft",      "stft_tiny_fft",      stftTinyFft},
-            {"--test-hpss-separates",     "hpss_separates",     hpssSeparates},
-            {"--test-hpss-sum",           "hpss_sum",           hpssLayersSumToSource},
-            {"--test-hpss-low-band",      "hpss_low_band",      hpssLowBand},
-            {"--test-hpss-degenerate",    "hpss_degenerate",    hpssDegenerate},
-            {"--test-hpss-residual",      "hpss_residual",      hpssResidualPopulated},
-            {"--test-hpss-low-split-boundary","hpss_low_split_boundary",hpssLowSplitBoundary},
-            {"--test-hpss-margin",        "hpss_margin",        hpssMarginBeforeExponent},
-            {"--test-hpss-subframe",      "hpss_subframe",      hpssSubFrameInput},
-            {"--test-worker-publishes",   "worker_publishes",   workerPublishes},
-            {"--test-worker-stale",       "worker_stale",       workerDiscardsStale},
-            {"--test-worker-retire",      "worker_retire",      workerRetiresOffAudioThread},
-            {"--test-worker-empty",       "worker_empty",       workerEmptyAcquire},
-            {"--test-worker-hammer",      "worker_hammer",      workerConcurrentHammer},
-            {"--test-worker-shutdown",    "worker_shutdown",    workerCleanShutdown},
-        };
-        for (const auto& c : bufferCases) {
-            if (cmd == c.cmd) {
-                std::string detail;
-                const bool ok = c.fn(detail);
-                emit(c.name, ok, detail.empty() ? "" : ("\"detail\": \"" + detail + "\""));
-                return ok ? 0 : 1;
-            }
+    for (const auto& c : kCases) {
+        if (cmd == c.cmd) {
+            std::string detail;
+            const bool ok = c.fn(detail);
+            emit(c.name, ok, detail.empty() ? "" : ("\"detail\": \"" + detail + "\""));
+            return ok ? 0 : 1;
         }
     }
 
     if (cmd == "--self-test") {
         int passed = 0, failed = 0;
         double err = 0.0, leakage = 0.0;
-        std::string detail;
 
         auto record = [&](bool ok) { ok ? passed++ : failed++; };
         record(fftRoundtrip(2048, err));
@@ -1626,45 +1852,13 @@ int main(int argc, char** argv) {
             if (!fftRoundtrip(n, e)) sizesOk = false;
         }
         record(sizesOk);
-        record(bufferRoundtrip(detail));
-        record(bufferWraparound(detail));
-        record(bufferNoAlloc(detail));
-        record(bufferInterpolate(detail));
-        record(bufferCapacity(detail));
-        record(bufferNonFinite(detail));
-        record(bufferClearIsCheap(detail));
-        record(transportLock(detail));
-        record(transportReset(detail));
-        record(transportDivision(detail));
-        record(transportLoop(detail));
-        record(transportNoClock(detail));
-        record(transportDivisionSnap(detail));
-        record(transportResetCoincident(detail));
-        record(transportLoopMaxStart(detail));
-        record(transportSampleRateChange(detail));
-        record(transportClockRestart(detail));
-        record(transportDownbeatJitter(detail));
-        record(transportResetMidInterval(detail));
-        record(stftReconstructDefault(detail));
-        record(stftReconstructOddLengths(detail));
-        record(stftZeroMask(detail));
-        record(stftShortInput(detail));
-        record(stftCola(detail));
-        record(stftTinyFft(detail));
-        record(hpssSeparates(detail));
-        record(hpssLayersSumToSource(detail));
-        record(hpssLowBand(detail));
-        record(hpssDegenerate(detail));
-        record(hpssResidualPopulated(detail));
-        record(hpssLowSplitBoundary(detail));
-        record(hpssMarginBeforeExponent(detail));
-        record(hpssSubFrameInput(detail));
-        record(workerPublishes(detail));
-        record(workerDiscardsStale(detail));
-        record(workerRetiresOffAudioThread(detail));
-        record(workerEmptyAcquire(detail));
-        record(workerConcurrentHammer(detail));
-        record(workerCleanShutdown(detail));
+
+        // Everything else comes straight off the dispatch table, so a check
+        // that is runnable is a check --self-test runs.
+        for (const auto& c : kCases) {
+            std::string detail;
+            record(c.fn(detail));
+        }
 
         std::cout << "{\"test\": \"self_test\""
                   << ", \"passed\": " << passed
