@@ -400,7 +400,12 @@ private:
         // cheap version of that and is plenty here, since the material is about
         // to be separated again anyway.
         if (ratio < 1.0) {
-            const int span = std::max(1, (int)std::lround(1.0 / ratio));
+            // TWICE the decimation factor. A moving average of length D puts
+            // its first null at the new SAMPLE RATE, not the new Nyquist, which
+            // is where the fold-back starts: at 96 to 44.1 that left content
+            // just under the new Nyquist at 0.80 of full scale. Length 2D puts
+            // the null where it is needed and brings the same tone to 0.22.
+            const int span = std::max(1, 2 * (int)std::lround(1.0 / ratio));
             if (span > 1) {
                 smoothInPlace(resampleLeft_, span);
                 smoothInPlace(resampleRight_, span);

@@ -7552,7 +7552,7 @@ bool bufferSurvivesRateChange(std::string& detail) {
                 high.readFrame(i, a, b);
                 hl[i] = a;
             }
-            const int span = std::max(1, (int)std::lround((double)c.from / c.to));
+            const int span = std::max(1, 2 * (int)std::lround((double)c.from / c.to));
             std::vector<float> smoothed(hl.size(), 0.f);
             double running = 0.0;
             for (std::size_t i = 0; i < hl.size(); i++) {
@@ -7566,7 +7566,9 @@ bool bufferSurvivesRateChange(std::string& detail) {
                 rawPeak = std::max(rawPeak, (double)std::fabs(hl[i]));
                 filteredPeak = std::max(filteredPeak, (double)std::fabs(smoothed[i]));
             }
-            if (filteredPeak > rawPeak * 0.7) {
+            // A length-2D average brings the tone to about 0.22 of full scale;
+            // a length-D one leaves it at 0.80, so the line goes between them.
+            if (filteredPeak > rawPeak * 0.5) {
                 detail = "downsampling " + std::to_string(c.from) + " to " +
                          std::to_string(c.to) + " left content above the new Nyquist at " +
                          std::to_string(filteredPeak) + " against " +
