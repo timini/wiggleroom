@@ -444,6 +444,16 @@ class TestSeparationWorker:
         result = run_test(["--test-worker-retire"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_invalidate_retires_the_current_take(self):
+        """A new recording supersedes the old one the moment it starts. Leaving
+        the previous set published means the module keeps playing the last take
+        right through the new one, and keeps it for good if the new separation
+        fails. Also checks the retired set is still reclaimed on the worker and
+        that a later take publishes normally.
+        """
+        result = run_test(["--test-worker-invalidate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_acquire_before_any_job_is_safe(self):
         """This is the state on patch load."""
         result = run_test(["--test-worker-empty"])
