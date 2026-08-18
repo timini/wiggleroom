@@ -112,23 +112,37 @@ public:
         samplesLastCall_ = 0;
         if (!set) return false;
         if (layer < 0 || layer >= StemSet::kNumLayers) return false;
-        const auto& source = set->layer[layer].channel[0];
-        if (source.size() < 2) return false;
         if (!std::isfinite(playhead)) return false;
+        const auto& source = set->layer[layer].channel[0];
+
+        // A new stem set, a different layer or a changed window means whatever
+        // is being built, or was last published, no longer describes the
+        // material. Start again rather than finish a frame that is half one
+        // thing and half another.
+        const bool stale = (phase_ == Phase::Idle) ||
+                           set->generation != buildGeneration_ ||
+                           layer != buildLayer_ || windowSamples_ != buildWindow_;
+
+        // A stem set too short to interpolate cannot produce a frame. The
+        // staleness check has to come FIRST, though: returning early on the
+        // size left frame() showing the previous recording indefinitely once a
+        // short take was published, and Hpss::separate sizes every layer to the
+        // input length and accepts sub-frame input, so such a set really does
+        // reach here. Publish silence once instead, so the wavetable follows
+        // the take rather than keeping a frame from material that is gone.
+        if (source.size() < 2) {
+            if (stale && !publishedSilenceFor(set->generation, layer)) {
+                publishSilence(set->generation, layer);
+                return true;
+            }
+            return false;
+        }
 
         // Starting a build snapshots WHERE and WHAT to read, once. Re-reading
         // the playhead every call would smear a single frame across however far
         // the transport moved while it was being built, so the frame would
         // never correspond to any actual moment in the material.
-        if (phase_ == Phase::Idle) beginBuild(set, layer, source.size(), playhead);
-
-        // A new stem set, a different layer or a changed window mid-build means
-        // the snapshot is stale. Start again rather than finish a frame that is
-        // half one thing and half another.
-        if (set->generation != buildGeneration_ || layer != buildLayer_ ||
-            windowSamples_ != buildWindow_) {
-            beginBuild(set, layer, source.size(), playhead);
-        }
+        if (stale) beginBuild(set, layer, source.size(), playhead);
 
         if (phase_ == Phase::Reading) {
             const std::size_t count =
@@ -213,6 +227,7 @@ private:
         buildGeneration_ = set->generation;
         buildLayer_ = layer;
         buildWindow_ = windowSamples_;
+        silencePublished_ = false;
 
         const double window = static_cast<double>(buildWindow_);
         // The window is CENTRED on the playhead, and the offset moves it by up
@@ -227,6 +242,24 @@ private:
         sourceMin_ = 0.0;
         sourceMax_ = 0.0;
         haveSourceExtent_ = false;
+    }
+
+    bool publishedSilenceFor(uint64_t generation, int layer) const {
+        return silencePublished_ && buildGeneration_ == generation &&
+               buildLayer_ == layer && buildWindow_ == windowSamples_;
+    }
+
+    void publishSilence(uint64_t generation, int layer) {
+        float* back = buffers_[1 - frontIndex_];
+        for (std::size_t i = 0; i < kFrameSize; i++) back[i] = 0.f;
+        frontIndex_ = 1 - frontIndex_;
+        phase_ = Phase::Idle;
+        buildGeneration_ = generation;
+        buildLayer_ = layer;
+        buildWindow_ = windowSamples_;
+        silencePublished_ = true;
+        sourcePeak_ = 0.0;
+        frameCount_++;
     }
 
     void beginFinalise() {
@@ -368,6 +401,7 @@ private:
     double gain_ = 0.0;
     double sourcePeak_ = 0.0;
 
+    bool silencePublished_ = false;
     std::size_t samplesLastCall_ = 0;
     uint64_t frameCount_ = 0;
 

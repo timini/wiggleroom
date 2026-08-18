@@ -4350,6 +4350,79 @@ bool wtBoundaryPadding(std::string& detail) {
     return true;
 }
 
+/**
+ * A stem set too short to interpolate must invalidate the old frame.
+ *
+ * Returning early on the size, before checking whether the set is stale, left
+ * frame() showing the previous recording indefinitely once a short take was
+ * published. Hpss::separate sizes every layer to the input length and accepts
+ * sub-frame input, so a zero or one frame StemSet really does reach here, and
+ * the wavetable has to follow the take rather than keep material that is gone.
+ */
+bool wtDegenerateSet(std::string& detail) {
+    const auto real = toneSet(220.0, 8000, /*generation=*/1);
+    WavetableExtract e;
+    buildFrame(e, real, 0, 4000.0);
+    if (e.debugFramePeak() < 0.5) {
+        detail = "setup failed: no frame from real material";
+        return false;
+    }
+    const uint64_t countBefore = e.frameCount();
+
+    for (std::size_t length : {(std::size_t)0, (std::size_t)1}) {
+        StemSet tiny;
+        tiny.channels = 1;
+        tiny.generation = 10 + length;
+        for (int L = 0; L < StemSet::kNumLayers; L++) {
+            tiny.layer[L].channel[0].assign(length, 0.5f);
+        }
+
+        bool published = false;
+        for (int i = 0; i < 200; i++) {
+            if (e.process(&tiny, 0, 0.0)) published = true;
+        }
+        if (!published) {
+            detail = "a " + std::to_string(length) +
+                     " frame stem set never invalidated the old wavetable";
+            return false;
+        }
+        if (e.debugFramePeak() > 1e-6) {
+            detail = "a " + std::to_string(length) +
+                     " frame stem set left a frame peaking at " +
+                     std::to_string(e.debugFramePeak());
+            return false;
+        }
+    }
+    if (e.frameCount() <= countBefore) {
+        detail = "the frame counter did not advance for the degenerate sets";
+        return false;
+    }
+
+    // It must publish silence ONCE per take, not spin republishing it.
+    StemSet tiny;
+    tiny.channels = 1;
+    tiny.generation = 99;
+    for (int L = 0; L < StemSet::kNumLayers; L++) tiny.layer[L].channel[0].assign(1, 0.5f);
+    e.process(&tiny, 0, 0.0);
+    const uint64_t settled = e.frameCount();
+    for (int i = 0; i < 500; i++) e.process(&tiny, 0, 0.0);
+    if (e.frameCount() != settled) {
+        detail = "a degenerate set republished " +
+                 std::to_string(e.frameCount() - settled) + " times";
+        return false;
+    }
+
+    // And real material afterwards must build normally again.
+    const auto again = toneSet(330.0, 8000, /*generation=*/100);
+    buildFrame(e, again, 0, 4000.0);
+    if (e.debugFramePeak() < 0.5) {
+        detail = "a real take after a degenerate one produced a frame peaking at " +
+                 std::to_string(e.debugFramePeak());
+        return false;
+    }
+    return true;
+}
+
 /** A stale snapshot must restart the build rather than finish a mixed frame. */
 bool wtRestartsOnChange(std::string& detail) {
     auto setA = toneSet(100.0, 48000, /*generation=*/1);
@@ -4573,6 +4646,7 @@ const TestCase kCases[] = {
     {"--test-wt-dc-source",       "wt_dc_source",       wtDcSource},
     {"--test-wt-nan-stem",        "wt_nan_stem",        wtNonFiniteStem},
     {"--test-wt-boundary",        "wt_boundary",        wtBoundaryPadding},
+    {"--test-wt-degenerate",      "wt_degenerate",      wtDegenerateSet},
     {"--test-buffer-non-finite-write","buffer_non_finite_write",bufferRejectsNonFinite},
     {"--test-wt-restart",         "wt_restart",         wtRestartsOnChange},
     {"--test-wt-bad-input",       "wt_bad_input",       wtBadInput},

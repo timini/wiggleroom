@@ -1049,6 +1049,19 @@ class TestWavetableExtract:
         result = run_test(["--test-wt-boundary"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_a_degenerate_stem_set_invalidates_the_old_frame(self):
+        """Hpss.separate sizes every layer to the input length and accepts
+        sub-frame input, so a zero or one frame StemSet really can be published.
+
+        Returning early on the size, before checking whether the set is stale,
+        left frame() showing the previous recording indefinitely. Verified to
+        have teeth. Also checks silence is published once per take rather than
+        republished on every call, and that real material afterwards builds
+        normally.
+        """
+        result = run_test(["--test-wt-degenerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_a_stale_snapshot_restarts_the_build(self):
         """A new stem set, a different layer or a changed window mid-build means
         the snapshot no longer describes what is being read. Verified to have
@@ -1099,11 +1112,33 @@ class TestExtremeInput:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+def discover_test_classes() -> list:
+    """Every Test* class in this module, in definition order.
+
+    Discovered rather than listed. The list used to be hand-written and stopped
+    at TestSeparationWorker, so seven classes added afterwards were never
+    instantiated by the native runner that CI actually invokes. Every check in
+    them could have failed while the workflow stayed green.
+
+    This is the same drift that made stems_test declare its own commands instead
+    of having them scraped, and it went the same way: a list maintained by hand
+    beside the thing it describes falls behind it.
+    """
+    # vars() preserves definition order, so no explicit sort is needed.
+    module = sys.modules[__name__]
+    return [obj for name, obj in vars(module).items()
+            if name.startswith("Test") and isinstance(obj, type)]
+
+
 def run_all_tests() -> bool:
     passed = failed = 0
     errors = []
-    for cls in (TestFftBackend, TestRingBuffer, TestTransport, TestStft, TestHpss,
-                TestSeparationWorker):
+    classes = discover_test_classes()
+    if not classes:
+        print("No test classes discovered; the runner is broken.")
+        return False
+    print(f"Discovered {len(classes)} test classes\n")
+    for cls in classes:
         instance = cls()
         for name in dir(instance):
             if not name.startswith("test_"):
