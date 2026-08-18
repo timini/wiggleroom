@@ -42,6 +42,7 @@ Detailed documentation for each WiggleRoom module.
 - [EucSeq](EucSeq.md) - 4-channel Euclidean sequencer with per-step CV values
 - [GravityClock](GravityClock.md) - Clock-synced bouncing ball trigger generator
 - [Intersect](Intersect.md) - Rhythmic trigger generator with set operations
+- [Stems](Stems.md) - Beat-synced separation, wavetable voice and granular texturiser
 - [LogicMangler](LogicMangler.md) - Truth table logic processor with cell locking and density control
 - [PreFlightClock](PreFlightClock.md) - Master clock with Ableton-style count-in sequence
 - [TheWeaver](TheWeaver.md) - Scale-Bus-aware polyphonic arpeggiator with 11 patterns and addressable Index CV
@@ -64,4 +65,4 @@ Narrower variants of the EucSeq chain above, for patches that do not need four c
 
 ---
 
-For source, module list, and installation, see the [main README](../../../README.md#modules-44).
+For source, module list, and installation, see the [main README](../../../README.md#modules-45).
