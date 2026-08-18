@@ -2408,6 +2408,134 @@ bool yinRespectsRange(std::string& detail) {
     return true;
 }
 
+/**
+ * The reported frequency must stay inside the range the caller asked for,
+ * including when the bounds do not divide the sample rate evenly.
+ *
+ * The integer search bounds are deliberately widened to whole lags so that
+ * interpolation has a point on each side of a minimum near a boundary. Letting
+ * that widening leak into the result puts out-of-band pitches in front of the
+ * scale detector. The earlier range test used 300 and 2000 Hz, which happen to
+ * be integer-friendly at 48 kHz, and so never exercised this.
+ */
+bool yinRangeIsExact(std::string& detail) {
+    const int sampleRate = 48000;
+    struct Case { float low, high, tone; };
+    const Case cases[] = {
+        {300.5f, 1100.f, 1110.f},   // tone just above the ceiling
+        {300.5f, 1100.f, 299.f},    // tone just below the floor
+        {77.3f,  909.1f, 1500.f},
+        {77.3f,  909.1f, 60.f},
+        {123.45f, 678.9f, 678.9f},  // exactly on the ceiling
+        {123.45f, 678.9f, 123.45f}, // exactly on the floor
+    };
+    for (const auto& c : cases) {
+        auto w = sineWindow(c.tone, sampleRate, 4096);
+        Yin yin(4096);
+        yin.setSampleRate(sampleRate);
+        yin.setFrequencyRange(c.low, c.high);
+        const auto r = yin.analyse(w.data(), w.size());
+        if (r.frequency == 0.f) continue;  // nothing found is a legitimate answer
+        // A small tolerance for the float/double round trip on the bounds
+        // themselves; the defect this catches is off by tens of Hz.
+        const float slack = 0.01f;
+        if (r.frequency < c.low - slack || r.frequency > c.high + slack) {
+            detail = "a " + std::to_string(c.tone) + " Hz tone with range " +
+                     std::to_string(c.low) + " to " + std::to_string(c.high) +
+                     " reported " + std::to_string(r.frequency) + " Hz";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * A range spanning only two adjacent integer lags must still work.
+ *
+ * At 48 kHz a 1000 to 1020 Hz range is lags 47 and 48. The fractional
+ * refinement resolves between them, so rejecting the range outright returned
+ * nothing at all for a clean tone sitting inside it.
+ */
+bool yinNarrowRange(std::string& detail) {
+    const int sampleRate = 48000;
+    struct Case { float low, high, tone; };
+    const Case cases[] = {
+        {1000.f, 1020.f, 1010.f},
+        {1900.f, 1960.f, 1930.f},
+        {600.f,  610.f,  605.f},
+    };
+    for (const auto& c : cases) {
+        auto w = sineWindow(c.tone, sampleRate, 4096);
+        Yin yin(4096);
+        yin.setSampleRate(sampleRate);
+        yin.setFrequencyRange(c.low, c.high);
+        const auto r = yin.analyse(w.data(), w.size());
+        if (!r.voiced) {
+            detail = "a clean " + std::to_string(c.tone) + " Hz tone inside a " +
+                     std::to_string(c.low) + " to " + std::to_string(c.high) +
+                     " Hz range was not voiced";
+            return false;
+        }
+        const double err = std::fabs(centsBetween(r.frequency, c.tone));
+        if (err > 25.0) {
+            detail = "narrow range detected " + std::to_string(r.frequency) +
+                     " Hz for a " + std::to_string(c.tone) + " Hz tone (" +
+                     std::to_string(err) + " cents)";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Non-finite parameters must be rejected, not clamped.
+ *
+ * std::min and std::max propagate NaN rather than clamping it, because every
+ * comparison against NaN is false. A NaN threshold makes every `cmndf >=
+ * threshold` test false, so the first lag examined is accepted as voiced
+ * whatever the signal is, and white noise comes back as a confident pitch. A
+ * NaN frequency bound is worse: it reaches a cast to size_t, which is undefined.
+ */
+bool yinNonFiniteParams(std::string& detail) {
+    std::mt19937 rng(99);
+    std::uniform_real_distribution<float> dist(-1.f, 1.f);
+    std::vector<float> noise(4096);
+    for (auto& x : noise) x = dist(rng);
+
+    for (double bad : {std::nan(""), std::numeric_limits<double>::infinity(),
+                       -std::numeric_limits<double>::infinity()}) {
+        Yin yin = makeYin(48000, 4096);
+        const float before = yin.threshold();
+        yin.setThreshold((float)bad);
+        if (yin.threshold() != before) {
+            detail = "a non-finite threshold changed the configured value";
+            return false;
+        }
+        const auto r = yin.analyse(noise.data(), noise.size());
+        if (r.voiced) {
+            detail = "white noise was voiced after setting a non-finite threshold";
+            return false;
+        }
+
+        Yin y2 = makeYin(48000, 4096);
+        y2.setFrequencyRange((float)bad, 2000.f);
+        y2.setFrequencyRange(50.f, (float)bad);
+        auto tone = sineWindow(440.0, 48000, 4096);
+        const auto r2 = y2.analyse(tone.data(), tone.size());
+        if (!std::isfinite(r2.frequency) || !std::isfinite(r2.confidence)) {
+            detail = "a non-finite frequency bound produced a non-finite result";
+            return false;
+        }
+        // The range should be unchanged, so 440 Hz is still found.
+        if (std::fabs(centsBetween(r2.frequency, 440.0)) > 1.0) {
+            detail = "a rejected frequency bound still disturbed detection: got " +
+                     std::to_string(r2.frequency) + " Hz";
+            return false;
+        }
+    }
+    return true;
+}
+
 /** analyse() must not allocate. */
 bool yinNoAlloc(std::string& detail) {
     Yin yin = makeYin(48000, 4096);
@@ -2510,6 +2638,9 @@ const TestCase kCases[] = {
     {"--test-yin-non-finite",     "yin_non_finite",     yinNonFinite},
     {"--test-yin-samplerate",     "yin_samplerate",     yinSampleRateInvariant},
     {"--test-yin-range",          "yin_range",          yinRespectsRange},
+    {"--test-yin-range-exact",    "yin_range_exact",    yinRangeIsExact},
+    {"--test-yin-narrow-range",   "yin_narrow_range",   yinNarrowRange},
+    {"--test-yin-bad-params",     "yin_bad_params",     yinNonFiniteParams},
     {"--test-yin-no-alloc",       "yin_no_alloc",       yinNoAlloc},
 };
 

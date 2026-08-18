@@ -644,6 +644,41 @@ class TestYin:
         result = run_test(["--test-yin-range"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_the_reported_frequency_stays_inside_the_range(self):
+        """Including when the bounds do not divide the sample rate evenly.
+
+        The integer search bounds are widened to whole lags so interpolation has
+        a point either side of a minimum near a boundary; letting that widening
+        leak into the result puts out-of-band pitches in front of the scale
+        detector. Verified to have teeth: without the clamp, a 1110 Hz tone with
+        a 300.5 to 1100 Hz range reports 1109.99 Hz. The earlier range test used
+        300 and 2000 Hz, which are integer-friendly at 48 kHz, so it never
+        exercised this.
+        """
+        result = run_test(["--test-yin-range-exact"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_range_spanning_two_lags_still_works(self):
+        """At 48 kHz a 1000 to 1020 Hz range is lags 47 and 48, and the
+        fractional refinement resolves between them. Verified to have teeth:
+        requiring a wider span returns nothing at all for a clean 1010 Hz tone
+        sitting inside the range.
+        """
+        result = run_test(["--test-yin-narrow-range"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_non_finite_parameters_are_rejected(self):
+        """std::min and std::max propagate NaN rather than clamping it, because
+        every comparison against NaN is false.
+
+        A NaN threshold makes every `cmndf >= threshold` test false, so the first
+        lag examined is accepted as voiced whatever the signal is. A NaN
+        frequency bound is worse: it reaches a cast to size_t, which is
+        undefined. Verified to have teeth in both directions.
+        """
+        result = run_test(["--test-yin-bad-params"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_analysis_does_not_allocate(self):
         """Including for windows shorter than the constructed maximum, which is
         where a naive implementation would resize to fit."""

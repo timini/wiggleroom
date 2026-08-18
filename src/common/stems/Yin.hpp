@@ -73,11 +73,21 @@ public:
      * to about 0.15 trade a few more false positives for fewer missed notes.
      */
     void setThreshold(float threshold) {
+        // std::min/std::max propagate NaN rather than clamping it: max(NaN, lo)
+        // returns NaN because `NaN < lo` is false, and min does the same. A NaN
+        // threshold then makes every `cmndf >= threshold` test false, so the
+        // first lag examined is accepted as voiced no matter how aperiodic the
+        // signal is, and white noise comes back as a confident pitch. Reject it
+        // rather than clamp it.
+        if (!std::isfinite(threshold)) return;
         threshold_ = std::min(std::max(threshold, 0.01f), 0.9f);
     }
 
     /** Search range. Narrowing it is the cheapest way to cut the cost. */
     void setFrequencyRange(float lowHz, float highHz) {
+        // Same NaN trap as setThreshold, and worse here: a NaN bound reaches
+        // static_cast<std::size_t> on the lag, which is undefined.
+        if (!std::isfinite(lowHz) || !std::isfinite(highHz)) return;
         lowHz_ = std::max(1.f, lowHz);
         highHz_ = std::max(lowHz_ + 1.f, highHz);
     }
@@ -96,11 +106,25 @@ public:
         const std::size_t window = std::min(length, maxWindow_);
 
         const std::size_t halfWindow = window / 2;
-        std::size_t minTau = static_cast<std::size_t>(std::floor(sampleRate_ / highHz_));
-        std::size_t maxTau = static_cast<std::size_t>(std::ceil(sampleRate_ / lowHz_));
+
+        // The exact lags the configured range implies. These are fractional,
+        // and they are what the result is held to.
+        const double exactMinLag = std::max(2.0, static_cast<double>(sampleRate_) / highHz_);
+        const double exactMaxLag = static_cast<double>(sampleRate_) / lowHz_;
+
+        // The integer search is widened outwards to whole lags so that
+        // interpolation and refinement have a point on each side of a minimum
+        // sitting near a boundary. Widening the SEARCH is fine; letting the
+        // widened bounds leak into the RESULT is not, and that is handled below.
+        std::size_t minTau = static_cast<std::size_t>(std::floor(exactMinLag));
+        std::size_t maxTau = static_cast<std::size_t>(std::ceil(exactMaxLag));
         minTau = std::max<std::size_t>(2, minTau);
         maxTau = std::min(maxTau, halfWindow);
-        if (maxTau <= minTau + 1) return result;
+        // Two adjacent integer lags are a perfectly usable search: a narrow
+        // high-frequency range such as 1000 to 1020 Hz maps to lags 47 and 48 at
+        // 48 kHz, and the fractional refinement resolves between them. Requiring
+        // a wider span returned nothing at all for a clean tone inside it.
+        if (maxTau <= minTau) return result;
 
         // Silence, or something close enough to it that the difference function
         // is all rounding noise. Without this the search still returns a lag,
@@ -131,6 +155,12 @@ public:
         refined = refineLag(samples, window - maxTau, refined,
                             static_cast<double>(minTau), static_cast<double>(maxTau));
         if (refined <= 0.0) return result;
+
+        // Hold the result to the range that was actually asked for. The integer
+        // bounds above are deliberately wider, and without this a 300.5 to
+        // 1100 Hz range would report 1109.99 Hz for an 1110 Hz tone, outside the
+        // band the caller specified.
+        refined = std::min(std::max(refined, exactMinLag), exactMaxLag);
 
         result.frequency = static_cast<float>(sampleRate_ / refined);
         // Clamp rather than trust: parabolic interpolation on a noisy CMNDF can
