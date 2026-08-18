@@ -41,6 +41,60 @@ namespace WiggleRoom {
 
 using namespace WiggleRoom::stems;
 
+/**
+ * The Rack side of the FftBackend abstraction.
+ *
+ * This is the whole reason FftBackend is an interface. Without it the worker
+ * falls back to ReferenceFft, which exists as the self-contained test
+ * reference: double precision, radix-2, and no attempt at speed. Running a
+ * 32 second recording through it frame by frame is far slower than necessary
+ * and lengthens shutdown to match.
+ *
+ * pffft returns a packed layout: element 0 is the DC bin, element 1 is Nyquist,
+ * and the rest are interleaved real/imaginary for bins 1 to n/2-1. The core
+ * asks for interleaved re,im over bins 0 to n/2 inclusive, deliberately, so
+ * adapters convert rather than the core guessing. This is that conversion.
+ */
+struct RackFft : stems::FftBackend {
+    explicit RackFft(std::size_t length)
+        : fft_((int)length), length_(length), packed_(length, 0.f) {}
+
+    std::size_t size() const override { return length_; }
+
+    void forward(const float* input, float* spectrum) override {
+        fft_.rfft(input, packed_.data());
+        const std::size_t half = length_ / 2;
+        spectrum[0] = packed_[0];          // DC, real only
+        spectrum[1] = 0.f;
+        spectrum[2 * half] = packed_[1];   // Nyquist, real only
+        spectrum[2 * half + 1] = 0.f;
+        for (std::size_t b = 1; b < half; b++) {
+            spectrum[2 * b] = packed_[2 * b];
+            spectrum[2 * b + 1] = packed_[2 * b + 1];
+        }
+    }
+
+    void inverse(const float* spectrum, float* output) override {
+        const std::size_t half = length_ / 2;
+        packed_[0] = spectrum[0];
+        packed_[1] = spectrum[2 * half];
+        for (std::size_t b = 1; b < half; b++) {
+            packed_[2 * b] = spectrum[2 * b];
+            packed_[2 * b + 1] = spectrum[2 * b + 1];
+        }
+        fft_.irfft(packed_.data(), output);
+        // pffft leaves the inverse scaled by N; the core's contract is that
+        // inverse(forward(x)) returns x.
+        fft_.scale(output);
+    }
+
+private:
+    dsp::RealFFT fft_;
+    std::size_t length_;
+    // new[] and malloc align to 16 bytes, which is what pffft requires.
+    std::vector<float> packed_;
+};
+
 struct Stems : Module {
     enum ParamId {
         REC_ARM_PARAM, REC_MODE_PARAM, REC_THRESH_PARAM, BUF_LEN_PARAM,
@@ -149,6 +203,10 @@ struct Stems : Module {
         configOutput(DOWNBEAT_OUTPUT, "Downbeat");
 
         rebuild(48000.f);
+        // Injected BEFORE start(), which is the only point it can be.
+        worker_.setFftFactory([](std::size_t n) {
+            return std::unique_ptr<stems::FftBackend>(new RackFft(n));
+        });
         worker_.start();
     }
 
@@ -324,7 +382,11 @@ private:
         }
         mixer_.setStemSelect((int)params[STEM_SELECT_PARAM].getValue());
 
-        quantizer_.setGlideSeconds(params[QUANT_GLIDE_PARAM].getValue());
+        const float glide = params[QUANT_GLIDE_PARAM].getValue();
+        if (glide != lastGlide_) {
+            lastGlide_ = glide;
+            quantizer_.setGlideSeconds(glide);
+        }
         quantizer_.setManualOverride(params[SCALE_MODE_PARAM].getValue() > 0.5f);
         quantizer_.setManualKey((int)params[ROOT_PARAM].getValue(),
                                 (Quantizer::Scale)(int)params[SCALE_PARAM].getValue());
@@ -332,12 +394,20 @@ private:
         extractor_.setWindowSamples((int)params[WT_WINDOW_PARAM].getValue());
         extractor_.setOffset(params[WT_OFFSET_PARAM].getValue() +
                              inputs[WT_OFFSET_CV_INPUT].getVoltage() / 5.f);
-        oscillator_.setMorph(params[WT_MORPH_PARAM].getValue());
+        const float morph = params[WT_MORPH_PARAM].getValue();
+        if (morph != lastMorph_) {
+            lastMorph_ = morph;
+            oscillator_.setMorph(morph);
+        }
         oscillator_.setCoarse(params[WT_COARSE_PARAM].getValue());
         oscillator_.setFine(params[WT_FINE_PARAM].getValue());
         oscillator_.setLevel(params[WT_LEVEL_PARAM].getValue());
 
-        gate_.setDecaySeconds(params[LPG_DECAY_PARAM].getValue());
+        const float decay = params[LPG_DECAY_PARAM].getValue();
+        if (decay != lastLpgDecay_) {
+            lastLpgDecay_ = decay;
+            gate_.setDecaySeconds(decay);
+        }
         gate_.setColour(params[LPG_COLOUR_PARAM].getValue());
         gate_.setRestingLevel(params[LPG_LEVEL_PARAM].getValue());
 
@@ -349,10 +419,17 @@ private:
         grains_.setTexture(params[GRAIN_TEXTURE_PARAM].getValue());
         grains_.setSpread(params[GRAIN_SPREAD_PARAM].getValue());
 
+        // Guarded, because these setters recompute exponentials and readParams
+        // runs every sample. Space alone was calling Diffusion::updateFeedback,
+        // which is eight pow() calls, forty-eight thousand times a second for a
+        // control that is usually not moving at all.
         const float space = params[GRAIN_SPACE_PARAM].getValue();
-        diffusion_.setDecaySeconds(0.2f + space * 6.f);
-        diffusion_.setMix(space);
-        diffusion_.setDamping(0.3f + space * 0.4f);
+        if (space != lastSpace_) {
+            lastSpace_ = space;
+            diffusion_.setDecaySeconds(0.2f + space * 6.f);
+            diffusion_.setMix(space);
+            diffusion_.setDamping(0.3f + space * 0.4f);
+        }
     }
 
     void handleRecording(const ProcessArgs& args) {
@@ -568,6 +645,7 @@ private:
     std::size_t handoffFrames_ = 0;
     int handoffRate_ = 48000;
     std::size_t overdubRead_ = 0;
+    float lastSpace_ = -1.f, lastLpgDecay_ = -1.f, lastGlide_ = -1.f, lastMorph_ = -1.f;
     Transport transport_{48000};
     SeparationWorker worker_;
     StemMixer mixer_{48000};
