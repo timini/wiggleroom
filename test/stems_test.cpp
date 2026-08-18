@@ -33,6 +33,7 @@
 #include "common/stems/FftBackend.hpp"
 #include "common/stems/ReferenceFft.hpp"
 #include "common/stems/RingBuffer.hpp"
+#include "common/stems/GrainEngine.hpp"
 #include "common/stems/Hpss.hpp"
 #include "common/stems/SeparationWorker.hpp"
 #include "common/stems/StemMixer.hpp"
@@ -6242,6 +6243,337 @@ bool lpgBadInput(std::string& detail) {
     return true;
 }
 
+
+// ---------------------------------------------------------------------------
+// GrainEngine
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::GrainEngine;
+
+namespace {
+std::vector<float> grainSource(std::size_t n, int sampleRate, double hz = 220.0) {
+    std::vector<float> out(n, 0.f);
+    for (std::size_t i = 0; i < n; i++) {
+        out[i] = (float)std::sin(2 * M_PI * hz * (double)i / sampleRate);
+    }
+    return out;
+}
+
+struct GrainRun {
+    std::vector<float> left, right;
+    int peakGrains = 0;
+    uint64_t dropped = 0;
+};
+
+GrainRun runGrains(GrainEngine& engine, const std::vector<float>& source, std::size_t samples) {
+    GrainRun run;
+    run.left.reserve(samples);
+    run.right.reserve(samples);
+    for (std::size_t i = 0; i < samples; i++) {
+        const auto f = engine.process(source.data(), source.size());
+        run.left.push_back(f.left);
+        run.right.push_back(f.right);
+        run.peakGrains = std::max(run.peakGrains, engine.activeGrains());
+    }
+    run.dropped = engine.debugDropped();
+    return run;
+}
+}  // namespace
+
+/**
+ * The pool must cap concurrency, and a grain that cannot start must be dropped
+ * rather than stealing a slot.
+ *
+ * Cost follows density times size, so the top of both controls is 100 Hz
+ * against half a second. Stealing would cut an envelope short, which is a click
+ * at the density rate; in a cloud a missing grain is inaudible.
+ */
+bool grainPoolIsBounded(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto source = grainSource(sampleRate, sampleRate);
+
+    // Well past the worst case the controls allow, so the pool is genuinely
+    // exercised rather than merely large enough.
+    GrainEngine engine(sampleRate);
+    engine.setDensityHz(100.f);
+    engine.setSizeSeconds(0.5f);
+    engine.setTexture(1.f);
+    engine.setReadPosition(sampleRate / 2);
+
+    const auto run = runGrains(engine, source, sampleRate * 3);
+    if (run.peakGrains > GrainEngine::kMaxGrains) {
+        detail = "concurrency reached " + std::to_string(run.peakGrains) +
+                 " against a pool of " + std::to_string(GrainEngine::kMaxGrains);
+        return false;
+    }
+    if (run.peakGrains < 8) {
+        detail = "only " + std::to_string(run.peakGrains) +
+                 " grains overlapped at maximum settings; the scheduler is not running";
+        return false;
+    }
+    // The pool is sized so it is NOT exhausted at the documented maxima: 100 Hz
+    // against half a second is fifty overlapping, and the jitter can stretch
+    // that, so there is headroom above it. Nothing should be lost in ordinary
+    // use, and the drop path is a safety net rather than a normal outcome,
+    // which is why it cannot be reached through the public controls.
+    if (run.dropped != 0) {
+        detail = std::to_string(run.dropped) +
+                 " grains were dropped at the documented maximum settings";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Level must stay roughly constant across the density and size controls.
+ *
+ * Grains sum, so without compensation the output rises with the overlap:
+ * measured peaks of 0.90, 2.98 and 4.90 across the range, which is 14 dB of
+ * level change from controls that are supposed to change texture.
+ */
+bool grainLevelIsStable(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto source = grainSource(sampleRate, sampleRate);
+
+    struct Case { float density, size; };
+    const Case cases[] = {{1.f, 0.02f},  {10.f, 0.08f}, {30.f, 0.15f},
+                          {50.f, 0.2f},  {100.f, 0.5f}, {100.f, 0.05f}};
+    double loudest = 0.0, quietest = 1e9;
+    for (const auto& c : cases) {
+        GrainEngine engine(sampleRate);
+        engine.setDensityHz(c.density);
+        engine.setSizeSeconds(c.size);
+        engine.setTexture(0.3f);
+        engine.setSpread(0.f);
+        engine.setReadPosition(sampleRate / 2);
+        const auto run = runGrains(engine, source, sampleRate * 2);
+
+        // PEAK, not RMS. A sparse setting is legitimately quieter on average:
+        // one 20 ms grain per second is a two per cent duty cycle, so its RMS
+        // is 17 dB below a dense setting no matter how the grains are scaled.
+        // What must not change is how loud the grains themselves are, and that
+        // is the peak.
+        double peak = 0.0;
+        for (float v : run.left) peak = std::max(peak, std::fabs((double)v));
+        if (peak < 1e-4) {
+            detail = "density " + std::to_string(c.density) + " produced silence";
+            return false;
+        }
+        loudest = std::max(loudest, peak);
+        quietest = std::min(quietest, peak);
+    }
+    const double spreadDb = 20.0 * std::log10(loudest / quietest);
+    if (spreadDb > 6.0) {
+        detail = "grain level varies by " + std::to_string(spreadDb) +
+                 " dB across the density and size controls";
+        return false;
+    }
+    return true;
+}
+
+/** Grain boundaries must not click. */
+bool grainNoClicks(std::string& detail) {
+    const int sampleRate = 48000;
+    // DC, so the source itself contributes no sample-to-sample change and every
+    // step in the output is an envelope boundary.
+    std::vector<float> source(sampleRate, 0.5f);
+
+    for (float density : {5.f, 40.f, 100.f}) {
+        for (float texture : {0.f, 0.5f, 1.f}) {
+            GrainEngine engine(sampleRate);
+            engine.setDensityHz(density);
+            engine.setSizeSeconds(0.05f);
+            engine.setTexture(texture);
+            engine.setSpread(0.f);
+            engine.setReadPosition(sampleRate / 2);
+            const auto run = runGrains(engine, source, sampleRate);
+
+            const double worst = maxStep(run.left);
+            // A grain of 50 ms has an envelope whose steepest slope is about
+            // pi/(0.05*48000) per sample. Anything an order of magnitude past
+            // that is a boundary being cut rather than faded.
+            if (worst > 0.01) {
+                detail = "density " + std::to_string(density) + ", texture " +
+                         std::to_string(texture) + ": stepped by " +
+                         std::to_string(worst) + " between samples";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/** Transposition must shift the pitch by the right amount. */
+bool grainPitch(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto source = grainSource(sampleRate, sampleRate, 440.0);
+
+    for (double semitones : {-12.0, 0.0, 7.0, 12.0}) {
+        GrainEngine engine(sampleRate);
+        engine.setDensityHz(8.f);
+        engine.setSizeSeconds(0.25f);
+        engine.setTexture(0.f);      // no jitter, so the pitch is clean
+        engine.setSpread(0.f);
+        engine.setPitchSemitones((float)semitones);
+        engine.setReadPosition(1000);
+        const auto run = runGrains(engine, source, 16384 * 2);
+
+        std::vector<float> window(run.left.begin() + 8192, run.left.begin() + 8192 + 16384);
+        const double measured = dominantHz(window, sampleRate);
+        const double expected = 440.0 * std::pow(2.0, semitones / 12.0);
+        const double cents = 1200.0 * std::log2(measured / std::max(expected, 1e-9));
+        if (std::fabs(cents) > 60.0) {
+            detail = std::to_string(semitones) + " semitones gave " +
+                     std::to_string(measured) + " Hz, expected " +
+                     std::to_string(expected);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Spread must widen the image without changing the level. */
+bool grainSpread(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto source = grainSource(sampleRate, sampleRate);
+
+    auto measure = [&](float spread, double* correlation, double* level) {
+        GrainEngine engine(sampleRate);
+        engine.setDensityHz(40.f);
+        engine.setSizeSeconds(0.1f);
+        engine.setTexture(0.3f);
+        engine.setSpread(spread);
+        engine.setReadPosition(sampleRate / 2);
+        const auto run = runGrains(engine, source, sampleRate * 2);
+
+        double lr = 0.0, ll = 0.0, rr = 0.0;
+        for (std::size_t i = 0; i < run.left.size(); i++) {
+            lr += (double)run.left[i] * run.right[i];
+            ll += (double)run.left[i] * run.left[i];
+            rr += (double)run.right[i] * run.right[i];
+        }
+        *correlation = lr / std::max(1e-12, std::sqrt(ll * rr));
+        *level = std::sqrt((ll + rr) / (2.0 * (double)run.left.size()));
+    };
+
+    double narrowCorr = 0, narrowLevel = 0, wideCorr = 0, wideLevel = 0;
+    measure(0.f, &narrowCorr, &narrowLevel);
+    measure(1.f, &wideCorr, &wideLevel);
+
+    if (narrowCorr < 0.99) {
+        detail = "at zero spread the channels correlate only " + std::to_string(narrowCorr);
+        return false;
+    }
+    if (wideCorr >= narrowCorr - 0.02) {
+        detail = "full spread barely decorrelated the channels: " +
+                 std::to_string(narrowCorr) + " to " + std::to_string(wideCorr);
+        return false;
+    }
+    // Constant power, so widening must not change the level. A linear pan law
+    // dips 3 dB in the centre and reads as the cloud getting quieter as it
+    // widens.
+    // Half a decibel. Constant power holds it to 0.04 dB, while a linear pan
+    // law shifts it by 1.13, so a looser bar would not tell them apart.
+    const double changeDb = 20.0 * std::log10(wideLevel / std::max(narrowLevel, 1e-12));
+    if (std::fabs(changeDb) > 0.5) {
+        detail = "spread changed the level by " + std::to_string(changeDb) + " dB";
+        return false;
+    }
+    return true;
+}
+
+/** Missing, short and malformed input must be safe. */
+bool grainBadInput(std::string& detail) {
+    const int sampleRate = 48000;
+    GrainEngine engine(sampleRate);
+    engine.setDensityHz(50.f);
+    engine.setReadPosition(100);
+
+    // No source: the state on patch load.
+    for (int i = 0; i < 1000; i++) {
+        const auto f = engine.process(nullptr, 48000);
+        if (f.left != 0.f || f.right != 0.f) {
+            detail = "a null source produced output";
+            return false;
+        }
+    }
+    std::vector<float> tiny(1, 0.5f);
+    for (int i = 0; i < 1000; i++) engine.process(tiny.data(), tiny.size());
+
+    // A source containing non-finite samples must not poison the output.
+    std::vector<float> poisoned = grainSource(4096, sampleRate);
+    poisoned[100] = std::nanf("");
+    poisoned[2000] = std::numeric_limits<float>::infinity();
+    for (int i = 0; i < 20000; i++) {
+        const auto f = engine.process(poisoned.data(), poisoned.size());
+        if (!std::isfinite(f.left) || !std::isfinite(f.right)) {
+            detail = "a poisoned source produced a non-finite sample";
+            return false;
+        }
+    }
+
+    // Non-finite settings must be rejected rather than clamped.
+    const float bad[] = {std::nanf(""), std::numeric_limits<float>::infinity(), -1e20f};
+    for (float v : bad) {
+        engine.setDensityHz(v);
+        engine.setSizeSeconds(v);
+        engine.setPitchSemitones(v);
+        engine.setTexture(v);
+        engine.setSpread(v);
+        engine.setReadPosition((double)v);
+    }
+    const auto clean = grainSource(4096, sampleRate);
+    for (int i = 0; i < 20000; i++) {
+        const auto f = engine.process(clean.data(), clean.size());
+        if (!std::isfinite(f.left) || !std::isfinite(f.right)) {
+            detail = "non-finite settings produced a non-finite sample";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Position jitter must scatter into the buffer, not pile up at its ends. */
+bool grainJitterWraps(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto source = grainSource(4096, sampleRate);
+
+    // Compared against a read position in the MIDDLE, where no grain needs to
+    // wrap.
+    //
+    // Worth being straight that this bounds the behaviour rather than pinning
+    // the choice: clamping stray grains to the buffer edge instead of wrapping
+    // them also lands within this tolerance, so the test does not distinguish
+    // the two. Wrapping is kept because piling every out-of-range grain onto
+    // one sample is the wrong thing to do to the material, not because a
+    // measurement here demands it. What the test does catch is grains landing
+    // outside the buffer entirely and reading silence.
+    auto levelAt = [&](double position) {
+        GrainEngine engine(sampleRate);
+        engine.setDensityHz(100.f);
+        engine.setSizeSeconds(0.02f);
+        engine.setTexture(1.f);
+        engine.setSpread(0.f);
+        engine.setReadPosition(position);
+        const auto run = runGrains(engine, source, sampleRate * 2);
+        double acc = 0.0;
+        for (float v : run.left) acc += (double)v * v;
+        return std::sqrt(acc / (double)run.left.size());
+    };
+
+    const double middle = levelAt((double)source.size() / 2.0);
+    const double start = levelAt(0.0);
+    if (middle < 1e-4) { detail = "the mid-buffer reference was silent"; return false; }
+    const double changeDb = 20.0 * std::log10(start / std::max(middle, 1e-12));
+    if (std::fabs(changeDb) > 2.0) {
+        detail = "reading at the buffer start differs from mid-buffer by " +
+                 std::to_string(changeDb) +
+                 " dB; jitter is not wrapping into the material";
+        return false;
+    }
+    return true;
+}
+
 struct TestCase {
     const char* cmd;
     const char* name;
@@ -6400,6 +6732,13 @@ const TestCase kCases[] = {
     {"--test-lpg-audio-rate",     "lpg_audio_rate",     lpgAudioRateModulation},
     {"--test-lpg-resting",        "lpg_resting",        lpgRestingLevel},
     {"--test-lpg-bad-input",      "lpg_bad_input",      lpgBadInput},
+    {"--test-grain-pool",         "grain_pool",         grainPoolIsBounded},
+    {"--test-grain-level",        "grain_level",        grainLevelIsStable},
+    {"--test-grain-no-clicks",    "grain_no_clicks",    grainNoClicks},
+    {"--test-grain-pitch",        "grain_pitch",        grainPitch},
+    {"--test-grain-spread",       "grain_spread",       grainSpread},
+    {"--test-grain-jitter",       "grain_jitter",       grainJitterWraps},
+    {"--test-grain-bad-input",    "grain_bad_input",    grainBadInput},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };
 

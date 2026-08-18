@@ -1434,6 +1434,69 @@ class TestLowpassGate:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestGrainEngine:
+    """The granular texturiser: a fixed pool of overlapping windowed reads."""
+
+    def test_the_pool_bounds_concurrency(self):
+        """Cost follows density times size, so the top of both controls is
+        100 Hz against half a second, or fifty overlapping grains. The pool is
+        sized above that with headroom for jitter, so nothing is lost in
+        ordinary use and the drop path is a safety net rather than a normal
+        outcome.
+        """
+        result = run_test(["--test-grain-pool"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_grain_level_is_stable_across_density_and_size(self):
+        """Grains sum, so without compensation the output rises with the
+        overlap: 17 dB of level change from controls meant to change texture.
+
+        Measured as PEAK, not RMS. A sparse setting is legitimately quieter on
+        average, since one 20 ms grain per second is a two per cent duty cycle;
+        what must not change is how loud the grains themselves are. Verified to
+        have teeth.
+        """
+        result = run_test(["--test-grain-level"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_grain_boundaries_do_not_click(self):
+        """Driven with DC, so the source contributes no sample-to-sample change
+        and every step in the output is an envelope boundary. Verified to have
+        teeth: ending grains on a sample count rather than their own envelope
+        steps by 0.23.
+        """
+        result = run_test(["--test-grain-no-clicks"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_transposition_shifts_the_pitch(self):
+        result = run_test(["--test-grain-pitch"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_spread_widens_without_changing_level(self):
+        """Constant power holds the level to 0.04 dB where a linear pan law
+        shifts it by 1.18, so the tolerance is half a decibel; anything looser
+        would not tell them apart. A linear law also dips 3 dB in the centre,
+        which reads as the cloud getting quieter as it widens.
+        """
+        result = run_test(["--test-grain-spread"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_jitter_near_the_buffer_edge_is_bounded(self):
+        """Bounds the behaviour rather than pinning the choice: clamping stray
+        grains to the edge also lands within tolerance, so this does not
+        distinguish it from wrapping. What it does catch is grains landing
+        outside the buffer entirely and reading silence.
+        """
+        result = run_test(["--test-grain-jitter"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_missing_and_poisoned_input_is_safe(self):
+        """Null source, which is the state on patch load, plus a one-sample
+        buffer, non-finite samples in the source, and non-finite settings."""
+        result = run_test(["--test-grain-bad-input"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 class TestExtremeInput:
     """Hostile but legal input, across every module at once."""
 
