@@ -585,6 +585,71 @@ class TestStemMixer:
         result = run_test(["--test-mixer-samplerate"])
         assert result["failed"] == 0, result.get("detail", "")
 
+class TestYin:
+    """Fundamental frequency estimation, de Cheveigne and Kawahara (2002)."""
+
+    def test_sines_across_the_range_within_one_cent(self):
+        """55 Hz to 2 kHz, at two window phases each.
+
+        The frequencies deliberately do not divide the sample rate evenly, so
+        the true period is never a whole number of samples. Verified to have
+        teeth: removing the fractional-lag refinement fails at 1.48 cents at
+        2 kHz, where the period is only 24 samples and three integer-spaced
+        points are not enough to interpolate.
+        """
+        result = run_test(["--test-yin-sine-range"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_white_noise_is_not_voiced(self):
+        """Confidence is what stops scale detection running on a drum layer.
+        Twenty trials, none voiced, none above 0.4 where a pure tone scores 1.0.
+        """
+        result = run_test(["--test-yin-noise"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_rich_waveforms_do_not_report_an_octave_error(self):
+        """Squares, saws, and a stack with a weak fundamental and a strong
+        second harmonic.
+
+        A signal that repeats every T also repeats every 2T, so the global
+        minimum of the CMNDF often sits at twice the true lag. Verified to have
+        teeth: taking the global minimum instead of the first dip below the
+        threshold reports 55.0 Hz for a 110 Hz square, a clean -1199.9 cents.
+        """
+        result = run_test(["--test-yin-octave"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_silence_reports_nothing(self):
+        """This is the state on patch load. Verified to have teeth: without the
+        energy guard, silence reports a confident-looking 2181 Hz.
+        """
+        result = run_test(["--test-yin-silence"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_non_finite_input_is_rejected(self):
+        """One NaN poisons every lag in the difference function. Verified to
+        have teeth: without the guard a single NaN yields 2181 Hz.
+        """
+        result = run_test(["--test-yin-non-finite"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_detection_does_not_depend_on_sample_rate(self):
+        result = run_test(["--test-yin-samplerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_frequency_range_bounds_the_search(self):
+        """Narrowing the range is the only lever on the cost of this, so a range
+        that is ignored is a silent performance regression as well as a
+        correctness one."""
+        result = run_test(["--test-yin-range"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_analysis_does_not_allocate(self):
+        """Including for windows shorter than the constructed maximum, which is
+        where a naive implementation would resize to fit."""
+        result = run_test(["--test-yin-no-alloc"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_concurrent_submit_and_acquire(self):
         """A reader standing in for the audio thread hammers acquire/release
         while jobs are submitted, checking for races and for frees landing on

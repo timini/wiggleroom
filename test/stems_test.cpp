@@ -36,6 +36,7 @@
 #include "common/stems/Hpss.hpp"
 #include "common/stems/SeparationWorker.hpp"
 #include "common/stems/StemMixer.hpp"
+#include "common/stems/Yin.hpp"
 #include "common/stems/Stft.hpp"
 #include "common/stems/Transport.hpp"
 
@@ -2173,6 +2174,263 @@ bool mixerFadeIsSampleRateInvariant(std::string& detail) {
     return true;
 }
 
+
+// ---------------------------------------------------------------------------
+// Yin
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::Yin;
+
+namespace {
+Yin makeYin(int sampleRate, std::size_t window) {
+    Yin yin(window);
+    yin.setSampleRate(sampleRate);
+    yin.setFrequencyRange(50.f, 2200.f);
+    return yin;
+}
+
+std::vector<float> sineWindow(double hz, int sampleRate, std::size_t n, double phase = 0.0) {
+    std::vector<float> w(n);
+    for (std::size_t i = 0; i < n; i++) {
+        w[i] = (float)std::sin(2 * M_PI * hz * (double)i / sampleRate + phase);
+    }
+    return w;
+}
+
+double centsBetween(double a, double b) {
+    if (a <= 0.0 || b <= 0.0) return 1e9;
+    return 1200.0 * std::log2(a / b);
+}
+}  // namespace
+
+/**
+ * Sines from 55 Hz to 2 kHz within one cent.
+ *
+ * The frequencies deliberately do not divide the sample rate evenly, so the
+ * true period is never a whole number of samples and the sub-sample refinement
+ * is genuinely exercised. Integer periods would let a detector that only ever
+ * returns whole lags pass.
+ */
+bool yinSineRange(std::string& detail) {
+    const int sampleRate = 48000;
+    const double targets[] = {55.0,   61.735, 82.407, 110.0,  138.591, 220.0,
+                              329.63, 440.0,  554.37, 880.0,  1174.66, 1567.98,
+                              1760.0, 1975.53, 2000.0};
+    double worst = 0.0;
+    double worstAt = 0.0;
+    for (double f : targets) {
+        // Two phases, because a window that happens to start at a zero crossing
+        // is the easy case.
+        for (double phase : {0.0, 1.234}) {
+            auto w = sineWindow(f, sampleRate, 4096, phase);
+            Yin yin = makeYin(sampleRate, 4096);
+            const auto r = yin.analyse(w.data(), w.size());
+            if (!r.voiced) {
+                detail = "a pure sine at " + std::to_string(f) + " Hz was not voiced";
+                return false;
+            }
+            const double err = std::fabs(centsBetween(r.frequency, f));
+            if (err > worst) { worst = err; worstAt = f; }
+        }
+    }
+    if (worst > 1.0) {
+        detail = "worst error " + std::to_string(worst) + " cents at " +
+                 std::to_string(worstAt) + " Hz";
+        return false;
+    }
+    return true;
+}
+
+/** White noise must not look pitched. */
+bool yinNoiseConfidence(std::string& detail) {
+    std::mt19937 rng(20260818);
+    std::uniform_real_distribution<float> dist(-1.f, 1.f);
+    double worst = 0.0;
+    for (int trial = 0; trial < 20; trial++) {
+        std::vector<float> w(4096);
+        for (auto& x : w) x = dist(rng);
+        Yin yin = makeYin(48000, 4096);
+        const auto r = yin.analyse(w.data(), w.size());
+        if (r.voiced) {
+            detail = "white noise was reported as voiced on trial " + std::to_string(trial);
+            return false;
+        }
+        worst = std::max(worst, (double)r.confidence);
+    }
+    // A pure tone scores about 1.0, so the gap is the whole point.
+    if (worst > 0.4) {
+        detail = "white noise reached confidence " + std::to_string(worst);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Harmonically rich waveforms must not report an octave error.
+ *
+ * A square wave repeats every period AND every two periods, so the global
+ * minimum of the CMNDF frequently sits at twice the true lag. Taking the first
+ * dip below the threshold rather than the global minimum is what prevents the
+ * octave-down report, and this is the check that holds that rule in place.
+ */
+bool yinNoOctaveError(std::string& detail) {
+    const int sampleRate = 48000;
+    const double targets[] = {82.407, 110.0, 220.0, 329.63, 440.0, 880.0};
+    for (double f : targets) {
+        for (int shape = 0; shape < 3; shape++) {
+            std::vector<float> w(4096);
+            for (std::size_t i = 0; i < w.size(); i++) {
+                const double t = 2 * M_PI * f * (double)i / sampleRate;
+                if (shape == 0) {
+                    w[i] = (std::sin(t) >= 0.0) ? 1.f : -1.f;              // square
+                } else if (shape == 1) {
+                    const double ph = std::fmod(f * (double)i / sampleRate, 1.0);
+                    w[i] = (float)(2.0 * ph - 1.0);                        // saw
+                } else {
+                    // Weak fundamental, strong second harmonic. This is the
+                    // shape that tempts an estimator into reporting the octave
+                    // above, and a plain autocorrelation peak-pick fails it.
+                    w[i] = (float)(0.2 * std::sin(t) + 1.0 * std::sin(2 * t) +
+                                   0.5 * std::sin(3 * t));
+                }
+            }
+            Yin yin = makeYin(sampleRate, 4096);
+            const auto r = yin.analyse(w.data(), w.size());
+            if (!r.voiced) {
+                detail = "shape " + std::to_string(shape) + " at " + std::to_string(f) +
+                         " Hz was not voiced";
+                return false;
+            }
+            const double cents = centsBetween(r.frequency, f);
+            if (std::fabs(cents) > 20.0) {
+                detail = "shape " + std::to_string(shape) + " at " + std::to_string(f) +
+                         " Hz reported " + std::to_string(r.frequency) + " Hz (" +
+                         std::to_string(cents) + " cents, ratio " +
+                         std::to_string(r.frequency / f) + ")";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/** Silence must report nothing, not a confident-looking frequency. */
+bool yinSilence(std::string& detail) {
+    std::vector<float> w(4096, 0.f);
+    Yin yin = makeYin(48000, 4096);
+    auto r = yin.analyse(w.data(), w.size());
+    if (r.frequency != 0.f || r.confidence != 0.f || r.voiced) {
+        detail = "silence reported " + std::to_string(r.frequency) + " Hz at confidence " +
+                 std::to_string(r.confidence);
+        return false;
+    }
+
+    // Denormal-level noise is silence too, and is what an empty buffer that has
+    // been through a filter actually contains.
+    for (std::size_t i = 0; i < w.size(); i++) w[i] = (i % 2) ? 1e-9f : -1e-9f;
+    r = yin.analyse(w.data(), w.size());
+    if (r.voiced || r.frequency != 0.f) {
+        detail = "near-silence reported " + std::to_string(r.frequency) + " Hz";
+        return false;
+    }
+    return true;
+}
+
+/** A NaN anywhere in the window must not produce a result. */
+bool yinNonFinite(std::string& detail) {
+    Yin yin = makeYin(48000, 4096);
+    for (double bad : {std::nan(""), std::numeric_limits<double>::infinity(),
+                       -std::numeric_limits<double>::infinity()}) {
+        auto w = sineWindow(440.0, 48000, 4096);
+        w[2000] = (float)bad;
+        const auto r = yin.analyse(w.data(), w.size());
+        if (r.voiced || !std::isfinite(r.frequency) || !std::isfinite(r.confidence)) {
+            detail = "a non-finite sample produced frequency " +
+                     std::to_string(r.frequency) + " confidence " +
+                     std::to_string(r.confidence);
+            return false;
+        }
+    }
+    // Short and null windows must be safe too.
+    const auto tiny = yin.analyse(nullptr, 4096);
+    if (tiny.voiced) { detail = "a null window was reported as voiced"; return false; }
+    std::vector<float> four(4, 0.5f);
+    const auto shortWindow = yin.analyse(four.data(), four.size());
+    if (shortWindow.voiced) { detail = "a four-sample window was reported as voiced"; return false; }
+    return true;
+}
+
+/** The same tone must read the same at any sample rate. */
+bool yinSampleRateInvariant(std::string& detail) {
+    for (double f : {110.0, 440.0, 1500.0}) {
+        double first = 0.0;
+        for (int sampleRate : {44100, 48000, 96000}) {
+            auto w = sineWindow(f, sampleRate, 8192);
+            Yin yin = makeYin(sampleRate, 8192);
+            const auto r = yin.analyse(w.data(), w.size());
+            if (!r.voiced) {
+                detail = std::to_string(f) + " Hz was not voiced at " +
+                         std::to_string(sampleRate) + " Hz";
+                return false;
+            }
+            const double err = std::fabs(centsBetween(r.frequency, f));
+            if (err > 1.0) {
+                detail = std::to_string(f) + " Hz at sample rate " +
+                         std::to_string(sampleRate) + " was off by " +
+                         std::to_string(err) + " cents";
+                return false;
+            }
+            if (first == 0.0) first = r.frequency;
+        }
+    }
+    return true;
+}
+
+/**
+ * The frequency range must actually bound the search.
+ *
+ * Narrowing the range is the only lever on the cost of this, so a range that is
+ * ignored would be a silent performance regression as well as letting an
+ * out-of-band lag be selected.
+ */
+bool yinRespectsRange(std::string& detail) {
+    auto w = sineWindow(110.0, 48000, 4096);
+    Yin yin(4096);
+    yin.setSampleRate(48000);
+    // 110 Hz is below the floor, so the fundamental cannot be selected.
+    yin.setFrequencyRange(300.f, 2000.f);
+    const auto r = yin.analyse(w.data(), w.size());
+    if (r.frequency != 0.f && (r.frequency < 300.f || r.frequency > 2000.f)) {
+        detail = "reported " + std::to_string(r.frequency) +
+                 " Hz outside the configured 300 to 2000 Hz range";
+        return false;
+    }
+    return true;
+}
+
+/** analyse() must not allocate. */
+bool yinNoAlloc(std::string& detail) {
+    Yin yin = makeYin(48000, 4096);
+    auto w = sineWindow(440.0, 48000, 4096);
+    // Prime it once, then check the working buffers never move or resize.
+    yin.analyse(w.data(), w.size());
+    const void* before = yin.debugCmndf().data();
+    const std::size_t sizeBefore = yin.debugCmndf().size();
+
+    for (double f : {55.0, 220.0, 880.0, 1900.0}) {
+        auto v = sineWindow(f, 48000, 4096);
+        yin.analyse(v.data(), v.size());
+        // Shorter windows too, which is where a naive implementation would
+        // resize to fit.
+        yin.analyse(v.data(), 1024);
+    }
+    if (yin.debugCmndf().data() != before || yin.debugCmndf().size() != sizeBefore) {
+        detail = "the working buffer was reallocated during analysis";
+        return false;
+    }
+    return true;
+}
+
 struct TestCase {
     const char* cmd;
     const char* name;
@@ -2245,6 +2503,14 @@ const TestCase kCases[] = {
     {"--test-mixer-non-finite",   "mixer_non_finite",   mixerNonFinitePosition},
     {"--test-mixer-empty",        "mixer_empty",        mixerEmptySet},
     {"--test-mixer-samplerate",   "mixer_samplerate",   mixerFadeIsSampleRateInvariant},
+    {"--test-yin-sine-range",     "yin_sine_range",     yinSineRange},
+    {"--test-yin-noise",          "yin_noise",          yinNoiseConfidence},
+    {"--test-yin-octave",         "yin_octave",         yinNoOctaveError},
+    {"--test-yin-silence",        "yin_silence",        yinSilence},
+    {"--test-yin-non-finite",     "yin_non_finite",     yinNonFinite},
+    {"--test-yin-samplerate",     "yin_samplerate",     yinSampleRateInvariant},
+    {"--test-yin-range",          "yin_range",          yinRespectsRange},
+    {"--test-yin-no-alloc",       "yin_no_alloc",       yinNoAlloc},
 };
 
 /** The FFT checks take different arguments, so they are named separately. */
