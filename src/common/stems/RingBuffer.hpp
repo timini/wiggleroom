@@ -21,6 +21,7 @@
  ******************************************************************************/
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
@@ -52,8 +53,19 @@ public:
 
     bool empty() const { return framesWritten_ == 0; }
 
-    /** Append one frame. Overwrites the oldest frame once full. */
+    /**
+     * Append one frame. Overwrites the oldest frame once full.
+     *
+     * Non-finite input is stored as silence rather than kept. One NaN recorded
+     * from a misbehaving upstream module otherwise spreads a very long way: HPSS
+     * carries it through the FFT into all four stems, and from there into every
+     * oscillator frame and every value the mixer publishes. Stopping it at the
+     * point of entry costs one comparison per sample and saves guarding every
+     * consumer.
+     */
     void write(float left, float right) {
+        if (!std::isfinite(left)) left = 0.f;
+        if (!std::isfinite(right)) right = 0.f;
         const std::size_t base = writeIndex_ * static_cast<std::size_t>(channels_);
         data_[base] = left;
         if (channels_ == 2) data_[base + 1] = right;

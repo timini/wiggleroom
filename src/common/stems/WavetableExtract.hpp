@@ -28,7 +28,22 @@
  *     window is four times the frame, so taking every fourth sample folds
  *     everything above a quarter of the frame's Nyquist back down. Averaging
  *     each output sample over the source samples it spans is the cheapest fix
- *     and costs nothing when the ratio is one or below.
+ *     and costs nothing when the ratio is one or below. The span is rounded UP:
+ *     nearly every knob position gives a fractional ratio, and truncating a
+ *     step of 1.9995 to one sample turns the filter off exactly where it is
+ *     still needed.
+ *
+ *  5. NORMALISATION USES THE SOURCE WINDOW'S PEAK, NOT THE FRAME'S. Scaling the
+ *     frame to full scale would undo the averaging above: a tone the filter
+ *     rejected down to five per cent gets multiplied by twenty and published at
+ *     full scale, so the anti-aliasing exists only in a diagnostic. Measuring
+ *     the level before decimation means whatever the filter rejected stays
+ *     rejected, while a quiet source is still brought up.
+ *
+ *  6. NOTHING TRUSTS THE STEM DATA. A single non-finite sample anywhere in the
+ *     window would spread through the mean and the normalisation into every
+ *     value of every frame published afterwards, and RingBuffer::write stores
+ *     what it is given.
  *
  * Real-time contract: process() allocates nothing and takes no locks.
  ******************************************************************************/
@@ -53,7 +68,8 @@ public:
 
     WavetableExtract() {
         for (std::size_t i = 0; i < kFrameSize; i++) {
-            front_[i] = 0.f;
+            buffers_[0][i] = 0.f;
+            buffers_[1][i] = 0.f;
             build_[i] = 0.f;
         }
         buildEdgeWindow();
@@ -104,7 +120,7 @@ public:
         // the playhead every call would smear a single frame across however far
         // the transport moved while it was being built, so the frame would
         // never correspond to any actual moment in the material.
-        if (!building_) beginBuild(set, layer, source.size(), playhead);
+        if (phase_ == Phase::Idle) beginBuild(set, layer, source.size(), playhead);
 
         // A new stem set, a different layer or a changed window mid-build means
         // the snapshot is stale. Start again rather than finish a frame that is
@@ -114,46 +130,86 @@ public:
             beginBuild(set, layer, source.size(), playhead);
         }
 
-        const std::size_t remaining = kFrameSize - buildIndex_;
-        const std::size_t count = std::min<std::size_t>(remaining, (std::size_t)budget_);
-
-        for (std::size_t i = 0; i < count; i++) {
-            const std::size_t out = buildIndex_ + i;
-            build_[out] = sampleWindow(source, out);
+        if (phase_ == Phase::Reading) {
+            const std::size_t count =
+                std::min<std::size_t>(kFrameSize - cursor_, (std::size_t)budget_);
+            for (std::size_t i = 0; i < count; i++) {
+                build_[cursor_ + i] = readWindowSlot(source, cursor_ + i);
+            }
+            cursor_ += count;
+            samplesLastCall_ = count;
+            if (cursor_ < kFrameSize) return false;
+            beginFinalise();
+            return false;
         }
-        buildIndex_ += count;
+
+        // Finalising is amortised too. Doing the mean, the peak and the copy in
+        // the call that happens to complete the read added three whole extra
+        // passes to one call in sixteen, which is exactly the periodic spike
+        // this class exists to avoid, and debugSamplesLastCall() did not count
+        // them so the amortisation test could not see it.
+        const std::size_t count =
+            std::min<std::size_t>(kFrameSize - cursor_, (std::size_t)budget_);
+        float* back = buffers_[1 - frontIndex_];
+        for (std::size_t i = 0; i < count; i++) {
+            const std::size_t at = cursor_ + i;
+            // DC comes off BEFORE the taper. Tapering first multiplies the
+            // offset by the fade, so a constant source becomes an edge-shaped
+            // waveform which then normalises to full scale instead of silence.
+            back[at] = static_cast<float>((build_[at] - mean_) * edgeWindow_[at] * gain_);
+        }
+        cursor_ += count;
         samplesLastCall_ = count;
+        if (cursor_ < kFrameSize) return false;
 
-        if (buildIndex_ < kFrameSize) return false;
-
-        finishBuild();
+        // Publication is a pointer swap, so it costs nothing whatever the frame
+        // size is.
+        frontIndex_ = 1 - frontIndex_;
+        phase_ = Phase::Idle;
+        frameCount_++;
         return true;
     }
 
     /** The most recently completed frame. Always kFrameSize samples. */
-    const float* frame() const { return front_; }
+    const float* frame() const { return buffers_[frontIndex_]; }
     static constexpr std::size_t frameSize() { return kFrameSize; }
 
     /** Increments each time a frame completes. */
     uint64_t frameCount() const { return frameCount_; }
 
-    /** Peak of the last frame BEFORE normalisation. Diagnostics. */
-    double debugRawPeak() const { return rawPeak_; }
+    /**
+     * Peak of the source window, after DC removal and before decimation.
+     *
+     * This is what the frame is normalised against, so it is worth being able
+     * to read it.
+     */
+    double debugSourcePeak() const { return sourcePeak_; }
+
+    /** Peak of the published frame. Diagnostics. */
+    double debugFramePeak() const {
+        double peak = 0.0;
+        for (std::size_t i = 0; i < kFrameSize; i++) {
+            peak = std::max(peak, std::fabs((double)buffers_[frontIndex_][i]));
+        }
+        return peak;
+    }
 
     /** Output samples produced by the last process() call. Diagnostics. */
     std::size_t debugSamplesLastCall() const { return samplesLastCall_; }
 
     /** Discard any part-built frame. For patch load and sample rate changes. */
     void reset() {
-        building_ = false;
-        buildIndex_ = 0;
+        phase_ = Phase::Idle;
+        cursor_ = 0;
     }
 
 private:
+    enum class Phase { Idle, Reading, Finalising };
+
     void beginBuild(const StemSet* set, int layer, std::size_t sourceLength,
                     double playhead) {
-        building_ = true;
-        buildIndex_ = 0;
+        phase_ = Phase::Reading;
+        cursor_ = 0;
         buildGeneration_ = set->generation;
         buildLayer_ = layer;
         buildWindow_ = windowSamples_;
@@ -165,33 +221,72 @@ private:
         buildStart_ = centre - window * 0.5;
         buildStep_ = window / static_cast<double>(kFrameSize);
         buildLength_ = sourceLength;
+
+        sourceSum_ = 0.0;
+        sourceCount_ = 0;
+        sourceMin_ = 0.0;
+        sourceMax_ = 0.0;
+        haveSourceExtent_ = false;
+    }
+
+    void beginFinalise() {
+        phase_ = Phase::Finalising;
+        cursor_ = 0;
+
+        mean_ = (sourceCount_ > 0) ? (sourceSum_ / (double)sourceCount_) : 0.0;
+        sourcePeak_ = haveSourceExtent_
+                          ? std::max(std::fabs(sourceMax_ - mean_), std::fabs(sourceMin_ - mean_))
+                          : 0.0;
+
+        // Normalise against the SOURCE level, not the decimated frame's. See
+        // note 5: scaling the frame to full scale would multiply whatever the
+        // anti-alias average rejected straight back up, so a tone brought down
+        // to five per cent would be published at unity and the filter would
+        // exist only in a diagnostic.
+        //
+        // Silence stays silent for the same reason it always did: there is
+        // nothing to bring up, and dividing by the residue would make a
+        // full-scale frame out of rounding noise.
+        gain_ = (sourcePeak_ > 1e-7) ? (1.0 / sourcePeak_) : 0.0;
     }
 
     /**
-     * One output sample, averaged over the source samples it spans.
+     * One output sample: the average of the source over the slot it covers.
      *
      * Point sampling would be enough while the window is no longer than the
      * frame. At the top of the range it is four times longer, and every fourth
      * sample folds everything above a quarter of the frame's Nyquist straight
      * back down into the audible part of the waveform. See note 4.
      */
-    float sampleWindow(const std::vector<float>& source, std::size_t outputIndex) const {
+    float readWindowSlot(const std::vector<float>& source, std::size_t outputIndex) {
         const double from = buildStart_ + buildStep_ * static_cast<double>(outputIndex);
         const double to = from + buildStep_;
 
+        // Rounded UP, not truncated. A window of 4095 gives a step just under
+        // two, and truncating that to one sample turns the filter off for
+        // nearly every knob position that is not an exact multiple of the frame.
+        const int span = std::max(1, static_cast<int>(std::ceil(buildStep_ - 1e-9)));
+
         double accumulator = 0.0;
-        int taken = 0;
-        // One sample per source position when decimating, and exactly one
-        // interpolated read when the step is at or below one.
-        const int span = std::max(1, static_cast<int>(buildStep_));
         for (int i = 0; i < span; i++) {
             const double at = from + (to - from) * (static_cast<double>(i) + 0.5) /
                                          static_cast<double>(span);
-            accumulator += readSource(source, at);
-            taken++;
+            const double value = readSource(source, at);
+            accumulator += value;
+
+            // The level BEFORE decimation, which is what the frame is
+            // normalised against.
+            sourceSum_ += value;
+            sourceCount_++;
+            if (!haveSourceExtent_) {
+                sourceMin_ = sourceMax_ = value;
+                haveSourceExtent_ = true;
+            } else {
+                sourceMin_ = std::min(sourceMin_, value);
+                sourceMax_ = std::max(sourceMax_, value);
+            }
         }
-        const float raw = static_cast<float>(accumulator / std::max(1, taken));
-        return raw * edgeWindow_[outputIndex];
+        return static_cast<float>(accumulator / static_cast<double>(span));
     }
 
     /** Linear read, clamped at the ends. Positions outside the stem read zero. */
@@ -206,37 +301,12 @@ private:
         const std::size_t i0 = static_cast<std::size_t>(position);
         const std::size_t i1 = std::min(i0 + 1, n - 1);
         const double frac = position - static_cast<double>(i0);
-        return source[i0] + (source[i1] - source[i0]) * frac;
-    }
-
-    void finishBuild() {
-        building_ = false;
-
-        // Remove DC before normalising. An offset survives the edge fade as a
-        // step at the wrap point, and normalising with it still present spends
-        // headroom on the offset rather than on the waveform.
-        double mean = 0.0;
-        for (std::size_t i = 0; i < kFrameSize; i++) mean += build_[i];
-        mean /= static_cast<double>(kFrameSize);
-
-        double peak = 0.0;
-        for (std::size_t i = 0; i < kFrameSize; i++) {
-            build_[i] = static_cast<float>(build_[i] - mean);
-            peak = std::max(peak, std::fabs(static_cast<double>(build_[i])));
-        }
-        // Kept because normalisation hides it, and it is the only direct
-        // evidence that decimation is being averaged rather than point sampled:
-        // content above the frame's Nyquist should arrive attenuated, and after
-        // normalisation an attenuated frame and a full-scale alias look alike.
-        rawPeak_ = peak;
-
-        // Silence stays silent. Normalising it would amplify whatever rounding
-        // noise the window left behind into a full-scale frame.
-        const double gain = (peak > 1e-7) ? (1.0 / peak) : 0.0;
-        for (std::size_t i = 0; i < kFrameSize; i++) {
-            front_[i] = static_cast<float>(build_[i] * gain);
-        }
-        frameCount_++;
+        const double value = source[i0] + (source[i1] - source[i0]) * frac;
+        // Never trust the stem. RingBuffer::write stores whatever it is given,
+        // so one non-finite sample in a recording would otherwise spread through
+        // the mean and the gain into every value of every frame published after
+        // it. See note 6.
+        return std::isfinite(value) ? value : 0.0;
     }
 
     /**
@@ -271,8 +341,8 @@ private:
     float offset_ = 0.f;
     int budget_ = static_cast<int>(kFrameSize) / 16;
 
-    bool building_ = false;
-    std::size_t buildIndex_ = 0;
+    Phase phase_ = Phase::Idle;
+    std::size_t cursor_ = 0;
     uint64_t buildGeneration_ = 0;
     int buildLayer_ = 0;
     int buildWindow_ = 2048;
@@ -280,11 +350,20 @@ private:
     double buildStep_ = 1.0;
     std::size_t buildLength_ = 0;
 
+    double sourceSum_ = 0.0;
+    std::size_t sourceCount_ = 0;
+    double sourceMin_ = 0.0;
+    double sourceMax_ = 0.0;
+    bool haveSourceExtent_ = false;
+    double mean_ = 0.0;
+    double gain_ = 0.0;
+    double sourcePeak_ = 0.0;
+
     std::size_t samplesLastCall_ = 0;
-    double rawPeak_ = 0.0;
     uint64_t frameCount_ = 0;
 
-    float front_[kFrameSize];
+    int frontIndex_ = 0;
+    float buffers_[2][kFrameSize];
     float build_[kFrameSize];
     float edgeWindow_[kFrameSize];
 };

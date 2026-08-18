@@ -3862,8 +3862,11 @@ bool wtWorkIsAmortised(std::string& detail) {
                      " samples against a budget of " + std::to_string(budget);
             return false;
         }
-        const int expected = (int)WavetableExtract::kFrameSize / budget;
-        if (calls < expected || calls > expected + 1) {
+        // Reading the window and finalising it are BOTH amortised, so a frame
+        // costs two passes of budget-sized calls rather than one pass plus a
+        // spike on the call that happens to complete the read.
+        const int expected = 2 * (int)WavetableExtract::kFrameSize / budget;
+        if (calls < expected - 1 || calls > expected + 2) {
             detail = "budget " + std::to_string(budget) + " took " +
                      std::to_string(calls) + " calls, expected about " +
                      std::to_string(expected);
@@ -4087,30 +4090,201 @@ bool wtLoopsCleanly(std::string& detail) {
  * the only direct evidence.
  */
 bool wtAntiAliases(std::string& detail) {
-    struct Case { double hz; double maxRawPeak; };
-    // Measured: a box average of four at 48 kHz nulls at 12 kHz and is well
-    // down by 20 kHz. Point sampling would pass all of these at close to unity.
+    // Measured on the PUBLISHED frame, not on a diagnostic taken before
+    // normalisation. Normalising to the frame's own peak would multiply
+    // whatever the filter rejected straight back up to unity, so the
+    // anti-aliasing would exist only in the diagnostic and the audible frame
+    // would carry a full-scale aliased tone.
+    struct Case { double hz; double maxFramePeak; };
     const Case cases[] = {{12000.0, 0.10}, {20000.0, 0.30}, {14000.0, 0.40}};
     for (const auto& c : cases) {
         const auto set = toneSet(c.hz);
         WavetableExtract e;
         e.setWindowSamples(8192);
         buildFrame(e, set, 0, 24000.0);
-        if (e.debugRawPeak() > c.maxRawPeak) {
-            detail = std::to_string(c.hz) + " Hz reached a raw peak of " +
-                     std::to_string(e.debugRawPeak()) + ", above the " +
-                     std::to_string(c.maxRawPeak) + " expected from an averaged decimation";
+        const double peak = e.debugFramePeak();
+        if (peak > c.maxFramePeak) {
+            detail = std::to_string(c.hz) + " Hz was published at a frame peak of " +
+                     std::to_string(peak) + ", above the " +
+                     std::to_string(c.maxFramePeak) +
+                     " an averaged decimation should leave";
             return false;
         }
     }
     // Low frequencies must pass essentially untouched, or the filter is simply
-    // destroying everything and the test above proves nothing.
+    // destroying everything and the cases above prove nothing.
     const auto set = toneSet(200.0);
     WavetableExtract e;
     e.setWindowSamples(8192);
     buildFrame(e, set, 0, 24000.0);
-    if (e.debugRawPeak() < 0.9) {
-        detail = "200 Hz was attenuated to " + std::to_string(e.debugRawPeak());
+    if (e.debugFramePeak() < 0.9) {
+        detail = "200 Hz was published at only " + std::to_string(e.debugFramePeak());
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The anti-aliasing must hold at fractional window-to-frame ratios.
+ *
+ * Nearly every position of a continuous control gives a fractional ratio. A
+ * window of 4095 has a step just under two, and truncating that to a single
+ * sample turns the filter off exactly where it is still needed, so a test that
+ * only covers the exact 4:1 case proves very little.
+ */
+bool wtFractionalWindow(std::string& detail) {
+    // Just below each integer ratio, which is where truncation does its damage.
+    const int windows[] = {4095, 4097, 6143, 6145, 8191, 3000, 5000, 7000};
+    for (int window : windows) {
+        const double ratio = (double)window / (double)WavetableExtract::kFrameSize;
+        // A tone above the frame's Nyquist for this ratio must be rejected.
+        const double aboveNyquist = 48000.0 / (2.0 * ratio) * 1.4;
+        if (aboveNyquist > 22000.0) continue;   // not representable at this rate
+
+        const auto set = toneSet(aboveNyquist);
+        WavetableExtract e;
+        e.setWindowSamples(window);
+        buildFrame(e, set, 0, 24000.0);
+        if (e.debugFramePeak() > 0.6) {
+            detail = "window " + std::to_string(window) + " (ratio " +
+                     std::to_string(ratio) + ") published a " +
+                     std::to_string(aboveNyquist) + " Hz tone at " +
+                     std::to_string(e.debugFramePeak());
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * A constant source must give silence, not an edge-shaped waveform.
+ *
+ * Applying the taper before removing DC multiplies the offset by the fade, so a
+ * flat input becomes a shape that rises and falls with the window and then
+ * normalises to full scale. The DC comes off first.
+ */
+bool wtDcSource(std::string& detail) {
+    for (float dc : {1.f, -0.7f, 0.05f}) {
+        StemSet set;
+        set.channels = 1;
+        set.generation = 1;
+        for (int L = 0; L < StemSet::kNumLayers; L++) {
+            set.layer[L].channel[0].assign(48000, dc);
+        }
+        WavetableExtract e;
+        buildFrame(e, set, 0, 24000.0);
+        if (e.debugFramePeak() > 1e-5) {
+            detail = "a constant " + std::to_string(dc) +
+                     " source produced a frame peaking at " +
+                     std::to_string(e.debugFramePeak());
+            return false;
+        }
+    }
+
+    // And an offset tone must give the tone, not the tone plus an edge shape.
+    StemSet offset;
+    offset.channels = 1;
+    offset.generation = 2;
+    for (int L = 0; L < StemSet::kNumLayers; L++) {
+        offset.layer[L].channel[0].assign(48000, 0.f);
+        for (std::size_t i = 0; i < 48000; i++) {
+            offset.layer[L].channel[0][i] =
+                (float)(0.9 + 0.1 * std::sin(2 * M_PI * 300.0 * (double)i / 48000.0));
+        }
+    }
+    WavetableExtract e;
+    buildFrame(e, offset, 0, 24000.0);
+    double mean = 0.0;
+    for (std::size_t i = 0; i < e.frameSize(); i++) mean += e.frame()[i];
+    mean /= (double)e.frameSize();
+    if (std::fabs(mean) > 0.02) {
+        detail = "a tone on a 0.9 offset left a frame DC of " + std::to_string(mean);
+        return false;
+    }
+    if (e.debugFramePeak() < 0.5) {
+        detail = "a tone on a 0.9 offset was published at only " +
+                 std::to_string(e.debugFramePeak());
+        return false;
+    }
+    return true;
+}
+
+/**
+ * One non-finite sample in a stem must not poison every frame after it.
+ *
+ * RingBuffer::write stores what it is given, so this is reachable from a
+ * misbehaving upstream module, and without a guard the value spreads through
+ * the mean and the gain into every value of every frame published afterwards.
+ */
+bool wtNonFiniteStem(std::string& detail) {
+    for (float poison : {std::nanf(""), std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity()}) {
+        auto set = toneSet(220.0);
+        // Inside the window that will be read at playhead 24000 with the
+        // default 2048 window.
+        for (int L = 0; L < StemSet::kNumLayers; L++) {
+            set.layer[L].channel[0][24000] = poison;
+            set.layer[L].channel[0][23500] = poison;
+        }
+        WavetableExtract e;
+        buildFrame(e, set, 0, 24000.0);
+        for (std::size_t i = 0; i < e.frameSize(); i++) {
+            if (!std::isfinite(e.frame()[i])) {
+                detail = "a poisoned stem produced a non-finite frame sample at " +
+                         std::to_string(i);
+                return false;
+            }
+        }
+        // And the frame must still be usable, not flattened to nothing.
+        if (e.debugFramePeak() < 0.5) {
+            detail = "a single bad sample flattened the frame to " +
+                     std::to_string(e.debugFramePeak());
+            return false;
+        }
+
+        // The next frame, from clean material, must be unaffected.
+        const auto clean = toneSet(220.0, 48000, 7);
+        WavetableExtract after;
+        buildFrame(after, clean, 0, 24000.0);
+        if (!std::isfinite(after.debugFramePeak()) || after.debugFramePeak() < 0.5) {
+            detail = "a later clean frame was affected";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * The ring buffer must not store non-finite input.
+ *
+ * This is the path by which a bad sample reaches everything else: HPSS carries
+ * a NaN through the FFT into all four stems, and from there into every
+ * oscillator frame and every value the mixer publishes. Guarding at the point
+ * of entry is cheaper than guarding every consumer.
+ */
+bool bufferRejectsNonFinite(std::string& detail) {
+    RingBuffer buffer(48000, 0.1f, 2);
+    for (int i = 0; i < 100; i++) buffer.write(0.5f, -0.5f);
+    buffer.write(std::nanf(""), 0.25f);
+    buffer.write(0.25f, std::numeric_limits<float>::infinity());
+    buffer.write(-std::numeric_limits<float>::infinity(), std::nanf(""));
+    for (int i = 0; i < 100; i++) buffer.write(0.5f, -0.5f);
+
+    for (std::size_t i = 0; i < buffer.framesStored(); i++) {
+        float l = 0.f, r = 0.f;
+        buffer.readFrame(i, l, r);
+        if (!std::isfinite(l) || !std::isfinite(r)) {
+            detail = "frame " + std::to_string(i) + " holds a non-finite sample";
+            return false;
+        }
+    }
+    // The good channel of a half-bad frame must survive, so the guard is
+    // per-sample rather than dropping whole frames.
+    float l = 0.f, r = 0.f;
+    buffer.readFrame(100, l, r);
+    if (l != 0.f || r != 0.25f) {
+        detail = "a half-bad frame stored (" + std::to_string(l) + ", " +
+                 std::to_string(r) + ") instead of (0, 0.25)";
         return false;
     }
     return true;
@@ -4335,6 +4509,10 @@ const TestCase kCases[] = {
     {"--test-wt-normalise",       "wt_normalise",       wtNormalises},
     {"--test-wt-loop",            "wt_loop",            wtLoopsCleanly},
     {"--test-wt-antialias",       "wt_antialias",       wtAntiAliases},
+    {"--test-wt-fractional",      "wt_fractional",      wtFractionalWindow},
+    {"--test-wt-dc-source",       "wt_dc_source",       wtDcSource},
+    {"--test-wt-nan-stem",        "wt_nan_stem",        wtNonFiniteStem},
+    {"--test-buffer-non-finite-write","buffer_non_finite_write",bufferRejectsNonFinite},
     {"--test-wt-restart",         "wt_restart",         wtRestartsOnChange},
     {"--test-wt-bad-input",       "wt_bad_input",       wtBadInput},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},

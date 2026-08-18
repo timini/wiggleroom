@@ -153,6 +153,20 @@ class TestRingBuffer:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestRingBufferHardening:
+    """Guarding the point where audio enters the module."""
+
+    def test_non_finite_input_is_not_stored(self):
+        """This is the path by which a bad sample reaches everything else: HPSS
+        carries a NaN through the FFT into all four stems, and from there into
+        every oscillator frame and every value the mixer publishes. Guarding on
+        write costs one comparison per sample and saves guarding every consumer.
+        Per-sample, so the good channel of a half-bad frame survives.
+        """
+        result = run_test(["--test-buffer-non-finite-write"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 class TestTransport:
     """Clock tracking and repitch playback.
 
@@ -931,7 +945,12 @@ class TestWavetableExtract:
 
     def test_the_work_is_spread_evenly_across_calls(self):
         """Building a whole frame in the call where the playhead crosses a
-        boundary is a spike, and the spike lands on the audio thread. Checked at
+        boundary is a spike, and the spike lands on the audio thread.
+
+        Reading the window and finalising it are both amortised. Doing the mean,
+        the peak and the copy in the call that happens to complete the read
+        added three whole extra passes to one call in sixteen, and the
+        diagnostic did not count them, so this test could not see it. Checked at
         four budgets and across several frames. Verified to have teeth: 2048
         samples in one call against a budget of 16.
         """
@@ -975,17 +994,45 @@ class TestWavetableExtract:
         assert result["failed"] == 0, result.get("detail", "")
 
     def test_decimation_is_averaged_not_point_sampled(self):
-        """At the top of the range the window is four times the frame, so every
-        fourth sample folds everything above a quarter of the frame's Nyquist
-        back down.
+        """Measured on the PUBLISHED frame, not on a pre-normalisation
+        diagnostic.
 
-        Normalisation hides this completely: an attenuated frame and a
-        full-scale alias both peak at one, so the pre-normalisation peak is the
-        only direct evidence. Verified to have teeth: point sampling passes
-        20 kHz at 0.87 where averaging gives 0.05. Low frequencies are checked
-        to pass untouched, so the filter is not simply destroying everything.
+        Normalising to the frame's own peak undoes the filter: a tone rejected
+        down to five per cent gets multiplied by twenty and published at unity,
+        so the anti-aliasing exists only in the diagnostic. The frame is
+        normalised against the SOURCE window's peak instead, so whatever the
+        filter rejected stays rejected. Verified to have teeth: frame-peak
+        normalisation publishes 20 kHz at 1.0 against a bar of 0.3.
         """
         result = run_test(["--test-wt-antialias"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_filter_holds_at_fractional_window_ratios(self):
+        """Nearly every position of a continuous control gives a fractional
+        window-to-frame ratio, and a window of 4095 has a step just under two.
+        Truncating that to a single sample turns the filter off exactly where it
+        is still needed. Verified to have teeth: truncation publishes a 16.8 kHz
+        tone at full scale, while the exact 4:1 test above still passes.
+        """
+        result = run_test(["--test-wt-fractional"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_dc_is_removed_before_the_taper(self):
+        """Tapering first multiplies the offset by the fade, so a flat input
+        becomes a shape that rises and falls with the window and then normalises
+        to full scale. Verified to have teeth: a tone on a 0.9 offset leaves a
+        frame DC of -0.45.
+        """
+        result = run_test(["--test-wt-dc-source"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_one_bad_stem_sample_does_not_poison_the_frame(self):
+        """RingBuffer stores what it is given, so this is reachable from a
+        misbehaving upstream module. Without a guard the value spreads through
+        the mean and the gain into every value of every frame published
+        afterwards.
+        """
+        result = run_test(["--test-wt-nan-stem"])
         assert result["failed"] == 0, result.get("detail", "")
 
     def test_a_stale_snapshot_restarts_the_build(self):
