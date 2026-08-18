@@ -1587,6 +1587,106 @@ class TestGrainEngine:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestDiffusion:
+    """The space at the end of the granular chain."""
+
+    def test_the_decay_control_sets_the_decay(self):
+        """Checked to eight seconds and required to be monotonic, because a
+        ceiling that is too low only shows at the top: with the safety limit at
+        0.93 the four and eight second settings both measured about four, and a
+        test stopping at four would have called that correct. Verified to have
+        teeth against both a fixed feedback gain and the low ceiling.
+        """
+        result = run_test(["--test-diffusion-decay"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_it_does_not_run_away_at_maximum(self):
+        """A minute of silence after the input stops, at three damping
+        settings. Verified to have teeth: a loop gain of one leaves the tail at
+        2.06 a minute later.
+        """
+        result = run_test(["--test-diffusion-runaway"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_decay_does_not_change_with_sample_rate(self):
+        """The gain is derived from the decay time and the delay length, so the
+        same knob position means the same seconds at every rate."""
+        result = run_test(["--test-diffusion-samplerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_mix_reaches_fully_dry_and_fully_wet(self):
+        result = run_test(["--test-diffusion-mix"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_damping_takes_brightness_out_of_the_tail(self):
+        """Measured as spectral centroid on the tail, driven with noise so
+        there is content at every frequency to remove."""
+        result = run_test(["--test-diffusion-damping"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_two_channels_decorrelate(self):
+        """Measured over the tail, since the direct sound is identical on both
+        sides by construction and would mask the decorrelation behind it."""
+        result = run_test(["--test-diffusion-stereo"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_extreme_input_does_not_poison_the_feedback_path(self):
+        """Also checks ordinary audio afterwards still works, which is what an
+        infinity trapped in a recirculating network destroys permanently."""
+        result = run_test(["--test-diffusion-bad-input"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_rate_change_does_not_drop_the_tail(self):
+        """Clearing every delay line on a rate change is an audible hole exactly
+        where the spec asks for no dropout. Verified to have teeth: the tail
+        goes to zero.
+        """
+        result = run_test(["--test-diffusion-rate-tail"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_every_comb_decays_at_the_requested_rate(self):
+        """RT60 is proportional to a comb's own delay, so one gain taken from
+        the longest line leaves every other loop wrong. Verified to have teeth:
+        the offset right channel runs 17% long.
+        """
+        result = run_test(["--test-diffusion-per-comb"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_allpass_stages_do_not_colour(self):
+        """Writing the recurrence without the gain on the feed-forward term is
+        not an allpass: its impulse response is -1, 1, 0.5. Verified to have
+        teeth: a correct chain measures -6.35 dB on broadband material where the
+        broken one measures +8.41.
+        """
+        result = run_test(["--test-diffusion-allpass"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_tail_reaches_exact_zero(self):
+        """A recirculating network never quite reaches zero: the feedback drops
+        into the subnormal range and is written back indefinitely, so a silent
+        patch spends millions of samples on denormal arithmetic. Verified to
+        have teeth.
+        """
+        result = run_test(["--test-diffusion-denormal"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_tail_does_not_acquire_a_pitch(self):
+        """Bounds how peaky the tail's spectrum gets. It does NOT on its own
+        distinguish the coprimality adjustment from the raw millisecond
+        constants, which already avoid the worst collisions; the adjustment is
+        kept because the claim in the header should be true rather than nearly
+        true.
+        """
+        result = run_test(["--test-diffusion-coprime"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_sample_rate_change_does_not_reallocate(self):
+        """Storage is sized once for the highest supported rate, so moving
+        between rates never needs more."""
+        result = run_test(["--test-diffusion-no-alloc"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 class TestExtremeInput:
     """Hostile but legal input, across every module at once."""
 
