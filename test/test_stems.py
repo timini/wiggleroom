@@ -763,6 +763,52 @@ class TestScaleDetect:
         result = run_test(["--test-scale-key-change"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_a_held_result_reports_that_it_is_held(self):
+        """The spec requires the UI to show analysis is inactive on a percussive
+        stem, and the histogram alone cannot say so: nothing reaches it, so it
+        looks exactly as it did when the last real key was found and detect()
+        goes on re-reporting that as a current detection. A running fraction of
+        recent offers that were pitched enough to count is what distinguishes
+        them. Verified to have teeth in both parts.
+        """
+        result = run_test(["--test-scale-inactive"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_evidence_gate_is_reachable_at_any_decay(self):
+        """The histogram is a decaying accumulator, so its total is bounded by
+        1 / (1 - decay). At decay 0.875 that ceiling is exactly the default
+        minimum of 8, and below it the gate can never open however many pitches
+        arrive. Decay is now floored at 0.9, and the gate is separately
+        reconciled against the reachable ceiling. Verified to have teeth.
+        """
+        result = run_test(["--test-scale-decay-gate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_sustained_note_is_not_a_scale(self):
+        """The weight gate counts observations and says nothing about whether
+        they contain enough distinct pitches to imply a key. Verified to have
+        teeth: without the tonal spread gate, one sustained note declares its
+        own major key at confidence 0.68. A root and fifth is also rejected; a
+        triad is accepted, so the guard does not reject ordinary material.
+        """
+        result = run_test(["--test-scale-sustained"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_pitch_gate_agrees_with_yin(self):
+        """YIN marks a lag voiced when its CMNDF is below its threshold and
+        reports confidence as 1 - CMNDF, so at the default 0.12 the equivalent
+        cutoff is 0.88, not 0.5.
+
+        Driven with real YIN output on noisy tones and damped percussive hits,
+        which land between 0.5 and 0.88 while marked unvoiced, usually on the
+        wrong frequency. White noise will not do here: it scores under 0.07, so
+        a cutoff of 0.5 rejects it too and the test would pass whatever the
+        threshold was. Verified to have teeth: at 0.5 this material contributes
+        42.6 of weight.
+        """
+        result = run_test(["--test-scale-yin-gate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_a_flat_histogram_has_no_key(self):
         """Zero variance, no tonal centre, no NaN."""
         result = run_test(["--test-scale-flat"])

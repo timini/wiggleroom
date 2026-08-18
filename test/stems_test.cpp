@@ -2888,6 +2888,235 @@ bool scaleFollowsAKeyChange(std::string& detail) {
     return true;
 }
 
+/**
+ * While holding, the result must say it is holding.
+ *
+ * The spec requires the UI to show that analysis is inactive when a percussive
+ * stem is selected. Returning the stored result unchanged kept reporting the
+ * confidence and the detected flag from whenever the key was last found, so a
+ * caller could not tell a live detection from one made minutes ago on entirely
+ * different material.
+ */
+bool scaleReportsInactivity(std::string& detail) {
+    ScaleDetect detector;
+    feedKey(detector, 62, Mode::Major);  // D major
+    const auto live = detector.detect();
+    if (!live.detected || live.root != 2) {
+        detail = "setup failed: expected a live D major, got " + keyDetail(live);
+        return false;
+    }
+
+    // Switch to a percussive stem: everything below the voicing gate.
+    std::mt19937 rng(4242);
+    std::uniform_real_distribution<float> freq(60.f, 3000.f);
+    std::uniform_real_distribution<float> conf(0.f, 0.5f);
+    for (int i = 0; i < 500; i++) detector.addPitch(freq(rng), conf(rng));
+
+    const auto held = detector.detect();
+    if (held.root != 2 || held.mode != Mode::Major) {
+        detail = "the held key changed: " + keyDetail(held);
+        return false;
+    }
+    if (held.detected) {
+        detail = "a held result still reported detected=true: " + keyDetail(held);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The evidence gate must stay reachable however the decay is set.
+ *
+ * The histogram is a decaying accumulator, so the total weight is bounded above
+ * by 1 / (1 - decay). At decay 0.875 that ceiling is exactly the default
+ * minimum of 8, and below it the gate can never open however many pitches
+ * arrive, leaving the detector on its seed forever.
+ */
+bool scaleDecayGateIsReachable(std::string& detail) {
+    // Decay is floored at 0.9, because below that the histogram remembers fewer
+    // than ten observations and cannot hold a scale's worth of distinct pitch
+    // classes at all. Check the floor is applied rather than silently accepting
+    // a setting that would make the detector useless.
+    {
+        ScaleDetect floored;
+        floored.setDecay(0.1f);
+        feedKey(floored, 60, Mode::Major, 40);
+        const auto r = floored.detect();
+        if (!r.detected || r.root != 0) {
+            detail = "an absurdly low decay was not floored: " + keyDetail(r) +
+                     ", weight " + std::to_string(floored.totalWeight());
+            return false;
+        }
+    }
+
+    for (float decay : {0.9f, 0.95f, 0.99f, 0.999f, 1.f}) {
+        ScaleDetect detector;
+        detector.setDecay(decay);
+        // Plenty of material, well past any steady state.
+        feedKey(detector, 60, Mode::Major, 40);
+        const auto r = detector.detect();
+        if (!r.detected) {
+            detail = "at decay " + std::to_string(decay) +
+                     " a long stretch of C major never opened the gate: " + keyDetail(r) +
+                     ", weight " + std::to_string(detector.totalWeight());
+            return false;
+        }
+        if (r.root != 0 || r.mode != Mode::Major) {
+            detail = "at decay " + std::to_string(decay) + " detected " + keyDetail(r);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * A sustained note is not a scale.
+ *
+ * The weight gate counts observations and says nothing about whether they
+ * contain enough distinct pitches to imply a key. Eight observations of ONE
+ * note reach the default weight and correlate at about 0.68 with that note's
+ * major key, which is enough to replace a real key on no evidence for either a
+ * root or a mode. A repeatedly latched transient does the same.
+ */
+bool scaleSustainedNoteIsNotAKey(std::string& detail) {
+    // A single pitch, from a fresh detector.
+    for (int midi : {60, 63, 67, 70}) {
+        ScaleDetect detector;
+        detector.setSeed(5, Mode::Minor);
+        for (int i = 0; i < 40; i++) detector.addPitch(midiHz(midi), 1.f);
+        const auto r = detector.detect();
+        if (r.detected) {
+            detail = "a single sustained pitch declared " + keyDetail(r);
+            return false;
+        }
+        if (r.root != 5 || r.mode != Mode::Minor) {
+            detail = "a single sustained pitch did not hold the seed: " + keyDetail(r);
+            return false;
+        }
+    }
+
+    // And it must not displace an established key either.
+    ScaleDetect detector;
+    feedKey(detector, 60, Mode::Major);
+    const auto established = detector.detect();
+    for (int i = 0; i < 400; i++) detector.addPitch(midiHz(66), 1.f);
+    const auto after = detector.detect();
+    if (after.root != established.root || after.mode != established.mode) {
+        detail = "a sustained pitch displaced " + keyName(established) + " with " +
+                 keyDetail(after);
+        return false;
+    }
+
+    // A root and fifth is still not a key. Two classes score 0.28 spread.
+    ScaleDetect pair;
+    for (int i = 0; i < 40; i++) {
+        pair.addPitch(midiHz(60), 1.f);
+        pair.addPitch(midiHz(67), 1.f);
+    }
+    if (pair.detect().detected) {
+        detail = "a root and fifth declared " + keyDetail(pair.detect());
+        return false;
+    }
+
+    // A triad IS enough evidence to offer a key, so the guard must not be so
+    // strict that ordinary material is rejected.
+    ScaleDetect triad;
+    for (int i = 0; i < 40; i++) {
+        triad.addPitch(midiHz(60), 1.f);
+        triad.addPitch(midiHz(64), 1.f);
+        triad.addPitch(midiHz(67), 1.f);
+    }
+    if (!triad.detect().detected) {
+        detail = "a C major triad was rejected: " + keyDetail(triad.detect()) +
+                 ", spread " + std::to_string(triad.spread());
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The pitch gate must agree with YIN rather than guess at it.
+ *
+ * YIN marks a lag voiced when its CMNDF falls below its threshold and reports
+ * confidence as 1 - CMNDF, so at the default 0.12 the equivalent cutoff is
+ * 0.88. A lower cutoff here accepts estimates YIN itself classified as
+ * unvoiced, which is how moderately periodic percussion accumulates enough
+ * weight to replace a real key.
+ */
+bool scaleGateMatchesYin(std::string& detail) {
+    const int sampleRate = 48000;
+    std::mt19937 rng(31337);
+    std::uniform_real_distribution<float> nz(-1.f, 1.f);
+
+    Yin yin(4096);
+    yin.setSampleRate(sampleRate);
+    yin.setFrequencyRange(50.f, 2200.f);
+
+    // Material that lands in the awkward band. White noise alone will not do:
+    // it scores under 0.07, so a cutoff of 0.5 rejects it too and the test would
+    // pass whatever the threshold was. These are noisy tones and damped
+    // percussive hits, which YIN marks unvoiced while still reporting
+    // confidence between 0.5 and 0.88, usually on the WRONG frequency.
+    std::vector<std::vector<float>> windows;
+    for (double noiseAmp : {0.6, 0.9, 1.2}) {
+        std::vector<float> w(4096);
+        for (std::size_t i = 0; i < w.size(); i++) {
+            w[i] = (float)(std::sin(2 * M_PI * 220.0 * (double)i / sampleRate) +
+                           noiseAmp * nz(rng));
+        }
+        windows.push_back(std::move(w));
+    }
+    for (double decay : {0.9990, 0.9995, 0.9998}) {
+        std::vector<float> w(4096);
+        double env = 1.0;
+        for (std::size_t i = 0; i < w.size(); i++) {
+            if (i % 400 == 0) env = 1.0;
+            env *= decay;
+            w[i] = (float)(env * (std::sin(2 * M_PI * 180.0 * (double)i / sampleRate) +
+                                  0.7 * nz(rng)));
+        }
+        windows.push_back(std::move(w));
+    }
+
+    ScaleDetect viaFlag;
+    ScaleDetect viaConfidence;
+    int inBand = 0;
+    for (int rep = 0; rep < 10; rep++) {
+        for (const auto& w : windows) {
+            const auto r = yin.analyse(w.data(), w.size());
+            if (!r.voiced && r.confidence > 0.5f) inBand++;
+            viaFlag.addPitch(r.frequency, r.confidence, r.voiced);
+            viaConfidence.addPitch(r.frequency, r.confidence);
+        }
+    }
+    if (inBand == 0) {
+        detail = "setup failed: no unvoiced results above confidence 0.5 to test with";
+        return false;
+    }
+    if (viaFlag.totalWeight() != 0.0) {
+        detail = "the voiced flag let " + std::to_string(viaFlag.totalWeight()) +
+                 " of unpitched material through";
+        return false;
+    }
+    if (viaConfidence.totalWeight() != 0.0) {
+        detail = "the default confidence cutoff let " +
+                 std::to_string(viaConfidence.totalWeight()) +
+                 " of unpitched material through; it does not match YIN's voicing gate";
+        return false;
+    }
+
+    // The flag must win even when the confidence would have passed, so a caller
+    // that changes YIN's threshold gets the right behaviour without changing
+    // anything here.
+    ScaleDetect flagged;
+    for (int i = 0; i < 40; i++) flagged.addPitch(midiHz(60 + (i % 7)), 0.99f, false);
+    if (flagged.totalWeight() != 0.0) {
+        detail = "voiced=false was ignored for a high-confidence pitch";
+        return false;
+    }
+    return true;
+}
+
 /** A flat histogram has no key and must not produce a NaN that wins. */
 bool scaleFlatHistogram(std::string& detail) {
     ScaleDetect detector;
@@ -3066,6 +3295,10 @@ const TestCase kCases[] = {
     {"--test-scale-weight-gate",  "scale_weight_gate",  scaleWeightGate},
     {"--test-scale-seed",         "scale_seed",         scaleSeeding},
     {"--test-scale-key-change",   "scale_key_change",   scaleFollowsAKeyChange},
+    {"--test-scale-inactive",     "scale_inactive",     scaleReportsInactivity},
+    {"--test-scale-decay-gate",   "scale_decay_gate",   scaleDecayGateIsReachable},
+    {"--test-scale-sustained",    "scale_sustained",    scaleSustainedNoteIsNotAKey},
+    {"--test-scale-yin-gate",     "scale_yin_gate",     scaleGateMatchesYin},
     {"--test-scale-flat",         "scale_flat",         scaleFlatHistogram},
     {"--test-scale-bad-input",    "scale_bad_input",    scaleBadInput},
 };
