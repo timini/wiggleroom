@@ -33,6 +33,7 @@
 #include "common/stems/FftBackend.hpp"
 #include "common/stems/ReferenceFft.hpp"
 #include "common/stems/RingBuffer.hpp"
+#include "common/stems/Diffusion.hpp"
 #include "common/stems/GrainEngine.hpp"
 #include "common/stems/Hpss.hpp"
 #include "common/stems/SeparationWorker.hpp"
@@ -6947,6 +6948,505 @@ bool grainJitterWraps(std::string& detail) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Diffusion
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::Diffusion;
+
+namespace {
+/** Impulse response of the network, wet only. */
+std::vector<float> diffusionTail(Diffusion& reverb, std::size_t samples,
+                                 std::size_t burst = 1) {
+    std::vector<float> out;
+    out.reserve(samples);
+    for (std::size_t i = 0; i < samples; i++) {
+        const float in = (i < burst) ? 1.f : 0.f;
+        out.push_back(reverb.process(in, in).left);
+    }
+    return out;
+}
+
+/** Time from the peak until the envelope stays below -60 dB, in seconds. */
+double decayTimeSeconds(const std::vector<float>& tail, int sampleRate) {
+    double peak = 0.0;
+    for (float v : tail) peak = std::max(peak, std::fabs((double)v));
+    if (peak < 1e-12) return -1.0;
+    const double threshold = peak * 0.001;
+    for (std::size_t i = tail.size(); i-- > 0;) {
+        if (std::fabs((double)tail[i]) > threshold) return (double)i / sampleRate;
+    }
+    return 0.0;
+}
+}  // namespace
+
+/** The decay control must set the decay. */
+bool diffusionDecayTracks(std::string& detail) {
+    const int sampleRate = 48000;
+    double previous = -1.0;
+    // Up to eight seconds, because a ceiling that is too low only shows at the
+    // top: at 0.93 the four and eight second settings both measured about four,
+    // and a test stopping at four would have called that correct.
+    for (float seconds : {0.2f, 0.5f, 1.f, 2.f, 4.f, 8.f}) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(seconds);
+        reverb.setMix(1.f);
+        reverb.setDamping(0.f);
+        const auto tail = diffusionTail(reverb, (std::size_t)(sampleRate * 30));
+        const double measured = decayTimeSeconds(tail, sampleRate);
+        if (measured < 0.0) { detail = "the network produced nothing"; return false; }
+
+        const double ratio = measured / seconds;
+        if (ratio < 0.7 || ratio > 1.5) {
+            detail = "a " + std::to_string(seconds) + " s decay measured " +
+                     std::to_string(measured) + " s";
+            return false;
+        }
+        // Monotonic, so the control cannot saturate part way up its range. The
+        // safety ceiling on the loop gain was originally low enough that four
+        // and eight seconds both measured about four.
+        if (measured <= previous) {
+            detail = "decay stopped increasing at " + std::to_string(seconds) +
+                     " s: measured " + std::to_string(measured) + " after " +
+                     std::to_string(previous);
+            return false;
+        }
+        previous = measured;
+    }
+    return true;
+}
+
+/** At maximum decay it must still be a reverb, not an oscillator. */
+bool diffusionNoRunaway(std::string& detail) {
+    const int sampleRate = 48000;
+    for (float damping : {0.f, 0.5f, 0.9f}) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(10.f);
+        reverb.setMix(1.f);
+        reverb.setDamping(damping);
+
+        double peak = 0.0, tailLevel = 0.0;
+        const std::size_t total = (std::size_t)sampleRate * 60;
+        for (std::size_t i = 0; i < total; i++) {
+            const float in = (i < 64) ? 1.f : 0.f;
+            const auto f = reverb.process(in, in);
+            if (!std::isfinite(f.left) || !std::isfinite(f.right)) {
+                detail = "the network produced a non-finite sample";
+                return false;
+            }
+            peak = std::max(peak, std::fabs((double)f.left));
+            if (i > (std::size_t)sampleRate * 55) {
+                tailLevel = std::max(tailLevel, std::fabs((double)f.left));
+            }
+        }
+        if (tailLevel > 1e-6) {
+            detail = "at damping " + std::to_string(damping) +
+                     " the tail was still at " + std::to_string(tailLevel) +
+                     " a minute after the input stopped";
+            return false;
+        }
+        if (peak > 4.0) {
+            detail = "peak reached " + std::to_string(peak);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Decay is in seconds, so it must not change with the sample rate. */
+bool diffusionSampleRate(std::string& detail) {
+    double reference = 0.0;
+    for (int sampleRate : {44100, 48000, 96000}) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(1.f);
+        reverb.setMix(1.f);
+        reverb.setDamping(0.f);
+        const auto tail = diffusionTail(reverb, (std::size_t)(sampleRate * 8));
+        const double measured = decayTimeSeconds(tail, sampleRate);
+        if (measured < 0.0) {
+            detail = "no output at " + std::to_string(sampleRate);
+            return false;
+        }
+        if (reference == 0.0) reference = measured;
+        const double ratio = measured / reference;
+        if (ratio < 0.8 || ratio > 1.25) {
+            detail = "decay was " + std::to_string(reference) + " s at the first rate and " +
+                     std::to_string(measured) + " s at " + std::to_string(sampleRate);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Mix must reach fully dry and fully wet. */
+bool diffusionMix(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion dry(sampleRate);
+    dry.setMix(0.f);
+    dry.setDecaySeconds(2.f);
+    for (int i = 0; i < 1000; i++) {
+        const float in = (i == 0) ? 1.f : 0.f;
+        const auto f = dry.process(in, in);
+        if (std::fabs(f.left - in) > 1e-6f) {
+            detail = "at mix 0 the output differed from the input by " +
+                     std::to_string(std::fabs(f.left - in));
+            return false;
+        }
+    }
+
+    Diffusion wet(sampleRate);
+    wet.setMix(1.f);
+    wet.setDecaySeconds(2.f);
+    const auto tail = diffusionTail(wet, 48000);
+    double late = 0.0;
+    for (std::size_t i = 4000; i < tail.size(); i++) {
+        late = std::max(late, std::fabs((double)tail[i]));
+    }
+    if (late < 1e-4) {
+        detail = "at mix 1 there was no tail after the direct sound";
+        return false;
+    }
+    return true;
+}
+
+/** Damping must take brightness out of the tail. */
+bool diffusionDamping(std::string& detail) {
+    const int sampleRate = 48000;
+    auto tailCentroid = [&](float damping) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(3.f);
+        reverb.setMix(1.f);
+        reverb.setDamping(damping);
+        // White noise in, so there is content at every frequency to remove.
+        std::mt19937 rng(4242);
+        std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+        std::vector<float> out;
+        for (int i = 0; i < sampleRate; i++) {
+            const float in = (i < sampleRate / 4) ? dist(rng) : 0.f;
+            out.push_back(reverb.process(in, in).left);
+        }
+        std::vector<float> late(out.begin() + sampleRate / 2,
+                                out.begin() + sampleRate / 2 + 4096);
+        return centroidHz(late, sampleRate);
+    };
+
+    const double bright = tailCentroid(0.f);
+    const double dull = tailCentroid(0.9f);
+    if (bright < 100.0) { detail = "the undamped tail had no content"; return false; }
+    if (dull >= bright * 0.9) {
+        detail = "damping barely changed the tail: centroid " + std::to_string(bright) +
+                 " Hz to " + std::to_string(dull) + " Hz";
+        return false;
+    }
+    return true;
+}
+
+/** The two channels must not be identical, or it is not a space. */
+bool diffusionStereo(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion reverb(sampleRate);
+    reverb.setDecaySeconds(2.f);
+    reverb.setMix(1.f);
+    reverb.setDamping(0.3f);
+
+    std::vector<float> left, right;
+    for (int i = 0; i < sampleRate; i++) {
+        const float in = (i < 64) ? 1.f : 0.f;
+        const auto f = reverb.process(in, in);
+        left.push_back(f.left);
+        right.push_back(f.right);
+    }
+    // Measured over the TAIL, since the direct sound is the same on both sides
+    // by construction and would mask any decorrelation behind it.
+    double lr = 0.0, ll = 0.0, rr = 0.0;
+    for (std::size_t i = 4000; i < left.size(); i++) {
+        lr += (double)left[i] * right[i];
+        ll += (double)left[i] * left[i];
+        rr += (double)right[i] * right[i];
+    }
+    if (ll < 1e-9 || rr < 1e-9) { detail = "one channel was silent"; return false; }
+    const double correlation = lr / std::sqrt(ll * rr);
+    if (correlation > 0.9) {
+        detail = "the two channels correlate at " + std::to_string(correlation) +
+                 "; the tail is effectively mono";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * A recirculating network never recovers from an infinity, so extreme finite
+ * input must be clamped rather than merely checked for finiteness.
+ */
+bool diffusionBadInput(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion reverb(sampleRate);
+    reverb.setMix(1.f);
+    reverb.setDecaySeconds(2.f);
+
+    const float bad[] = {std::numeric_limits<float>::max(),
+                         -std::numeric_limits<float>::max(),
+                         std::numeric_limits<float>::max(),
+                         std::nanf(""), std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(), 1e30f, -1e30f};
+    for (float v : bad) {
+        const auto f = reverb.process(v, v);
+        if (!std::isfinite(f.left) || !std::isfinite(f.right)) {
+            detail = "input " + std::to_string(v) + " produced a non-finite sample";
+            return false;
+        }
+    }
+
+    // Ordinary audio afterwards must still work, which is what an infinity
+    // trapped in the feedback path destroys permanently.
+    double peak = 0.0;
+    for (int i = 0; i < 40000; i++) {
+        const float in = (i < 100) ? 0.5f : 0.f;
+        const auto f = reverb.process(in, in);
+        if (!std::isfinite(f.left)) {
+            detail = "ordinary audio after extreme input returned a non-finite value";
+            return false;
+        }
+        peak = std::max(peak, std::fabs((double)f.left));
+    }
+    if (peak < 1e-3) {
+        detail = "the network was left dead after extreme input";
+        return false;
+    }
+
+    for (float v : {std::nanf(""), std::numeric_limits<float>::infinity(), -1e20f}) {
+        reverb.setDecaySeconds(v);
+        reverb.setMix(v);
+        reverb.setDamping(v);
+    }
+    for (int i = 0; i < 1000; i++) {
+        if (!std::isfinite(reverb.process(0.3f, 0.3f).left)) {
+            detail = "non-finite settings produced a non-finite sample";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * A sample rate change must not drop the tail.
+ *
+ * Clearing every delay line on a rate change is an audible hole exactly where
+ * the spec asks for no dropout. The stored samples are at the old rate, so the
+ * tail is briefly the wrong length, which is a far smaller artefact.
+ */
+bool diffusionKeepsTailAcrossRateChange(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion reverb(sampleRate);
+    reverb.setDecaySeconds(4.f);
+    reverb.setMix(1.f);
+    reverb.setDamping(0.2f);
+
+    // Establish a tail.
+    for (int i = 0; i < sampleRate / 2; i++) {
+        const float in = (i < 256) ? 1.f : 0.f;
+        reverb.process(in, in);
+    }
+    double before = 0.0;
+    for (int i = 0; i < 2000; i++) {
+        before = std::max(before, std::fabs((double)reverb.process(0.f, 0.f).left));
+    }
+    if (before < 1e-4) { detail = "no tail before the rate change"; return false; }
+
+    reverb.setSampleRate(96000);
+    double after = 0.0;
+    for (int i = 0; i < 2000; i++) {
+        after = std::max(after, std::fabs((double)reverb.process(0.f, 0.f).left));
+    }
+    if (after < before * 0.1) {
+        detail = "the tail fell from " + std::to_string(before) + " to " +
+                 std::to_string(after) + " across a rate change";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Every comb must decay at the rate the control asks for.
+ *
+ * RT60 is proportional to a comb's own delay, so one gain taken from the longest
+ * line leaves every other loop decaying at the wrong rate: the offset right
+ * channel ran about 17 per cent long and the shorter combs died early.
+ */
+bool diffusionPerCombDecay(std::string& detail) {
+    const int sampleRate = 48000;
+    for (float seconds : {1.f, 4.f}) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(seconds);
+        reverb.setMix(1.f);
+        reverb.setDamping(0.f);
+
+        std::vector<float> left, right;
+        const std::size_t total = (std::size_t)(sampleRate * 20);
+        for (std::size_t i = 0; i < total; i++) {
+            const float in = (i < 1) ? 1.f : 0.f;
+            const auto f = reverb.process(in, in);
+            left.push_back(f.left);
+            right.push_back(f.right);
+        }
+        const double leftDecay = decayTimeSeconds(left, sampleRate);
+        const double rightDecay = decayTimeSeconds(right, sampleRate);
+        if (leftDecay < 0 || rightDecay < 0) {
+            detail = "one channel produced nothing";
+            return false;
+        }
+        // The two sides use different delay lengths, so a single shared gain
+        // makes them decay at visibly different rates.
+        const double ratio = rightDecay / std::max(leftDecay, 1e-9);
+        if (ratio < 0.88 || ratio > 1.14) {
+            detail = "at " + std::to_string(seconds) + " s the left tail ran " +
+                     std::to_string(leftDecay) + " s and the right " +
+                     std::to_string(rightDecay) + " s, a ratio of " +
+                     std::to_string(ratio);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * The allpass stages must not colour the material.
+ *
+ * Writing the recurrence without the gain on the feed-forward term gives an
+ * impulse response of -1, 1, 0.5, whose magnitude response is nowhere near
+ * flat, so four in series amplify broadband material rather than scattering it.
+ */
+bool diffusionAllpassIsFlat(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion reverb(sampleRate);
+    reverb.setDecaySeconds(0.05f);   // shortest tail, so the combs contribute least
+    reverb.setMix(1.f);
+    reverb.setDamping(0.f);
+
+    // White noise in: an allpass chain must not change its level.
+    std::mt19937 rng(31415);
+    std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+    double inputEnergy = 0.0, outputEnergy = 0.0;
+    const std::size_t n = (std::size_t)sampleRate;
+    for (std::size_t i = 0; i < n; i++) {
+        const float in = dist(rng);
+        const auto f = reverb.process(in, in);
+        inputEnergy += (double)in * in;
+        outputEnergy += (double)f.left * f.left;
+    }
+    // The network must not ADD energy to broadband material. A correct chain
+    // measures -6.35 dB at this setting; the recurrence without the gain on the
+    // feed-forward term measures +8.41, so zero separates them cleanly.
+    const double gainDb = 10.0 * std::log10(outputEnergy / std::max(inputEnergy, 1e-30));
+    if (gainDb > 0.0) {
+        detail = "the network added " + std::to_string(gainDb) +
+                 " dB to broadband material; the allpass stages are not flat";
+        return false;
+    }
+    return true;
+}
+
+/** The tail must reach exact zero rather than idling in denormals. */
+bool diffusionFlushesDenormals(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion reverb(sampleRate);
+    reverb.setDecaySeconds(10.f);
+    reverb.setMix(1.f);
+    reverb.setDamping(0.f);
+
+    for (int i = 0; i < 256; i++) reverb.process(1.f, 1.f);
+    // Long enough to be well past the point where a float tail becomes
+    // subnormal, which at this setting starts around 98 seconds.
+    const std::size_t total = (std::size_t)sampleRate * 150;
+    for (std::size_t i = 0; i < total; i++) reverb.process(0.f, 0.f);
+
+    for (int i = 0; i < 4096; i++) {
+        const auto f = reverb.process(0.f, 0.f);
+        if (f.left != 0.f || f.right != 0.f) {
+            detail = "after 150 s of silence the network still emits " +
+                     std::to_string(f.left) +
+                     "; the feedback state is idling in denormals";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * The tail must not acquire a pitch.
+ *
+ * Shared periods between delay lines make several loops reinforce at a regular
+ * interval, which is heard as flutter. Worth being straight about the limits of
+ * this check: it bounds how peaky the tail's spectrum gets, and it does NOT on
+ * its own distinguish the coprimality adjustment from the raw millisecond
+ * constants, which already avoid the worst collisions. The adjustment is kept
+ * because the claim in the header should be true rather than nearly true.
+ */
+bool diffusionCoprimeLengths(std::string& detail) {
+    const int rates[] = {44100, 48000, 96000};
+    for (int sampleRate : rates) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(3.f);
+        reverb.setMix(1.f);
+        reverb.setDamping(0.f);
+
+        std::vector<float> tail;
+        const std::size_t total = (std::size_t)sampleRate;
+        for (std::size_t i = 0; i < total; i++) {
+            const float in = (i < 1) ? 1.f : 0.f;
+            tail.push_back(reverb.process(in, in).left);
+        }
+        std::vector<float> late(tail.begin() + total / 4, tail.begin() + total / 4 + 16384);
+
+        ReferenceFft fft(16384);
+        std::vector<float> in(16384, 0.f), spectrum(fft.spectrumLength(), 0.f);
+        for (std::size_t i = 0; i < in.size(); i++) {
+            const double w = 0.5 * (1.0 - std::cos(2 * M_PI * (double)i / in.size()));
+            in[i] = (float)(late[i] * w);
+        }
+        fft.forward(in.data(), spectrum.data());
+
+        double peak = 0.0, mean = 0.0;
+        int counted = 0;
+        for (std::size_t b = 8; b < fft.numBins() / 4; b++) {
+            const double re = spectrum[2 * b], im = spectrum[2 * b + 1];
+            const double mag = std::sqrt(re * re + im * im);
+            peak = std::max(peak, mag);
+            mean += mag;
+            counted++;
+        }
+        mean /= std::max(1, counted);
+        const double crest = peak / std::max(mean, 1e-20);
+        if (crest > 60.0) {
+            detail = "at " + std::to_string(sampleRate) +
+                     " Hz the tail's spectrum has a crest factor of " +
+                     std::to_string(crest) + "; loops are reinforcing at a common period";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** A sample rate change must not reallocate on the audio thread. */
+bool diffusionNoAlloc(std::string& detail) {
+    Diffusion reverb(48000);
+    reverb.setMix(1.f);
+    // Storage is sized once for the highest supported rate, so moving between
+    // rates must not need more.
+    for (int rate : {44100, 48000, 88200, 96000, 176400, 192000, 48000}) {
+        reverb.setSampleRate(rate);
+        for (int i = 0; i < 2000; i++) {
+            const float in = (i == 0) ? 1.f : 0.f;
+            const auto f = reverb.process(in, in);
+            if (!std::isfinite(f.left)) {
+                detail = "rate " + std::to_string(rate) + " produced a non-finite sample";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 struct TestCase {
     const char* cmd;
     const char* name;
@@ -7120,6 +7620,19 @@ const TestCase kCases[] = {
     {"--test-grain-rate-change",  "grain_rate_change",  grainSampleRateChange},
     {"--test-grain-wrap",         "grain_wrap",         grainWrapsEveryFrame},
     {"--test-grain-bad-input",    "grain_bad_input",    grainBadInput},
+    {"--test-diffusion-decay",    "diffusion_decay",    diffusionDecayTracks},
+    {"--test-diffusion-runaway",  "diffusion_runaway",  diffusionNoRunaway},
+    {"--test-diffusion-samplerate","diffusion_samplerate",diffusionSampleRate},
+    {"--test-diffusion-mix",      "diffusion_mix",      diffusionMix},
+    {"--test-diffusion-damping",  "diffusion_damping",  diffusionDamping},
+    {"--test-diffusion-stereo",   "diffusion_stereo",   diffusionStereo},
+    {"--test-diffusion-bad-input","diffusion_bad_input",diffusionBadInput},
+    {"--test-diffusion-rate-tail","diffusion_rate_tail",diffusionKeepsTailAcrossRateChange},
+    {"--test-diffusion-per-comb", "diffusion_per_comb",  diffusionPerCombDecay},
+    {"--test-diffusion-allpass",  "diffusion_allpass",   diffusionAllpassIsFlat},
+    {"--test-diffusion-denormal", "diffusion_denormal",  diffusionFlushesDenormals},
+    {"--test-diffusion-coprime",  "diffusion_coprime",   diffusionCoprimeLengths},
+    {"--test-diffusion-no-alloc", "diffusion_no_alloc", diffusionNoAlloc},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };
 
