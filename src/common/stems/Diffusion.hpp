@@ -38,11 +38,23 @@ namespace stems {
 
 class Diffusion {
 public:
+    /**
+     * Copying is disabled.
+     *
+     * Every Line holds a raw pointer into storage_, so an implicit copy would
+     * duplicate the vectors and leave the copy's pointers aimed at the
+     * original's memory: it would write through them, and once the original
+     * went away process() would be reading freed heap.
+     */
+    Diffusion(const Diffusion&) = delete;
+    Diffusion& operator=(const Diffusion&) = delete;
+
     explicit Diffusion(int sampleRate = 48000) {
         // Sized once for the highest rate the plugin supports, so a sample rate
         // change never reallocates on the audio thread.
         allocate(kMaxSampleRate);
         setSampleRate(sampleRate);
+        reset();
     }
 
     void setSampleRate(int sampleRate) {
@@ -104,8 +116,9 @@ public:
         float tailLeft = 0.f;
         float tailRight = 0.f;
         for (int i = 0; i < kNumCombs; i++) {
-            tailLeft += comb(combLeft_[i], combLength_[i], dampLeft_[i], wetLeft);
-            tailRight += comb(combRight_[i], combRightLength_[i], dampRight_[i], wetRight);
+            tailLeft += comb(combLeft_[i], combLength_[i], dampLeft_[i], combGain_[i], wetLeft);
+            tailRight += comb(combRight_[i], combRightLength_[i], dampRight_[i],
+                              combRightGain_[i], wetRight);
         }
         tailLeft *= kCombScale;
         tailRight *= kCombScale;
@@ -198,15 +211,45 @@ private:
     }
 
     void updateLengths() {
+        // Chosen so the integer SAMPLE counts are mutually prime, not merely
+        // the millisecond constants. Those alone do not deliver it: at 48 kHz
+        // the combs came out 1425, 1780, 1972 and 2097, where the middle pair
+        // share a factor of four and the first two share five. Shared periods
+        // make several loops return energy together and the tail acquires the
+        // pitched flutter the spread is supposed to prevent.
+        std::size_t chosen[2 * (kNumAllpass + kNumCombs)];
+        int count = 0;
+        auto pick = [&](float ms, float scale) {
+            std::size_t n = lengthFor(ms, scale);
+            while (!coprimeWithAll(n, chosen, count)) n++;
+            chosen[count++] = n;
+            return n;
+        };
         for (int i = 0; i < kNumAllpass; i++) {
-            allpassLength_[i] = lengthFor(kAllpassMs[i], 1.f);
-            allpassRightLength_[i] = lengthFor(kAllpassMs[i], kStereoOffset);
+            allpassLength_[i] = pick(kAllpassMs[i], 1.f);
+            allpassRightLength_[i] = pick(kAllpassMs[i], kStereoOffset);
         }
         for (int i = 0; i < kNumCombs; i++) {
-            combLength_[i] = lengthFor(kCombMs[i], 1.f);
-            combRightLength_[i] = lengthFor(kCombMs[i], kStereoOffset);
+            combLength_[i] = pick(kCombMs[i], 1.f);
+            combRightLength_[i] = pick(kCombMs[i], kStereoOffset);
         }
-        reset();
+        // Deliberately NOT reset. Clearing every line here drops the tail the
+        // instant the host changes rate, which is an audible hole exactly where
+        // the spec asks for no dropout. The stored samples are at the old rate,
+        // so the tail is briefly the wrong length, which is a far smaller
+        // artefact than silence.
+    }
+
+    static std::size_t gcd(std::size_t a, std::size_t b) {
+        while (b != 0) { const std::size_t t = a % b; a = b; b = t; }
+        return a;
+    }
+
+    static bool coprimeWithAll(std::size_t n, const std::size_t* chosen, int count) {
+        for (int i = 0; i < count; i++) {
+            if (gcd(n, chosen[i]) != 1) return false;
+        }
+        return true;
     }
 
     std::size_t lengthFor(float ms, float scale) const {
@@ -223,31 +266,65 @@ private:
      * at every sample rate and every delay length.
      */
     void updateFeedback() {
-        const double longest = (double)combLength_[kNumCombs - 1];
+        // One gain PER COMB, from its own length. A comb's RT60 is proportional
+        // to its delay, so a single gain taken from the longest line makes every
+        // other loop decay at the wrong rate: the offset right channel ran about
+        // 17 per cent long and the shorter combs died early, so the control was
+        // not expressed in seconds anywhere but on one line.
         const double samples = std::max(1.0, (double)decaySeconds_ * sampleRate_);
-        const double g = std::pow(10.0, -3.0 * longest / samples);
-        feedback_ = (float)std::min((double)kMaxFeedback, std::max(0.0, g));
+        auto gainFor = [&](std::size_t length) {
+            const double g = std::pow(10.0, -3.0 * (double)length / samples);
+            return (float)std::min((double)kMaxFeedback, std::max(0.0, g));
+        };
+        for (int i = 0; i < kNumCombs; i++) {
+            combGain_[i] = gainFor(combLength_[i]);
+            combRightGain_[i] = gainFor(combRightLength_[i]);
+        }
+        feedback_ = combGain_[kNumCombs - 1];
     }
 
+    /**
+     * Schroeder allpass: y[n] = -g*x[n] + x[n-M] + g*y[n-M].
+     *
+     * The gain has to appear on BOTH the feed-forward and the feedback term.
+     * Writing it as out = -x + delayed with the gain only on the store is not
+     * an allpass at all: its impulse response is -1, 1, 0.5, so its magnitude
+     * response is nowhere near flat, and four of them in series colour and
+     * amplify broadband material rather than just scattering it in time.
+     */
     float allpass(Line& line, std::size_t length, float in) {
         const std::size_t at = line.index % length;
-        const float stored = line.data[at];
-        const float out = -in + stored;
-        line.data[at] = in + stored * kAllpassGain;
+        const float delayed = line.data[at];
+        const float out = -kAllpassGain * in + delayed;
+        line.data[at] = flush(in + kAllpassGain * out);
         line.index = (line.index + 1) % length;
         return out;
     }
 
-    float comb(Line& line, std::size_t length, float& damp, float in) {
+    float comb(Line& line, std::size_t length, float& damp, float gain, float in) {
         const std::size_t at = line.index % length;
         const float stored = line.data[at];
         // One-pole damping inside the loop, so the tail loses brightness as it
         // decays rather than ringing on with the same spectrum, which is what
         // a real room does.
-        damp = stored + (damp - stored) * damping_;
-        line.data[at] = in + damp * feedback_;
+        damp = flush(stored + (damp - stored) * damping_);
+        line.data[at] = flush(in + damp * gain);
         line.index = (line.index + 1) % length;
         return stored;
+    }
+
+    /**
+     * Snap near-silence to zero.
+     *
+     * A recirculating network never quite reaches zero: the feedback term drops
+     * into the subnormal range and is written back indefinitely. At the ten
+     * second setting that began after about 98 seconds and was still going five
+     * minutes later, so a patch sitting silent spends millions of samples on
+     * denormal arithmetic, which on most hardware is an order of magnitude
+     * slower than normal floating point.
+     */
+    static float flush(float x) {
+        return (std::fabs(x) < 1e-20f) ? 0.f : x;
     }
 
     static constexpr float kAllpassGain = 0.5f;
@@ -264,6 +341,7 @@ private:
     std::size_t allpassLength_[kNumAllpass] = {0}, allpassRightLength_[kNumAllpass] = {0};
     std::size_t combLength_[kNumCombs] = {0}, combRightLength_[kNumCombs] = {0};
     float dampLeft_[kNumCombs] = {0.f}, dampRight_[kNumCombs] = {0.f};
+    float combGain_[kNumCombs] = {0.f}, combRightGain_[kNumCombs] = {0.f};
 };
 
 }  // namespace stems

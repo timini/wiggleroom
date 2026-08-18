@@ -6856,6 +6856,205 @@ bool diffusionBadInput(std::string& detail) {
     return true;
 }
 
+/**
+ * A sample rate change must not drop the tail.
+ *
+ * Clearing every delay line on a rate change is an audible hole exactly where
+ * the spec asks for no dropout. The stored samples are at the old rate, so the
+ * tail is briefly the wrong length, which is a far smaller artefact.
+ */
+bool diffusionKeepsTailAcrossRateChange(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion reverb(sampleRate);
+    reverb.setDecaySeconds(4.f);
+    reverb.setMix(1.f);
+    reverb.setDamping(0.2f);
+
+    // Establish a tail.
+    for (int i = 0; i < sampleRate / 2; i++) {
+        const float in = (i < 256) ? 1.f : 0.f;
+        reverb.process(in, in);
+    }
+    double before = 0.0;
+    for (int i = 0; i < 2000; i++) {
+        before = std::max(before, std::fabs((double)reverb.process(0.f, 0.f).left));
+    }
+    if (before < 1e-4) { detail = "no tail before the rate change"; return false; }
+
+    reverb.setSampleRate(96000);
+    double after = 0.0;
+    for (int i = 0; i < 2000; i++) {
+        after = std::max(after, std::fabs((double)reverb.process(0.f, 0.f).left));
+    }
+    if (after < before * 0.1) {
+        detail = "the tail fell from " + std::to_string(before) + " to " +
+                 std::to_string(after) + " across a rate change";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Every comb must decay at the rate the control asks for.
+ *
+ * RT60 is proportional to a comb's own delay, so one gain taken from the longest
+ * line leaves every other loop decaying at the wrong rate: the offset right
+ * channel ran about 17 per cent long and the shorter combs died early.
+ */
+bool diffusionPerCombDecay(std::string& detail) {
+    const int sampleRate = 48000;
+    for (float seconds : {1.f, 4.f}) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(seconds);
+        reverb.setMix(1.f);
+        reverb.setDamping(0.f);
+
+        std::vector<float> left, right;
+        const std::size_t total = (std::size_t)(sampleRate * 20);
+        for (std::size_t i = 0; i < total; i++) {
+            const float in = (i < 1) ? 1.f : 0.f;
+            const auto f = reverb.process(in, in);
+            left.push_back(f.left);
+            right.push_back(f.right);
+        }
+        const double leftDecay = decayTimeSeconds(left, sampleRate);
+        const double rightDecay = decayTimeSeconds(right, sampleRate);
+        if (leftDecay < 0 || rightDecay < 0) {
+            detail = "one channel produced nothing";
+            return false;
+        }
+        // The two sides use different delay lengths, so a single shared gain
+        // makes them decay at visibly different rates.
+        const double ratio = rightDecay / std::max(leftDecay, 1e-9);
+        if (ratio < 0.88 || ratio > 1.14) {
+            detail = "at " + std::to_string(seconds) + " s the left tail ran " +
+                     std::to_string(leftDecay) + " s and the right " +
+                     std::to_string(rightDecay) + " s, a ratio of " +
+                     std::to_string(ratio);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * The allpass stages must not colour the material.
+ *
+ * Writing the recurrence without the gain on the feed-forward term gives an
+ * impulse response of -1, 1, 0.5, whose magnitude response is nowhere near
+ * flat, so four in series amplify broadband material rather than scattering it.
+ */
+bool diffusionAllpassIsFlat(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion reverb(sampleRate);
+    reverb.setDecaySeconds(0.05f);   // shortest tail, so the combs contribute least
+    reverb.setMix(1.f);
+    reverb.setDamping(0.f);
+
+    // White noise in: an allpass chain must not change its level.
+    std::mt19937 rng(31415);
+    std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+    double inputEnergy = 0.0, outputEnergy = 0.0;
+    const std::size_t n = (std::size_t)sampleRate;
+    for (std::size_t i = 0; i < n; i++) {
+        const float in = dist(rng);
+        const auto f = reverb.process(in, in);
+        inputEnergy += (double)in * in;
+        outputEnergy += (double)f.left * f.left;
+    }
+    // The network must not ADD energy to broadband material. A correct chain
+    // measures -6.35 dB at this setting; the recurrence without the gain on the
+    // feed-forward term measures +8.41, so zero separates them cleanly.
+    const double gainDb = 10.0 * std::log10(outputEnergy / std::max(inputEnergy, 1e-30));
+    if (gainDb > 0.0) {
+        detail = "the network added " + std::to_string(gainDb) +
+                 " dB to broadband material; the allpass stages are not flat";
+        return false;
+    }
+    return true;
+}
+
+/** The tail must reach exact zero rather than idling in denormals. */
+bool diffusionFlushesDenormals(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion reverb(sampleRate);
+    reverb.setDecaySeconds(10.f);
+    reverb.setMix(1.f);
+    reverb.setDamping(0.f);
+
+    for (int i = 0; i < 256; i++) reverb.process(1.f, 1.f);
+    // Long enough to be well past the point where a float tail becomes
+    // subnormal, which at this setting starts around 98 seconds.
+    const std::size_t total = (std::size_t)sampleRate * 150;
+    for (std::size_t i = 0; i < total; i++) reverb.process(0.f, 0.f);
+
+    for (int i = 0; i < 4096; i++) {
+        const auto f = reverb.process(0.f, 0.f);
+        if (f.left != 0.f || f.right != 0.f) {
+            detail = "after 150 s of silence the network still emits " +
+                     std::to_string(f.left) +
+                     "; the feedback state is idling in denormals";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * The tail must not acquire a pitch.
+ *
+ * Shared periods between delay lines make several loops reinforce at a regular
+ * interval, which is heard as flutter. Worth being straight about the limits of
+ * this check: it bounds how peaky the tail's spectrum gets, and it does NOT on
+ * its own distinguish the coprimality adjustment from the raw millisecond
+ * constants, which already avoid the worst collisions. The adjustment is kept
+ * because the claim in the header should be true rather than nearly true.
+ */
+bool diffusionCoprimeLengths(std::string& detail) {
+    const int rates[] = {44100, 48000, 96000};
+    for (int sampleRate : rates) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(3.f);
+        reverb.setMix(1.f);
+        reverb.setDamping(0.f);
+
+        std::vector<float> tail;
+        const std::size_t total = (std::size_t)sampleRate;
+        for (std::size_t i = 0; i < total; i++) {
+            const float in = (i < 1) ? 1.f : 0.f;
+            tail.push_back(reverb.process(in, in).left);
+        }
+        std::vector<float> late(tail.begin() + total / 4, tail.begin() + total / 4 + 16384);
+
+        ReferenceFft fft(16384);
+        std::vector<float> in(16384, 0.f), spectrum(fft.spectrumLength(), 0.f);
+        for (std::size_t i = 0; i < in.size(); i++) {
+            const double w = 0.5 * (1.0 - std::cos(2 * M_PI * (double)i / in.size()));
+            in[i] = (float)(late[i] * w);
+        }
+        fft.forward(in.data(), spectrum.data());
+
+        double peak = 0.0, mean = 0.0;
+        int counted = 0;
+        for (std::size_t b = 8; b < fft.numBins() / 4; b++) {
+            const double re = spectrum[2 * b], im = spectrum[2 * b + 1];
+            const double mag = std::sqrt(re * re + im * im);
+            peak = std::max(peak, mag);
+            mean += mag;
+            counted++;
+        }
+        mean /= std::max(1, counted);
+        const double crest = peak / std::max(mean, 1e-20);
+        if (crest > 60.0) {
+            detail = "at " + std::to_string(sampleRate) +
+                     " Hz the tail's spectrum has a crest factor of " +
+                     std::to_string(crest) + "; loops are reinforcing at a common period";
+            return false;
+        }
+    }
+    return true;
+}
+
 /** A sample rate change must not reallocate on the audio thread. */
 bool diffusionNoAlloc(std::string& detail) {
     Diffusion reverb(48000);
@@ -7048,6 +7247,11 @@ const TestCase kCases[] = {
     {"--test-diffusion-damping",  "diffusion_damping",  diffusionDamping},
     {"--test-diffusion-stereo",   "diffusion_stereo",   diffusionStereo},
     {"--test-diffusion-bad-input","diffusion_bad_input",diffusionBadInput},
+    {"--test-diffusion-rate-tail","diffusion_rate_tail",diffusionKeepsTailAcrossRateChange},
+    {"--test-diffusion-per-comb", "diffusion_per_comb",  diffusionPerCombDecay},
+    {"--test-diffusion-allpass",  "diffusion_allpass",   diffusionAllpassIsFlat},
+    {"--test-diffusion-denormal", "diffusion_denormal",  diffusionFlushesDenormals},
+    {"--test-diffusion-coprime",  "diffusion_coprime",   diffusionCoprimeLengths},
     {"--test-diffusion-no-alloc", "diffusion_no_alloc", diffusionNoAlloc},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };

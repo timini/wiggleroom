@@ -1546,6 +1546,50 @@ class TestDiffusion:
         result = run_test(["--test-diffusion-bad-input"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_a_rate_change_does_not_drop_the_tail(self):
+        """Clearing every delay line on a rate change is an audible hole exactly
+        where the spec asks for no dropout. Verified to have teeth: the tail
+        goes to zero.
+        """
+        result = run_test(["--test-diffusion-rate-tail"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_every_comb_decays_at_the_requested_rate(self):
+        """RT60 is proportional to a comb's own delay, so one gain taken from
+        the longest line leaves every other loop wrong. Verified to have teeth:
+        the offset right channel runs 17% long.
+        """
+        result = run_test(["--test-diffusion-per-comb"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_allpass_stages_do_not_colour(self):
+        """Writing the recurrence without the gain on the feed-forward term is
+        not an allpass: its impulse response is -1, 1, 0.5. Verified to have
+        teeth: a correct chain measures -6.35 dB on broadband material where the
+        broken one measures +8.41.
+        """
+        result = run_test(["--test-diffusion-allpass"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_tail_reaches_exact_zero(self):
+        """A recirculating network never quite reaches zero: the feedback drops
+        into the subnormal range and is written back indefinitely, so a silent
+        patch spends millions of samples on denormal arithmetic. Verified to
+        have teeth.
+        """
+        result = run_test(["--test-diffusion-denormal"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_tail_does_not_acquire_a_pitch(self):
+        """Bounds how peaky the tail's spectrum gets. It does NOT on its own
+        distinguish the coprimality adjustment from the raw millisecond
+        constants, which already avoid the worst collisions; the adjustment is
+        kept because the claim in the header should be true rather than nearly
+        true.
+        """
+        result = run_test(["--test-diffusion-coprime"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_a_sample_rate_change_does_not_reallocate(self):
         """Storage is sized once for the highest supported rate, so moving
         between rates never needs more."""
