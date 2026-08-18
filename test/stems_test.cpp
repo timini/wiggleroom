@@ -7447,6 +7447,142 @@ bool diffusionNoAlloc(std::string& detail) {
     return true;
 }
 
+
+// ---------------------------------------------------------------------------
+// Empty-buffer hardening
+// ---------------------------------------------------------------------------
+
+/**
+ * Every control must be safe to move with nothing recorded.
+ *
+ * This is the state the module is in every time a patch loads, so it is not an
+ * edge case: it is the first thing that happens. Each component is driven
+ * through its whole control range against an empty source, checking for
+ * non-finite output, denormals and level spikes.
+ *
+ * The module itself includes rack.hpp and cannot be built here, so this exercises
+ * the components it is assembled from. What it cannot cover is the wiring, which
+ * is why the S17 ticket keeps a manual check in Rack.
+ */
+bool emptyBufferSweep(std::string& detail) {
+    const int sampleRate = 48000;
+
+    auto bad = [](float v) {
+        if (!std::isfinite(v)) return true;
+        // Denormals: nonzero but below the smallest normal float.
+        return v != 0.f && std::fabs(v) < 1.17549435e-38f;
+    };
+
+    // Nothing recorded, nothing separated: the mixer sees a null stem set.
+    {
+        StemMixer mixer(sampleRate);
+        RingBuffer empty(sampleRate, 1.0f, 2);
+        for (int step = 0; step <= 40; step++) {
+            const float t = (float)step / 40.f;
+            for (int c = 0; c < 4; c++) {
+                mixer.setLevel(c, t);
+                mixer.setMute(c, (step % 3) == 0);
+            }
+            mixer.setStemSelect(step % 4);
+            for (int i = 0; i < 200; i++) {
+                float l = 0.f, r = 0.f;
+                empty.readFrameInterpolated((double)i, l, r);
+                const auto f = mixer.process(nullptr, (double)i, l, r);
+                if (bad(f.left) || bad(f.right)) {
+                    detail = "the mixer produced " + std::to_string(f.left) +
+                             " from an empty buffer";
+                    return false;
+                }
+            }
+        }
+    }
+
+    // The voice, with no frame ever offered.
+    {
+        WavetableOsc osc;
+        osc.setSampleRate(sampleRate);
+        LowpassGate gate(sampleRate);
+        Quantizer quant(sampleRate);
+        for (int step = 0; step <= 40; step++) {
+            const float t = (float)step / 40.f;
+            osc.setMorph(t);
+            osc.setCoarse(-24.f + 48.f * t);
+            osc.setFine(-1.f + 2.f * t);
+            osc.setLevel(t);
+            gate.setColour(t);
+            gate.setDecaySeconds(0.02f + 3.98f * t);
+            gate.setRestingLevel(t);
+            quant.setGlideSeconds(2.f * t);
+            if (step % 7 == 0) gate.trigger();
+            for (int i = 0; i < 200; i++) {
+                const float cv = quant.process(-2.f + 4.f * t);
+                const float v = gate.process(osc.process(cv));
+                if (bad(v) || bad(cv)) {
+                    detail = "the voice produced " + std::to_string(v) +
+                             " with no frame recorded";
+                    return false;
+                }
+            }
+        }
+    }
+
+    // The granular stage over a silent source.
+    {
+        GrainEngine grains(sampleRate);
+        Diffusion space(sampleRate);
+        std::vector<float> silence(4096, 0.f);
+        for (int step = 0; step <= 40; step++) {
+            const float t = (float)step / 40.f;
+            grains.setSizeSeconds(0.001f + 0.499f * t);
+            grains.setDensityHz(0.1f + 99.9f * t);
+            grains.setPitchSemitones(-24.f + 48.f * t);
+            grains.setTexture(t);
+            grains.setSpread(t);
+            grains.setReadPosition(t * 4000.0);
+            space.setDecaySeconds(0.2f + 9.8f * t);
+            space.setMix(t);
+            space.setDamping(t * 0.9f);
+            for (int i = 0; i < 200; i++) {
+                const auto g = grains.process(silence.data(), silence.size());
+                const auto f = space.process(g.left, g.right);
+                if (bad(f.left) || bad(f.right)) {
+                    detail = "the granular stage produced " + std::to_string(f.left) +
+                             " from silence";
+                    return false;
+                }
+                // Silence in must stay silence out: nothing here generates.
+                if (std::fabs(f.left) > 1e-6f || std::fabs(f.right) > 1e-6f) {
+                    detail = "the granular stage produced " + std::to_string(f.left) +
+                             " of output from a silent source";
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Analysis over silence must not invent a key.
+    {
+        Yin yin(4096);
+        yin.setSampleRate(sampleRate);
+        ScaleDetect detector;
+        std::vector<float> silence(4096, 0.f);
+        for (int i = 0; i < 40; i++) {
+            const auto p = yin.analyse(silence.data(), silence.size());
+            detector.addPitch(p.frequency, p.confidence, p.voiced);
+            const auto key = detector.detect();
+            if (key.detected) {
+                detail = "silence produced a detected key";
+                return false;
+            }
+            if (bad(p.frequency) || bad(p.confidence)) {
+                detail = "silence produced a non-finite pitch estimate";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 struct TestCase {
     const char* cmd;
     const char* name;
@@ -7633,6 +7769,7 @@ const TestCase kCases[] = {
     {"--test-diffusion-denormal", "diffusion_denormal",  diffusionFlushesDenormals},
     {"--test-diffusion-coprime",  "diffusion_coprime",   diffusionCoprimeLengths},
     {"--test-diffusion-no-alloc", "diffusion_no_alloc", diffusionNoAlloc},
+    {"--test-empty-buffer",       "empty_buffer",       emptyBufferSweep},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };
 
