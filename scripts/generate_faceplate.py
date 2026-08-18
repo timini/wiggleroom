@@ -42,6 +42,7 @@ MODULE_HP = {
     "GravityClock": 2,
     "InfiniteFolder": 2,
     "Intersect": 8,
+    "Stems": 34,
     "Matter": 8,
     "ModalBell": 8,
     "OctoLFO": 24,
