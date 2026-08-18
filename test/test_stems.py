@@ -1032,6 +1032,27 @@ class TestWavetableExtract:
         result = run_test(["--test-wt-window-automation"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_the_edge_taper_does_not_put_dc_back(self):
+        """Removing the source mean makes the untapered window zero-mean, but
+        multiplying by a fade that is not symmetric about the content shifts it
+        again, and the offset eats headroom in the oscillator and the lowpass
+        gate. The tapered mean is accumulated during the read, so correcting it
+        costs no extra pass. Verified to have teeth: a lopsided zero-mean window
+        publishes a frame sitting 5% of full scale off centre.
+        """
+        result = run_test(["--test-wt-taper-dc"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_stereo_stems_contribute_both_channels(self):
+        """The voice is mono and there is no channel selector, and the worker
+        separates the two sides independently, so the right channel carries
+        different material. Verified to have teeth: reading only the left
+        channel publishes a SILENT wavetable for a stem panned hard right. Also
+        covers mono sets and stereo sets whose right channel is missing.
+        """
+        result = run_test(["--test-wt-stereo"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_frames_follow_the_playhead(self):
         """Driven with noise, so successive windows genuinely differ rather than
         repeating a periodic waveform that would look the same wherever it was

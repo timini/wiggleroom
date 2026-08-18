@@ -193,7 +193,12 @@ public:
             std::size_t work = 0;
             std::size_t produced = 0;
             while (cursor_ < kFrameSize && work + span_ <= limit) {
-                build_[cursor_] = readWindowSlot(source, cursor_);
+                const float slot = readWindowSlot(*set, layer, cursor_);
+                build_[cursor_] = slot;
+                // Accumulated here so the mean the TAPER introduces can be
+                // computed without another whole pass. See beginFinalise().
+                taperedSum_ += static_cast<double>(slot) * edgeWindow_[cursor_];
+                taperWeightSum_ += edgeWindow_[cursor_];
                 cursor_++;
                 produced++;
                 work += span_;
@@ -218,7 +223,8 @@ public:
             // DC comes off BEFORE the taper. Tapering first multiplies the
             // offset by the fade, so a constant source becomes an edge-shaped
             // waveform which then normalises to full scale instead of silence.
-            back[at] = static_cast<float>((build_[at] - mean_) * edgeWindow_[at] * gain_);
+            back[at] = static_cast<float>(
+                ((build_[at] - mean_) * edgeWindow_[at] - taperMean_) * gain_);
         }
         cursor_ += count;
         samplesLastCall_ = count;
@@ -314,6 +320,9 @@ private:
         buildLength_ = sourceLength;
 
         sourceSum_ = 0.0;
+        taperedSum_ = 0.0;
+        taperWeightSum_ = 0.0;
+        taperMean_ = 0.0;
         sourceCount_ = 0;
         sourceMin_ = 0.0;
         sourceMax_ = 0.0;
@@ -340,6 +349,7 @@ private:
         cursor_ = 0;
         mean_ = 0.0;
         gain_ = 0.0;
+        taperMean_ = 0.0;
         sourcePeak_ = 0.0;
         span_ = 1;
         buildGeneration_ = generation;
@@ -367,6 +377,18 @@ private:
         // nothing to bring up, and dividing by the residue would make a
         // full-scale frame out of rounding noise.
         gain_ = (sourcePeak_ > 1e-7) ? (1.0 / sourcePeak_) : 0.0;
+
+        // The taper puts DC back. Removing the source mean makes the UNTAPERED
+        // window zero-mean, but multiplying by a fade that is not symmetric
+        // about the content shifts it again: a window whose edges lean positive
+        // against a negative interior published a frame sitting about five per
+        // cent of full scale off centre, which eats headroom in the oscillator
+        // and the lowpass gate and can click.
+        //
+        // sum((x - mean) * w) = sum(x * w) - mean * sum(w), and both sums are
+        // accumulated during the read, so this costs no extra pass.
+        const double tapered = taperedSum_ - mean_ * taperWeightSum_;
+        taperMean_ = tapered / static_cast<double>(kFrameSize);
     }
 
     /**
@@ -377,7 +399,7 @@ private:
      * sample folds everything above a quarter of the frame's Nyquist straight
      * back down into the audible part of the waveform. See note 4.
      */
-    float readWindowSlot(const std::vector<float>& source, std::size_t outputIndex) {
+    float readWindowSlot(const StemSet& set, int layer, std::size_t outputIndex) {
         // span_ is fixed for the whole build, so the cost of every slot is
         // known in advance and can be charged against the budget.
         // The slot is CENTRED on the position this output sample maps to, not
@@ -398,7 +420,7 @@ private:
         for (std::size_t i = 0; i < span; i++) {
             const double at = from + (to - from) * (static_cast<double>(i) + 0.5) /
                                          static_cast<double>(span);
-            const double value = readSource(source, at);
+            const double value = readSource(set, layer, at);
             accumulator += value;
 
             // The level BEFORE decimation, which is what the frame is
@@ -430,14 +452,28 @@ private:
      * Non-finite positions are still refused outright. There is no nearest
      * endpoint to a NaN, and casting one to size_t is undefined.
      */
-    double readSource(const std::vector<float>& source, double position) const {
+    double readSource(const StemSet& set, int layer, double position) const {
         const std::size_t n = buildLength_;
         if (n == 0 || !std::isfinite(position)) return 0.0;
         position = std::min(std::max(position, 0.0), static_cast<double>(n) - 1.0);
         const std::size_t i0 = static_cast<std::size_t>(position);
         const std::size_t i1 = std::min(i0 + 1, n - 1);
         const double frac = position - static_cast<double>(i0);
-        const double value = source[i0] + (source[i1] - source[i0]) * frac;
+
+        const auto& left = set.layer[layer].channel[0];
+        double value = left[i0] + (left[i1] - left[i0]) * frac;
+
+        // Both channels. The voice is mono and there is no channel selector, so
+        // reading only the left one publishes a silent wavetable for a stem
+        // panned hard right, and loses half the timbre of every other stereo
+        // recording. The worker separates the two sides independently, so the
+        // right channel really does carry different material.
+        const auto& right = set.layer[layer].channel[1];
+        if (set.channels > 1 && right.size() == left.size()) {
+            const double r = right[i0] + (right[i1] - right[i0]) * frac;
+            value = 0.5 * (value + r);
+        }
+
         // Never trust the stem. RingBuffer::write stores whatever it is given,
         // so one non-finite sample in a recording would otherwise spread through
         // the mean and the gain into every value of every frame published after
@@ -490,6 +526,9 @@ private:
     std::size_t span_ = 1;
 
     double sourceSum_ = 0.0;
+    double taperedSum_ = 0.0;
+    double taperWeightSum_ = 0.0;
+    double taperMean_ = 0.0;
     std::size_t sourceCount_ = 0;
     double sourceMin_ = 0.0;
     double sourceMax_ = 0.0;

@@ -4038,6 +4038,148 @@ bool wtBudgetFollowsWindow(std::string& detail) {
     return true;
 }
 
+/**
+ * The edge taper must not put DC back.
+ *
+ * Removing the source mean makes the UNTAPERED window zero-mean, but
+ * multiplying by a fade that is not symmetric about the content shifts it
+ * again. The offset then eats headroom in the oscillator and the lowpass gate
+ * and can click.
+ */
+bool wtTaperDc(std::string& detail) {
+    // Zero-mean overall, but deliberately lopsided: the parts the taper
+    // attenuates carry the opposite sign to the interior, so tapering cannot
+    // leave the mean where it was.
+    for (int flip = 0; flip < 2; flip++) {
+        const std::size_t n = 8000;
+        StemSet set;
+        set.channels = 1;
+        set.generation = 1;
+        for (int L = 0; L < StemSet::kNumLayers; L++) {
+            set.layer[L].channel[0].assign(n, 0.f);
+        }
+        // The window that will be read at playhead 4000 with a 2048 window.
+        const std::size_t first = 4000 - 1024;
+        const std::size_t last = 4000 + 1024;
+        const double edgeFraction = 0.05;
+        const std::size_t edge = (std::size_t)((last - first) * edgeFraction);
+        for (std::size_t i = first; i < last; i++) {
+            const bool inEdge = (i < first + edge) || (i >= last - edge);
+            float v = inEdge ? 1.f : 0.f;
+            set.layer[0].channel[0][i] = flip ? -v : v;
+        }
+        // Balance it so the untapered window is exactly zero-mean.
+        double sum = 0.0;
+        for (std::size_t i = first; i < last; i++) sum += set.layer[0].channel[0][i];
+        const double correction = sum / (double)((last - first) - 2 * edge);
+        for (std::size_t i = first + edge; i < last - edge; i++) {
+            set.layer[0].channel[0][i] -= (float)correction;
+        }
+
+        WavetableExtract e;
+        buildFrame(e, set, 0, 4000.0);
+        double mean = 0.0;
+        for (std::size_t i = 0; i < e.frameSize(); i++) mean += e.frame()[i];
+        mean /= (double)e.frameSize();
+        if (std::fabs(mean) > 0.01) {
+            detail = "a lopsided zero-mean window published a frame with DC of " +
+                     std::to_string(mean);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Stereo stems must contribute both channels.
+ *
+ * The voice is mono and there is no channel selector, so reading only the left
+ * channel publishes a silent wavetable for a stem panned hard right and loses
+ * half the timbre of every other stereo recording. The worker separates the two
+ * sides independently, so the right channel really does carry different
+ * material.
+ */
+bool wtStereoDownmix(std::string& detail) {
+    const std::size_t n = 8000;
+
+    // Hard right: left silent, right carrying the tone.
+    StemSet hardRight;
+    hardRight.channels = 2;
+    hardRight.generation = 1;
+    for (int L = 0; L < StemSet::kNumLayers; L++) {
+        hardRight.layer[L].channel[0].assign(n, 0.f);
+        hardRight.layer[L].channel[1].assign(n, 0.f);
+        for (std::size_t i = 0; i < n; i++) {
+            hardRight.layer[L].channel[1][i] =
+                (float)std::sin(2 * M_PI * 200.0 * (double)i / 48000.0);
+        }
+    }
+    WavetableExtract e;
+    buildFrame(e, hardRight, 0, 4000.0);
+    if (e.debugFramePeak() < 0.5) {
+        detail = "a stem panned hard right published a wavetable peaking at " +
+                 std::to_string(e.debugFramePeak());
+        return false;
+    }
+
+    // Two different tones, one per side: the frame must contain both.
+    StemSet split;
+    split.channels = 2;
+    split.generation = 2;
+    for (int L = 0; L < StemSet::kNumLayers; L++) {
+        split.layer[L].channel[0].assign(n, 0.f);
+        split.layer[L].channel[1].assign(n, 0.f);
+        for (std::size_t i = 0; i < n; i++) {
+            split.layer[L].channel[0][i] =
+                (float)std::sin(2 * M_PI * 150.0 * (double)i / 48000.0);
+            split.layer[L].channel[1][i] =
+                (float)std::sin(2 * M_PI * 950.0 * (double)i / 48000.0);
+        }
+    }
+    WavetableExtract both;
+    buildFrame(both, split, 0, 4000.0);
+
+    // A left-only build of the same material differs, so the right channel is
+    // genuinely present rather than merely not breaking anything.
+    StemSet leftOnly = split;
+    leftOnly.channels = 1;
+    leftOnly.generation = 3;
+    WavetableExtract single;
+    buildFrame(single, leftOnly, 0, 4000.0);
+
+    double worst = 0.0;
+    for (std::size_t i = 0; i < both.frameSize(); i++) {
+        worst = std::max(worst, std::fabs((double)both.frame()[i] - (double)single.frame()[i]));
+    }
+    if (worst < 0.05) {
+        detail = "a stereo stem produced the same frame as its left channel alone; "
+                 "the right channel is being ignored";
+        return false;
+    }
+
+    // Mono sets, and stereo sets whose right channel is missing, must still work.
+    const auto mono = toneSet(300.0, n);
+    WavetableExtract m;
+    buildFrame(m, mono, 0, 4000.0);
+    if (m.debugFramePeak() < 0.5) {
+        detail = "a mono stem published a wavetable peaking at " +
+                 std::to_string(m.debugFramePeak());
+        return false;
+    }
+    StemSet broken = split;
+    broken.generation = 4;
+    for (int L = 0; L < StemSet::kNumLayers; L++) broken.layer[L].channel[1].clear();
+    WavetableExtract b;
+    buildFrame(b, broken, 0, 4000.0);
+    for (std::size_t i = 0; i < b.frameSize(); i++) {
+        if (!std::isfinite(b.frame()[i])) {
+            detail = "a stereo set with no right channel produced a non-finite frame";
+            return false;
+        }
+    }
+    return true;
+}
+
 /** Frames must follow the playhead. */
 bool wtTracksPlayhead(std::string& detail) {
     // Noise, so that successive windows genuinely differ rather than repeating
@@ -4930,6 +5072,8 @@ const TestCase kCases[] = {
     {"--test-wt-tiny-budget",     "wt_tiny_budget",     wtTinyBudget},
     {"--test-wt-budget-window",   "wt_budget_window",   wtBudgetFollowsWindow},
     {"--test-wt-unit-ratio",      "wt_unit_ratio",      wtUnitRatioAlignment},
+    {"--test-wt-taper-dc",        "wt_taper_dc",        wtTaperDc},
+    {"--test-wt-stereo",          "wt_stereo",          wtStereoDownmix},
     {"--test-wt-window-automation","wt_window_automation",wtWindowAutomation},
     {"--test-buffer-non-finite-write","buffer_non_finite_write",bufferRejectsNonFinite},
     {"--test-wt-restart",         "wt_restart",         wtRestartsOnChange},
