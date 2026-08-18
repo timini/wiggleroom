@@ -1371,6 +1371,69 @@ class TestWavetableOsc:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestLowpassGate:
+    """The shared vactrol lowpass gate, used by Stems and TheLantern."""
+
+    def test_the_step_response_shows_the_vactrol_asymmetry(self):
+        """About 12 ms up and 250 ms down. The roughly 20:1 ratio is what makes
+        a lowpass gate sound plucked rather than merely gated, so it is asserted
+        directly rather than left implicit in the two figures. Verified to have
+        teeth against a symmetric envelope and against using the rise constant
+        uncalibrated, which gives 26.4 ms.
+        """
+        result = run_test(["--test-lpg-step"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_brightness_and_level_fall_together(self):
+        """This is what separates a lowpass gate from a VCA: a VCA closing
+        leaves the timbre alone, so a decaying note keeps its harmonics all the
+        way down and sounds synthetic.
+
+        Measured as spectral centroid, and checked in BOTH directions: in Both
+        mode the centroid must fall, and at the VCA end it must NOT, since
+        otherwise any implementation that simply got quieter would pass.
+        """
+        result = run_test(["--test-lpg-brightness"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_three_colour_positions_are_distinct(self):
+        """VCA is the brightest because its filter stays open; Lowpass is the
+        loudest because its gain stays up. The midpoint is the classic Both
+        position, where the cell drives gain and cutoff together rather than
+        half of each.
+        """
+        result = run_test(["--test-lpg-colour"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_decay_control_means_what_it_says(self):
+        """The level-dependent tail stretches the fall, so the coefficient is
+        calibrated against the measured time rather than used as a raw constant.
+        Checked from 50 ms to 2 s.
+        """
+        result = run_test(["--test-lpg-decay"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_times_do_not_change_with_sample_rate(self):
+        result = run_test(["--test-lpg-samplerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_audio_rate_control_stays_stable(self):
+        """Up to 20 kHz on the control input, which is well past anything
+        musical, checking both finiteness and that a gate never adds energy."""
+        result = run_test(["--test-lpg-audio-rate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_resting_level_holds_the_gate_open(self):
+        result = run_test(["--test-lpg-resting"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_hostile_input_is_safe_and_recoverable(self):
+        """Also checks the gate still works afterwards, so a bad value cannot
+        leave it permanently shut."""
+        result = run_test(["--test-lpg-bad-input"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 class TestExtremeInput:
     """Hostile but legal input, across every module at once."""
 

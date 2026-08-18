@@ -37,6 +37,7 @@
 #include "common/stems/SeparationWorker.hpp"
 #include "common/stems/StemMixer.hpp"
 #include "common/stems/WavetableExtract.hpp"
+#include "common/LowpassGate.hpp"
 #include "common/stems/WavetableOsc.hpp"
 #include "common/stems/Quantizer.hpp"
 #include "common/stems/ScaleDetect.hpp"
@@ -5870,6 +5871,377 @@ bool oscLevel(std::string& detail) {
     return true;
 }
 
+
+// ---------------------------------------------------------------------------
+// LowpassGate
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::LowpassGate;
+
+namespace {
+/** Spectral centroid in Hz. Rises with brightness. */
+double centroidHz(const std::vector<float>& x, int sampleRate) {
+    const std::size_t n = 4096;
+    ReferenceFft fft(n);
+    std::vector<float> in(n, 0.f), spectrum(fft.spectrumLength(), 0.f);
+    for (std::size_t i = 0; i < n && i < x.size(); i++) {
+        const double w = 0.5 * (1.0 - std::cos(2 * M_PI * (double)i / (double)n));
+        in[i] = (float)(x[i] * w);
+    }
+    fft.forward(in.data(), spectrum.data());
+    double weighted = 0.0, total = 0.0;
+    for (std::size_t b = 1; b < fft.numBins(); b++) {
+        const double re = spectrum[2 * b], im = spectrum[2 * b + 1];
+        const double mag = std::sqrt(re * re + im * im);
+        weighted += mag * ((double)b * sampleRate / (double)n);
+        total += mag;
+    }
+    return (total > 1e-12) ? (weighted / total) : 0.0;
+}
+
+double rmsOf(const std::vector<float>& x) {
+    if (x.empty()) return 0.0;
+    double acc = 0.0;
+    for (float v : x) acc += (double)v * v;
+    return std::sqrt(acc / (double)x.size());
+}
+
+/** A bright, harmonically rich excitation. */
+std::vector<float> buzz(std::size_t n, int sampleRate) {
+    std::vector<float> out(n, 0.f);
+    for (std::size_t i = 0; i < n; i++) {
+        double v = 0.0;
+        for (int k = 1; k <= 40; k++) {
+            v += std::sin(2 * M_PI * 110.0 * k * (double)i / sampleRate) / k;
+        }
+        out[i] = (float)(v * 0.4);
+    }
+    return out;
+}
+}  // namespace
+
+/**
+ * The step response must show the vactrol's asymmetry.
+ *
+ * Roughly 12 ms up and 250 ms down. That 20:1 ratio is what makes a lowpass
+ * gate sound plucked rather than merely gated.
+ */
+bool lpgStepResponse(std::string& detail) {
+    const int sampleRate = 48000;
+    LowpassGate gate(sampleRate);
+    gate.setColour(0.5f);
+    gate.setDecaySeconds(0.25f);
+    gate.trigger();
+
+    std::vector<float> envelope;
+    envelope.reserve(sampleRate);
+    for (int i = 0; i < sampleRate; i++) {
+        gate.process(1.f);
+        envelope.push_back(gate.envelope());
+    }
+
+    int at10 = -1, at90 = -1;
+    for (std::size_t i = 0; i < envelope.size(); i++) {
+        if (at10 < 0 && envelope[i] >= 0.1f) at10 = (int)i;
+        if (at90 < 0 && envelope[i] >= 0.9f) { at90 = (int)i; break; }
+    }
+    if (at10 < 0 || at90 < 0) { detail = "the gate never opened"; return false; }
+    const double riseMs = 1000.0 * (at90 - at10) / sampleRate;
+
+    std::size_t peak = 0;
+    for (std::size_t i = 0; i < envelope.size(); i++) {
+        if (envelope[i] > envelope[peak]) peak = i;
+    }
+    int fallSamples = -1;
+    for (std::size_t i = peak; i < envelope.size(); i++) {
+        if (envelope[i] <= envelope[peak] * 0.3679f) { fallSamples = (int)(i - peak); break; }
+    }
+    if (fallSamples < 0) { detail = "the gate never closed"; return false; }
+    const double fallMs = 1000.0 * fallSamples / sampleRate;
+
+    if (riseMs < 6.0 || riseMs > 20.0) {
+        detail = "rise was " + std::to_string(riseMs) + " ms, expected about 12";
+        return false;
+    }
+    if (fallMs < 180.0 || fallMs > 330.0) {
+        detail = "fall was " + std::to_string(fallMs) + " ms, expected about 250";
+        return false;
+    }
+    // The ASYMMETRY is the character, so it is checked directly rather than
+    // left implicit in the two figures above.
+    if (fallMs / riseMs < 10.0) {
+        detail = "rise and fall are only " + std::to_string(fallMs / riseMs) +
+                 ":1 apart; the plucked character comes from about 20:1";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Brightness and level must fall together.
+ *
+ * This is what separates a lowpass gate from a VCA. A VCA closing leaves the
+ * timbre alone, so a decaying note keeps its harmonics all the way down and
+ * sounds synthetic.
+ */
+bool lpgBrightnessFallsWithLevel(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto source = buzz(sampleRate, sampleRate);
+
+    auto measure = [&](float colour, double* earlyCentroid, double* lateCentroid,
+                       double* earlyRms, double* lateRms) {
+        LowpassGate gate(sampleRate);
+        gate.setColour(colour);
+        gate.setDecaySeconds(0.4f);
+        gate.trigger();
+        std::vector<float> out;
+        out.reserve(source.size());
+        for (std::size_t i = 0; i < source.size(); i++) out.push_back(gate.process(source[i]));
+
+        const std::size_t early = 2000, late = 14000;
+        std::vector<float> a(out.begin() + early, out.begin() + early + 4096);
+        std::vector<float> b(out.begin() + late, out.begin() + late + 4096);
+        *earlyCentroid = centroidHz(a, sampleRate);
+        *lateCentroid = centroidHz(b, sampleRate);
+        *earlyRms = rmsOf(a);
+        *lateRms = rmsOf(b);
+    };
+
+    // Both: level AND brightness must drop.
+    double ec = 0, lc = 0, er = 0, lr = 0;
+    measure(0.5f, &ec, &lc, &er, &lr);
+    if (lr >= er * 0.7) {
+        detail = "in Both mode the level barely fell: " + std::to_string(er) + " to " +
+                 std::to_string(lr);
+        return false;
+    }
+    if (lc >= ec * 0.8) {
+        detail = "in Both mode the centroid barely fell: " + std::to_string(ec) +
+                 " Hz to " + std::to_string(lc) + " Hz; the decay is losing level only";
+        return false;
+    }
+
+    // VCA: level drops, brightness does NOT. Without this the test above would
+    // pass on any implementation that simply got quieter.
+    double vec = 0, vlc = 0, ver = 0, vlr = 0;
+    measure(0.f, &vec, &vlc, &ver, &vlr);
+    if (vlr >= ver * 0.7) {
+        detail = "in VCA mode the level barely fell";
+        return false;
+    }
+    if (vlc < vec * 0.85) {
+        detail = "in VCA mode the centroid fell from " + std::to_string(vec) + " Hz to " +
+                 std::to_string(vlc) + " Hz; the VCA end should not filter";
+        return false;
+    }
+    return true;
+}
+
+/** The three colour positions must be distinct. */
+bool lpgColourContinuum(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto source = buzz(8192, sampleRate);
+
+    auto steady = [&](float colour, double* rms, double* centroid) {
+        LowpassGate gate(sampleRate);
+        gate.setColour(colour);
+        gate.setRestingLevel(0.35f);   // held part open, so nothing is decaying
+        std::vector<float> out;
+        for (std::size_t i = 0; i < source.size(); i++) out.push_back(gate.process(source[i]));
+        std::vector<float> tail(out.end() - 4096, out.end());
+        *rms = rmsOf(tail);
+        *centroid = centroidHz(tail, sampleRate);
+    };
+
+    double vcaRms = 0, vcaCentroid = 0, bothRms = 0, bothCentroid = 0;
+    double lpRms = 0, lpCentroid = 0;
+    steady(0.f, &vcaRms, &vcaCentroid);
+    steady(0.5f, &bothRms, &bothCentroid);
+    steady(1.f, &lpRms, &lpCentroid);
+
+    // At the VCA end the filter is open, so it is the brightest.
+    if (vcaCentroid <= bothCentroid || vcaCentroid <= lpCentroid) {
+        detail = "the VCA end is not the brightest: VCA " + std::to_string(vcaCentroid) +
+                 ", Both " + std::to_string(bothCentroid) + ", Lowpass " +
+                 std::to_string(lpCentroid);
+        return false;
+    }
+    // At the lowpass end the gain stays up, so it is the loudest.
+    if (lpRms <= bothRms || lpRms <= vcaRms) {
+        detail = "the lowpass end is not the loudest: VCA " + std::to_string(vcaRms) +
+                 ", Both " + std::to_string(bothRms) + ", Lowpass " + std::to_string(lpRms);
+        return false;
+    }
+    return true;
+}
+
+/** The decay control must mean what it says. */
+bool lpgDecayControl(std::string& detail) {
+    const int sampleRate = 48000;
+    for (float seconds : {0.05f, 0.25f, 1.0f, 2.0f}) {
+        LowpassGate gate(sampleRate);
+        gate.setColour(0.5f);
+        gate.setDecaySeconds(seconds);
+        gate.trigger();
+
+        std::vector<float> envelope;
+        const int limit = (int)(sampleRate * 8);
+        for (int i = 0; i < limit; i++) {
+            gate.process(1.f);
+            envelope.push_back(gate.envelope());
+        }
+        std::size_t peak = 0;
+        for (std::size_t i = 0; i < envelope.size(); i++) {
+            if (envelope[i] > envelope[peak]) peak = i;
+        }
+        int fall = -1;
+        for (std::size_t i = peak; i < envelope.size(); i++) {
+            if (envelope[i] <= envelope[peak] * 0.3679f) { fall = (int)(i - peak); break; }
+        }
+        if (fall < 0) {
+            detail = "a " + std::to_string(seconds) + " s decay never reached 1/e";
+            return false;
+        }
+        const double measured = (double)fall / sampleRate;
+        const double ratio = measured / seconds;
+        if (ratio < 0.7 || ratio > 1.4) {
+            detail = "a " + std::to_string(seconds) + " s decay measured " +
+                     std::to_string(measured) + " s";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Times are in seconds, so they must not change with the sample rate. */
+bool lpgSampleRate(std::string& detail) {
+    double reference = 0.0;
+    for (int sampleRate : {44100, 48000, 96000}) {
+        LowpassGate gate(sampleRate);
+        gate.setColour(0.5f);
+        gate.setDecaySeconds(0.25f);
+        gate.trigger();
+        std::vector<float> envelope;
+        for (int i = 0; i < sampleRate; i++) {
+            gate.process(1.f);
+            envelope.push_back(gate.envelope());
+        }
+        std::size_t peak = 0;
+        for (std::size_t i = 0; i < envelope.size(); i++) {
+            if (envelope[i] > envelope[peak]) peak = i;
+        }
+        int fall = -1;
+        for (std::size_t i = peak; i < envelope.size(); i++) {
+            if (envelope[i] <= envelope[peak] * 0.3679f) { fall = (int)(i - peak); break; }
+        }
+        if (fall < 0) { detail = "no decay at " + std::to_string(sampleRate); return false; }
+        const double seconds = (double)fall / sampleRate;
+        if (reference == 0.0) reference = seconds;
+        const double ratio = seconds / reference;
+        if (ratio < 0.9 || ratio > 1.1) {
+            detail = "decay was " + std::to_string(reference) + " s at the first rate and " +
+                     std::to_string(seconds) + " s at " + std::to_string(sampleRate);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Audio-rate control must not make it blow up. */
+bool lpgAudioRateModulation(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto source = buzz(sampleRate / 2, sampleRate);
+    for (double modHz : {50.0, 500.0, 5000.0, 20000.0}) {
+        LowpassGate gate(sampleRate);
+        gate.setColour(0.5f);
+        gate.setDecaySeconds(0.05f);
+        double peak = 0.0;
+        for (std::size_t i = 0; i < source.size(); i++) {
+            const double phase = 2 * M_PI * modHz * (double)i / sampleRate;
+            gate.setGate((float)(0.5 + 0.5 * std::sin(phase)));
+            const float out = gate.process(source[i]);
+            if (!std::isfinite(out)) {
+                detail = "modulation at " + std::to_string(modHz) +
+                         " Hz produced a non-finite sample";
+                return false;
+            }
+            peak = std::max(peak, std::fabs((double)out));
+        }
+        // The source peaks near 1, and a gate cannot add energy.
+        if (peak > 2.0) {
+            detail = "modulation at " + std::to_string(modHz) + " Hz reached " +
+                     std::to_string(peak);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** The resting level holds the gate partly open. */
+bool lpgRestingLevel(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto source = buzz(sampleRate / 4, sampleRate);
+
+    LowpassGate closed(sampleRate);
+    closed.setColour(0.5f);
+    closed.setRestingLevel(0.f);
+    LowpassGate open(sampleRate);
+    open.setColour(0.5f);
+    open.setRestingLevel(0.5f);
+
+    std::vector<float> closedOut, openOut;
+    for (std::size_t i = 0; i < source.size(); i++) {
+        closedOut.push_back(closed.process(source[i]));
+        openOut.push_back(open.process(source[i]));
+    }
+    std::vector<float> closedTail(closedOut.end() - 4096, closedOut.end());
+    std::vector<float> openTail(openOut.end() - 4096, openOut.end());
+
+    if (rmsOf(closedTail) > 1e-4) {
+        detail = "with no resting level the gate still passed " +
+                 std::to_string(rmsOf(closedTail));
+        return false;
+    }
+    if (rmsOf(openTail) < 1e-3) {
+        detail = "a resting level of 0.5 passed only " + std::to_string(rmsOf(openTail));
+        return false;
+    }
+    return true;
+}
+
+/** Hostile input must not produce a non-finite sample. */
+bool lpgBadInput(std::string& detail) {
+    LowpassGate gate(48000);
+    const float bad[] = {std::nanf(""), std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(), 1e20f, -1e20f};
+    for (float v : bad) {
+        gate.setColour(v);
+        gate.setDecaySeconds(v);
+        gate.setRestingLevel(v);
+        gate.setGate(v);
+        for (int i = 0; i < 500; i++) {
+            if (!std::isfinite(gate.process(v))) {
+                detail = "input " + std::to_string(v) + " produced a non-finite sample";
+                return false;
+            }
+        }
+        // And it must recover: a sane signal afterwards still passes.
+        gate.setColour(0.5f);
+        gate.setDecaySeconds(0.25f);
+        gate.setRestingLevel(0.f);
+        gate.trigger();
+        double peak = 0.0;
+        for (int i = 0; i < 4000; i++) {
+            peak = std::max(peak, std::fabs((double)gate.process(0.5f)));
+        }
+        if (peak < 1e-3) {
+            detail = "after input " + std::to_string(v) + " the gate stayed shut";
+            return false;
+        }
+    }
+    return true;
+}
+
 struct TestCase {
     const char* cmd;
     const char* name;
@@ -6020,6 +6392,14 @@ const TestCase kCases[] = {
     {"--test-osc-empty",          "osc_empty",          oscEmpty},
     {"--test-osc-bad-input",      "osc_bad_input",      oscBadInput},
     {"--test-osc-level",          "osc_level",          oscLevel},
+    {"--test-lpg-step",           "lpg_step",           lpgStepResponse},
+    {"--test-lpg-brightness",     "lpg_brightness",     lpgBrightnessFallsWithLevel},
+    {"--test-lpg-colour",         "lpg_colour",         lpgColourContinuum},
+    {"--test-lpg-decay",          "lpg_decay",          lpgDecayControl},
+    {"--test-lpg-samplerate",     "lpg_samplerate",     lpgSampleRate},
+    {"--test-lpg-audio-rate",     "lpg_audio_rate",     lpgAudioRateModulation},
+    {"--test-lpg-resting",        "lpg_resting",        lpgRestingLevel},
+    {"--test-lpg-bad-input",      "lpg_bad_input",      lpgBadInput},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };
 
