@@ -1364,6 +1364,64 @@ bool workerRetiresOffAudioThread(std::string& detail) {
     return true;
 }
 
+/**
+ * invalidate() must retire the current take immediately.
+ *
+ * A new recording supersedes the old one the moment it starts. Leaving the
+ * previous set published means the module keeps playing the last take right
+ * through the new one, and keeps it for good if the new separation fails.
+ */
+bool workerInvalidate(std::string& detail) {
+    SeparationWorker worker;
+    worker.start();
+
+    auto input = makeJobInput(8192, 21);
+    const uint64_t gen = worker.submit(input.data(), input.size(), 48000);
+    if (!waitFor([&] {
+            const StemSet* s = worker.acquire();
+            const bool ok = (s != nullptr && s->generation == gen);
+            worker.release(s);
+            return ok;
+        })) {
+        detail = "nothing was published to invalidate";
+        worker.stop();
+        return false;
+    }
+
+    worker.invalidate();
+    const StemSet* after = worker.acquire();
+    const bool cleared = (after == nullptr);
+    worker.release(after);
+    if (!cleared) {
+        detail = "the published set survived invalidate()";
+        worker.stop();
+        return false;
+    }
+
+    // The retired set must still be reclaimed by the worker, not leaked or
+    // freed on the calling thread.
+    const bool reclaimed = waitFor([&] { return worker.debugRetiredCount() == 0; }, 5000);
+    const std::size_t freedOffWorker = worker.debugFreedOnAcquireThread();
+
+    // And a later take must publish normally.
+    const uint64_t next = worker.submit(input.data(), input.size(), 48000);
+    const bool republished = waitFor([&] {
+        const StemSet* s = worker.acquire();
+        const bool ok = (s != nullptr && s->generation == next);
+        worker.release(s);
+        return ok;
+    });
+    worker.stop();
+
+    if (!reclaimed) { detail = "the invalidated set was never reclaimed"; return false; }
+    if (freedOffWorker != 0) {
+        detail = std::to_string(freedOffWorker) + " sets were freed off the worker";
+        return false;
+    }
+    if (!republished) { detail = "no take published after invalidate()"; return false; }
+    return true;
+}
+
 /** acquire() must be safe before anything has ever been published. */
 bool workerEmptyAcquire(std::string& detail) {
     SeparationWorker worker;
@@ -7635,6 +7693,7 @@ const TestCase kCases[] = {
     {"--test-worker-publishes",   "worker_publishes",   workerPublishes},
     {"--test-worker-stale",       "worker_stale",       workerDiscardsStale},
     {"--test-worker-retire",      "worker_retire",      workerRetiresOffAudioThread},
+    {"--test-worker-invalidate",  "worker_invalidate",  workerInvalidate},
     {"--test-worker-empty",       "worker_empty",       workerEmptyAcquire},
     {"--test-worker-stereo",      "worker_stereo",      workerStereo},
     {"--test-worker-failure",     "worker_failure",     workerSeparationFailureIsNonFatal},

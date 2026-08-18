@@ -193,6 +193,35 @@ public:
         return submit(input, nullptr, length, sampleRate);
     }
 
+    /**
+     * Retire whatever is published, without waiting for a replacement.
+     *
+     * A new recording supersedes the old take the moment it starts. Leaving the
+     * previous set published means the module keeps playing the last take right
+     * through the new one, and keeps it for good if the new separation fails.
+     *
+     * Safe from the audio thread: it advances the generation and swaps the
+     * pointer under the same lock publication uses, and the retired set is
+     * reclaimed by the worker exactly as any other.
+     */
+    void invalidate() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        nextGeneration_.store(nextGeneration_.load(std::memory_order_relaxed) + 1,
+                              std::memory_order_relaxed);
+        hasPending_ = false;
+        StemSet* old = published_.exchange(nullptr, std::memory_order_acq_rel);
+        if (old) {
+            std::lock_guard<std::mutex> retired(retiredMutex_);
+            retired_.push_back(old);
+        }
+        // The worker may be in an indefinite wait, having evaluated its
+        // retirement queue as empty before this call added to it. A bare notify
+        // is not enough: its predicate would still be false and it would go
+        // straight back to sleep, so the request is explicit.
+        reclaimRequested_ = true;
+        wake_.notify_one();
+    }
+
     /** Generation of the most recently submitted job. */
     uint64_t currentGeneration() const {
         return nextGeneration_.load(std::memory_order_relaxed);
@@ -280,7 +309,8 @@ private:
             {
                 std::unique_lock<std::mutex> lock(mutex_);
                 auto ready = [this] {
-                    return hasPending_ || !running_.load(std::memory_order_acquire);
+                    return hasPending_ || reclaimRequested_ ||
+                           !running_.load(std::memory_order_acquire);
                 };
                 if (hasRetired()) {
                     // Something is waiting to be freed, so do not sleep
@@ -292,6 +322,12 @@ private:
                 }
                 if (!running_.load(std::memory_order_acquire)) break;
                 if (!hasPending_) {
+                    // Cleared before releasing the lock. Leaving it set would
+                    // make the predicate true forever and spin the worker at
+                    // full tilt whenever a reader is still holding the set;
+                    // once it is cleared, the retirement queue keeps the timed
+                    // wait alive instead, which polls rather than spins.
+                    reclaimRequested_ = false;
                     lock.unlock();
                     tryReclaim();
                     continue;
@@ -450,6 +486,7 @@ private:
     int pendingRate_ = 48000;
     uint64_t pendingGeneration_ = 0;
     bool hasPending_ = false;
+    bool reclaimRequested_ = false;
 
     std::atomic<uint64_t> nextGeneration_{0};
     std::atomic<StemSet*> published_{nullptr};

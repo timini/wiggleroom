@@ -41,6 +41,60 @@ namespace WiggleRoom {
 
 using namespace WiggleRoom::stems;
 
+/**
+ * The Rack side of the FftBackend abstraction.
+ *
+ * This is the whole reason FftBackend is an interface. Without it the worker
+ * falls back to ReferenceFft, which exists as the self-contained test
+ * reference: double precision, radix-2, and no attempt at speed. Running a
+ * 32 second recording through it frame by frame is far slower than necessary
+ * and lengthens shutdown to match.
+ *
+ * pffft returns a packed layout: element 0 is the DC bin, element 1 is Nyquist,
+ * and the rest are interleaved real/imaginary for bins 1 to n/2-1. The core
+ * asks for interleaved re,im over bins 0 to n/2 inclusive, deliberately, so
+ * adapters convert rather than the core guessing. This is that conversion.
+ */
+struct RackFft : stems::FftBackend {
+    explicit RackFft(std::size_t length)
+        : fft_((int)length), length_(length), packed_(length, 0.f) {}
+
+    std::size_t size() const override { return length_; }
+
+    void forward(const float* input, float* spectrum) override {
+        fft_.rfft(input, packed_.data());
+        const std::size_t half = length_ / 2;
+        spectrum[0] = packed_[0];          // DC, real only
+        spectrum[1] = 0.f;
+        spectrum[2 * half] = packed_[1];   // Nyquist, real only
+        spectrum[2 * half + 1] = 0.f;
+        for (std::size_t b = 1; b < half; b++) {
+            spectrum[2 * b] = packed_[2 * b];
+            spectrum[2 * b + 1] = packed_[2 * b + 1];
+        }
+    }
+
+    void inverse(const float* spectrum, float* output) override {
+        const std::size_t half = length_ / 2;
+        packed_[0] = spectrum[0];
+        packed_[1] = spectrum[2 * half];
+        for (std::size_t b = 1; b < half; b++) {
+            packed_[2 * b] = spectrum[2 * b];
+            packed_[2 * b + 1] = spectrum[2 * b + 1];
+        }
+        fft_.irfft(packed_.data(), output);
+        // pffft leaves the inverse scaled by N; the core's contract is that
+        // inverse(forward(x)) returns x.
+        fft_.scale(output);
+    }
+
+private:
+    dsp::RealFFT fft_;
+    std::size_t length_;
+    // new[] and malloc align to 16 bytes, which is what pffft requires.
+    std::vector<float> packed_;
+};
+
 struct Stems : Module {
     enum ParamId {
         REC_ARM_PARAM, REC_MODE_PARAM, REC_THRESH_PARAM, BUF_LEN_PARAM,
@@ -60,6 +114,7 @@ struct Stems : Module {
     enum InputId {
         AUDIO_L_INPUT, AUDIO_R_INPUT, CLOCK_INPUT, RESET_INPUT, REC_TRIG_INPUT,
         QUANT_CV_INPUT, LPG_TRIG_INPUT, GRAIN_DENSITY_CV_INPUT, GRAIN_PITCH_CV_INPUT,
+        WT_OFFSET_CV_INPUT,
         INPUTS_LEN
     };
     enum OutputId {
@@ -69,6 +124,7 @@ struct Stems : Module {
     };
     enum LightId {
         REC_LIGHT, SEPARATING_LIGHT, ANALYSIS_ACTIVE_LIGHT, DOWNBEAT_LIGHT,
+        STEM_1_MUTE_LIGHT, STEM_2_MUTE_LIGHT, STEM_3_MUTE_LIGHT, STEM_4_MUTE_LIGHT,
         LIGHTS_LEN
     };
 
@@ -84,7 +140,7 @@ struct Stems : Module {
         configParam(REC_THRESH_PARAM, -60.f, 0.f, -30.f, "Record threshold", " dB");
         configParam(BUF_LEN_PARAM, 1.f, 16.f, 4.f, "Buffer length", " bars");
 
-        configParam(CLOCK_DIV_PARAM, -3.f, 3.f, 0.f, "Clock division", " oct");
+        configParam(CLOCK_DIV_PARAM, -4.f, 4.f, 0.f, "Clock division", " oct");
         configParam(LOOP_START_PARAM, 0.f, 1.f, 0.f, "Loop start");
         configParam(LOOP_LEN_PARAM, 0.f, 1.f, 1.f, "Loop length");
         // Repitch only until S20 lands; the other positions are disabled rather
@@ -136,6 +192,7 @@ struct Stems : Module {
         configInput(LPG_TRIG_INPUT, "Lowpass gate trigger");
         configInput(GRAIN_DENSITY_CV_INPUT, "Grain density CV");
         configInput(GRAIN_PITCH_CV_INPUT, "Grain pitch CV");
+        configInput(WT_OFFSET_CV_INPUT, "Wavetable offset CV");
 
         configOutput(MAIN_L_OUTPUT, "Main left");
         configOutput(MAIN_R_OUTPUT, "Main right");
@@ -146,12 +203,21 @@ struct Stems : Module {
         configOutput(DOWNBEAT_OUTPUT, "Downbeat");
 
         rebuild(48000.f);
+        // Injected BEFORE start(), which is the only point it can be.
+        worker_.setFftFactory([](std::size_t n) {
+            return std::unique_ptr<stems::FftBackend>(new RackFft(n));
+        });
         worker_.start();
     }
 
     ~Stems() override { worker_.stop(); }
 
     void onSampleRateChange(const SampleRateChangeEvent& e) override {
+        // The published stems are indexed in frames at the OLD rate, and the
+        // buffer is about to be replaced with one sized at the new rate. Keeping
+        // them would play the previous take at the wrong speed against a
+        // playhead that no longer matches it, so the take is retired instead.
+        worker_.invalidate();
         rebuild(e.sampleRate);
     }
 
@@ -202,6 +268,8 @@ struct Stems : Module {
         lights[ANALYSIS_ACTIVE_LIGHT].setBrightness(analysisActive_ ? 1.f : 0.f);
         lights[DOWNBEAT_LIGHT].setBrightnessSmooth(downbeat ? 1.f : 0.f, args.sampleTime * 8.f);
 
+        updateDisplay();
+        completeHandoff();
         worker_.release(stems);
     }
 
@@ -232,16 +300,57 @@ struct Stems : Module {
         }
     }
 
-    /** Buffer contents for the display. UI thread only. */
-    const RingBuffer* displayBuffer() const { return buffer_.get(); }
-    double displayPlayhead() const { return transport_.playheadFrames(); }
+    /**
+     * A snapshot for the display, written by the audio thread and read by the
+     * UI thread.
+     *
+     * Handing the widget a raw pointer to the live RingBuffer was an
+     * unsynchronised race: the UI read its counters and storage while the audio
+     * thread wrote, cleared or replaced it, and a sample rate change could
+     * delete the object mid-draw. This is a fixed array of peaks, small enough
+     * to fill cheaply and never reallocated.
+     */
+    static constexpr int kDisplayColumns = 256;
+
+    void readDisplay(float* out, int count, float* playheadFraction) const {
+        const int n = std::min(count, kDisplayColumns);
+        for (int i = 0; i < n; i++) {
+            out[i] = displayPeaks_[i].load(std::memory_order_relaxed);
+        }
+        *playheadFraction = displayPlayhead_.load(std::memory_order_relaxed);
+    }
 
 private:
+    /**
+     * Fill one display column per call, so the cost is a handful of reads per
+     * sample rather than a sweep of the whole buffer at draw time.
+     */
+    void updateDisplay() {
+        const std::size_t stored = buffer_ ? buffer_->framesStored() : 0;
+        if (stored < 2) {
+            displayPeaks_[displayColumn_].store(0.f, std::memory_order_relaxed);
+        } else {
+            const std::size_t index =
+                (std::size_t)((double)displayColumn_ / kDisplayColumns * (stored - 1));
+            float l = 0.f, r = 0.f;
+            buffer_->readFrame(index, l, r);
+            displayPeaks_[displayColumn_].store(std::max(std::fabs(l), std::fabs(r)),
+                                                std::memory_order_relaxed);
+        }
+        displayColumn_ = (displayColumn_ + 1) % kDisplayColumns;
+        const float fraction = (stored > 1)
+                                   ? (float)(transport_.playheadFrames() / (double)stored)
+                                   : 0.f;
+        displayPlayhead_.store(std::isfinite(fraction) ? fraction : 0.f,
+                               std::memory_order_relaxed);
+    }
+
     void rebuild(float sampleRate) {
         const int rate = (int)sampleRate;
         // Allocated once per sample rate change, on the UI thread, never in
         // process(). Sized for the 32 second ceiling the spec sets.
         buffer_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
+        spare_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
         transport_.setSampleRate(rate);
         transport_.setBufferFrames(buffer_->capacityFrames());
         mixer_.setSampleRate(rate);
@@ -262,23 +371,43 @@ private:
 
         for (int i = 0; i < 4; i++) {
             mixer_.setLevel(i, params[STEM_1_LEVEL_PARAM + i].getValue());
-            mixer_.setMute(i, params[STEM_1_MUTE_PARAM + i].getValue() > 0.5f);
+            // Latched on the press edge. configButton is momentary, so reading
+            // it directly meant a stem was muted only while the button was
+            // physically held and faded back in the instant it was released.
+            if (muteTrigger_[i].process(params[STEM_1_MUTE_PARAM + i].getValue() > 0.5f)) {
+                muted_[i] = !muted_[i];
+            }
+            mixer_.setMute(i, muted_[i]);
+            lights[STEM_1_MUTE_LIGHT + i].setBrightness(muted_[i] ? 1.f : 0.f);
         }
         mixer_.setStemSelect((int)params[STEM_SELECT_PARAM].getValue());
 
-        quantizer_.setGlideSeconds(params[QUANT_GLIDE_PARAM].getValue());
+        const float glide = params[QUANT_GLIDE_PARAM].getValue();
+        if (glide != lastGlide_) {
+            lastGlide_ = glide;
+            quantizer_.setGlideSeconds(glide);
+        }
         quantizer_.setManualOverride(params[SCALE_MODE_PARAM].getValue() > 0.5f);
         quantizer_.setManualKey((int)params[ROOT_PARAM].getValue(),
                                 (Quantizer::Scale)(int)params[SCALE_PARAM].getValue());
 
         extractor_.setWindowSamples((int)params[WT_WINDOW_PARAM].getValue());
-        extractor_.setOffset(params[WT_OFFSET_PARAM].getValue());
-        oscillator_.setMorph(params[WT_MORPH_PARAM].getValue());
+        extractor_.setOffset(params[WT_OFFSET_PARAM].getValue() +
+                             inputs[WT_OFFSET_CV_INPUT].getVoltage() / 5.f);
+        const float morph = params[WT_MORPH_PARAM].getValue();
+        if (morph != lastMorph_) {
+            lastMorph_ = morph;
+            oscillator_.setMorph(morph);
+        }
         oscillator_.setCoarse(params[WT_COARSE_PARAM].getValue());
         oscillator_.setFine(params[WT_FINE_PARAM].getValue());
         oscillator_.setLevel(params[WT_LEVEL_PARAM].getValue());
 
-        gate_.setDecaySeconds(params[LPG_DECAY_PARAM].getValue());
+        const float decay = params[LPG_DECAY_PARAM].getValue();
+        if (decay != lastLpgDecay_) {
+            lastLpgDecay_ = decay;
+            gate_.setDecaySeconds(decay);
+        }
         gate_.setColour(params[LPG_COLOUR_PARAM].getValue());
         gate_.setRestingLevel(params[LPG_LEVEL_PARAM].getValue());
 
@@ -290,10 +419,17 @@ private:
         grains_.setTexture(params[GRAIN_TEXTURE_PARAM].getValue());
         grains_.setSpread(params[GRAIN_SPREAD_PARAM].getValue());
 
+        // Guarded, because these setters recompute exponentials and readParams
+        // runs every sample. Space alone was calling Diffusion::updateFeedback,
+        // which is eight pow() calls, forty-eight thousand times a second for a
+        // control that is usually not moving at all.
         const float space = params[GRAIN_SPACE_PARAM].getValue();
-        diffusion_.setDecaySeconds(0.2f + space * 6.f);
-        diffusion_.setMix(space);
-        diffusion_.setDamping(0.3f + space * 0.4f);
+        if (space != lastSpace_) {
+            lastSpace_ = space;
+            diffusion_.setDecaySeconds(0.2f + space * 6.f);
+            diffusion_.setMix(space);
+            diffusion_.setDamping(0.3f + space * 0.4f);
+        }
     }
 
     void handleRecording(const ProcessArgs& args) {
@@ -306,48 +442,118 @@ private:
 
         const int mode = (int)params[REC_MODE_PARAM].getValue();
         const float threshold = std::pow(10.f, params[REC_THRESH_PARAM].getValue() / 20.f);
+        const bool armEdge = armPressed_.process(armed);
 
         if (!recording_) {
-            const bool start = (mode == 1) ? (armed && std::fabs(left) > threshold)
-                                           : (armed && (trig || armPressed_.process(armed)));
+            // Threshold looks at BOTH channels. A source panned hard right
+            // would otherwise never start the take, since the left channel
+            // never crosses.
+            const float level = std::max(std::fabs(left), std::fabs(right));
+            const bool start = (mode == 1) ? (armed && level > threshold)
+                                           : (trig || armEdge);
             if (start) {
-                if (mode != 2) buffer_->clear();
+                if (mode != 2) {
+                    buffer_->clear();
+                    // A new take supersedes the old one. Leaving the previous
+                    // StemSet published meant the module kept playing the last
+                    // recording all the way through the new one, and kept it
+                    // for good if the new separation failed.
+                    worker_.invalidate();
+                }
                 recording_ = true;
                 recordedFrames_ = 0;
+                overdubRead_ = 0;
             }
-        } else if (!armed) {
-            recording_ = false;
-            submitSeparation(args);
+        } else if (trig || armEdge) {
+            // A second trigger STOPS the take. Requiring the momentary arm
+            // button to go low meant a panel start ended the moment the user
+            // let go of it, and a trigger-started take could never be stopped
+            // from the same input.
+            stopRecording(args);
         }
 
         if (recording_) {
-            buffer_->write(left, right);
-            recordedFrames_++;
-            if (recordedFrames_ >= buffer_->capacityFrames()) {
-                recording_ = false;
-                submitSeparation(args);
+            if (mode == 2) {
+                // Overdub MIXES rather than concatenating. Skipping the clear
+                // and appending turned a partial buffer into two takes end to
+                // end, and a full one into a slow replacement.
+                float existingLeft = 0.f, existingRight = 0.f;
+                buffer_->readFrame(overdubRead_, existingLeft, existingRight);
+                buffer_->write(existingLeft + left, existingRight + right);
+                const std::size_t stored = buffer_->framesStored();
+                if (stored > 0) overdubRead_ = (overdubRead_ + 1) % stored;
+            } else {
+                buffer_->write(left, right);
             }
+            recordedFrames_++;
+            if (recordedFrames_ >= targetFrames(args)) stopRecording(args);
         }
     }
 
+    void stopRecording(const ProcessArgs& args) {
+        recording_ = false;
+        submitSeparation(args);
+    }
+
     void submitSeparation(const ProcessArgs& args) {
-        // Copied on this thread by submit(), precisely so the worker never
-        // reads a buffer process() may be writing.
+        // SWAPPED, not copied. Copying up to 32 seconds of stereo float here
+        // meant two resizes and millions of samples inside one audio callback,
+        // and submit() then copied it again under a mutex. Two buffers and a
+        // pointer swap cost nothing: the worker owns the take it is separating
+        // and process() records into the other one.
         const std::size_t frames = buffer_->framesStored();
+        if (frames < 2048) return;
+        pendingHandoff_ = true;
+        handoffFrames_ = frames;
+        handoffRate_ = (int)args.sampleRate;
+        std::swap(buffer_, spare_);
+        buffer_->clear();
+    }
+
+    /**
+     * Complete a handoff. Called from process() but does the copy only when a
+     * take has just ended, which is once per recording rather than per sample.
+     *
+     * The copy itself still happens here rather than on the worker, because
+     * SeparationWorker::submit takes the snapshot under its own lock and that
+     * contract is what keeps the worker from ever reading a live buffer. What
+     * the swap removes is doing it from the buffer process() is writing.
+     */
+    void completeHandoff() {
+        if (!pendingHandoff_) return;
+        pendingHandoff_ = false;
+        const std::size_t frames = std::min(handoffFrames_, spare_->framesStored());
         if (frames < 2048) return;
         scratchLeft_.resize(frames);
         scratchRight_.resize(frames);
         for (std::size_t i = 0; i < frames; i++) {
-            buffer_->readFrame(i, scratchLeft_[i], scratchRight_[i]);
+            spare_->readFrame(i, scratchLeft_[i], scratchRight_[i]);
         }
-        worker_.submit(scratchLeft_.data(), scratchRight_.data(), frames,
-                       (int)args.sampleRate);
+        worker_.submit(scratchLeft_.data(), scratchRight_.data(), frames, handoffRate_);
     }
 
     void advanceTransport(const ProcessArgs& args) {
         (void)args;
+        // The playhead spans what was RECORDED, not the 32 second allocation.
+        // Mapping it to capacity meant an eight second take played only in the
+        // first quarter of the cycle and the rest was silence.
+        const std::size_t stored = buffer_ ? buffer_->framesStored() : 0;
+        transport_.setBufferFrames(stored);
         transport_.process(inputs[CLOCK_INPUT].getVoltage(),
                            inputs[RESET_INPUT].getVoltage());
+    }
+
+    /** Recording length the bars control asks for, in frames. */
+    std::size_t targetFrames(const ProcessArgs& args) {
+        const double bars = (double)params[BUF_LEN_PARAM].getValue();
+        const double period = transport_.clockPeriodSeconds();
+        // Sixteen clocks to a bar of 4/4, matching Transport's default.
+        const double seconds = bars * 16.0 * period;
+        const std::size_t wanted = (std::size_t)(seconds * args.sampleRate);
+        const std::size_t cap = buffer_ ? buffer_->capacityFrames() : wanted;
+        // The 32 second ceiling still wins. At very slow clocks sixteen bars is
+        // over two minutes, which the spec caps rather than allocating for.
+        return std::min(std::max<std::size_t>(wanted, 1), cap);
     }
 
     void runAnalysis(const StemSet* stems, const ProcessArgs& args) {
@@ -412,7 +618,11 @@ private:
     Diffusion::Frame runGranular(const StemMixer::Frame& loop, float voice,
                                  const ProcessArgs& args) {
         const float balance = params[GRAIN_BALANCE_PARAM].getValue();
-        const float mono = loop.left * (1.f - balance) + voice * balance;
+        // Both sides of the loop. Taking the left channel alone discarded the
+        // right, so a right-heavy recording went quiet as the grain mix came
+        // up, which is the opposite of what the control should do.
+        const float loopMono = 0.5f * (loop.left + loop.right);
+        const float mono = loopMono * (1.f - balance) + voice * balance;
 
         grainSource_[grainWrite_] = mono;
         grainWrite_ = (grainWrite_ + 1) % grainSource_.size();
@@ -430,6 +640,12 @@ private:
     }
 
     std::unique_ptr<RingBuffer> buffer_;
+    std::unique_ptr<RingBuffer> spare_;
+    bool pendingHandoff_ = false;
+    std::size_t handoffFrames_ = 0;
+    int handoffRate_ = 48000;
+    std::size_t overdubRead_ = 0;
+    float lastSpace_ = -1.f, lastLpgDecay_ = -1.f, lastGlide_ = -1.f, lastMorph_ = -1.f;
     Transport transport_{48000};
     SeparationWorker worker_;
     StemMixer mixer_{48000};
@@ -443,6 +659,8 @@ private:
     Diffusion diffusion_{48000};
 
     dsp::SchmittTrigger recTrigger_, lpgTrigger_;
+    dsp::BooleanTrigger muteTrigger_[4];
+    bool muted_[4] = {false, false, false, false};
     dsp::BooleanTrigger armPressed_;
     dsp::PulseGenerator downbeatPulse_;
 
@@ -462,6 +680,10 @@ private:
     // than the loop buffer, so it follows whatever is actually sounding.
     std::array<float, 48000> grainSource_{};
     std::size_t grainWrite_ = 0;
+
+    std::atomic<float> displayPeaks_[kDisplayColumns] = {};
+    std::atomic<float> displayPlayhead_{0.f};
+    int displayColumn_ = 0;
 };
 
 /** Waveform and playhead. Modelled on PixelProbe's canvas, which handles the
@@ -471,21 +693,18 @@ struct StemsDisplay : LedDisplay {
 
     void drawLayer(const DrawArgs& args, int layer) override {
         if (layer != 1 || !module) return;
-        const RingBuffer* buffer = module->displayBuffer();
-        if (!buffer || buffer->empty()) return;
+
+        // A snapshot the audio thread publishes, not the live buffer. Reading
+        // the buffer from here raced with recording and could outlive it.
+        float peaks[Stems::kDisplayColumns] = {};
+        float playhead = 0.f;
+        module->readDisplay(peaks, Stems::kDisplayColumns, &playhead);
 
         const float w = box.size.x, h = box.size.y;
-        const std::size_t frames = buffer->framesStored();
-        if (frames < 2) return;
-
         nvgBeginPath(args.vg);
-        const int columns = (int)std::min<float>(w, 256.f);
-        for (int x = 0; x < columns; x++) {
-            const std::size_t index = (std::size_t)((double)x / columns * (frames - 1));
-            float left = 0.f, right = 0.f;
-            buffer->readFrame(index, left, right);
-            const float amplitude = std::min(1.f, std::fabs(left));
-            const float px = w * x / columns;
+        for (int x = 0; x < Stems::kDisplayColumns; x++) {
+            const float amplitude = std::min(1.f, peaks[x]);
+            const float px = w * x / (float)Stems::kDisplayColumns;
             nvgMoveTo(args.vg, px, h * 0.5f - amplitude * h * 0.45f);
             nvgLineTo(args.vg, px, h * 0.5f + amplitude * h * 0.45f);
         }
@@ -493,16 +712,13 @@ struct StemsDisplay : LedDisplay {
         nvgStrokeWidth(args.vg, 1.f);
         nvgStroke(args.vg);
 
-        const double playhead = module->displayPlayhead();
-        if (frames > 1) {
-            const float px = w * (float)(playhead / (double)frames);
-            nvgBeginPath(args.vg);
-            nvgMoveTo(args.vg, px, 0);
-            nvgLineTo(args.vg, px, h);
-            nvgStrokeColor(args.vg, nvgRGBA(0xff, 0xaa, 0x33, 0xdd));
-            nvgStrokeWidth(args.vg, 1.5f);
-            nvgStroke(args.vg);
-        }
+        const float px = w * std::min(1.f, std::max(0.f, playhead));
+        nvgBeginPath(args.vg);
+        nvgMoveTo(args.vg, px, 0);
+        nvgLineTo(args.vg, px, h);
+        nvgStrokeColor(args.vg, nvgRGBA(0xff, 0xaa, 0x33, 0xdd));
+        nvgStrokeWidth(args.vg, 1.5f);
+        nvgStroke(args.vg);
     }
 };
 
@@ -538,6 +754,7 @@ struct StemsWidget : ModuleWidget {
             const float sx = x + i * 16.f;
             addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(sx, row2)), module, Stems::STEM_1_LEVEL_PARAM + i));
             addParam(createParamCentered<VCVButton>(mm2px(Vec(sx, row2 + 10.f)), module, Stems::STEM_1_MUTE_PARAM + i));
+            addChild(createLightCentered<SmallLight<RedLight>>(mm2px(Vec(sx + 5.f, row2 + 10.f)), module, Stems::STEM_1_MUTE_LIGHT + i));
         }
         addParam(createParamCentered<RoundSmallBlackKnob>(mm2px(Vec(x + 70.f, row2)), module, Stems::STEM_SELECT_PARAM));
         addChild(createLightCentered<SmallLight<GreenLight>>(mm2px(Vec(x + 82.f, row2)), module, Stems::ANALYSIS_ACTIVE_LIGHT));
@@ -578,6 +795,7 @@ struct StemsWidget : ModuleWidget {
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(x + 77.f, jackRow)), module, Stems::GRAIN_DENSITY_CV_INPUT));
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(x + 88.f, jackRow)), module, Stems::GRAIN_PITCH_CV_INPUT));
 
+
         const float outRow = 112.f;
         addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(x + 99.f, outRow)), module, Stems::MAIN_L_OUTPUT));
         addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(x + 110.f, outRow)), module, Stems::MAIN_R_OUTPUT));
@@ -586,6 +804,7 @@ struct StemsWidget : ModuleWidget {
         addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(x + 121.f, outRow)), module, Stems::VOICE_OUTPUT));
         addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(x + 121.f, jackRow)), module, Stems::QUANT_CV_OUTPUT));
         addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(x + 132.f, jackRow)), module, Stems::DOWNBEAT_OUTPUT));
+        addInput(createInputCentered<PJ301MPort>(mm2px(Vec(x + 88.f, outRow)), module, Stems::WT_OFFSET_CV_INPUT));
         addChild(createLightCentered<SmallLight<BlueLight>>(mm2px(Vec(x + 132.f, outRow)), module, Stems::DOWNBEAT_LIGHT));
     }
 };
