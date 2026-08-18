@@ -7536,6 +7536,45 @@ bool bufferSurvivesRateChange(std::string& detail) {
                      std::to_string(targetSeconds) + " s";
             return false;
         }
+        // Downsampling must lowpass first, or content above the new Nyquist
+        // folds back. Checked by feeding a tone that cannot survive the new
+        // rate and requiring it to be attenuated rather than reflected.
+        if (c.to < c.from) {
+            RingBuffer high(c.from, 1.0f, 2);
+            const double tooHigh = c.to * 0.45;   // above the new Nyquist
+            for (std::size_t i = 0; i < frames; i++) {
+                const float v = (float)std::sin(2 * M_PI * tooHigh * (double)i / c.from);
+                high.write(v, v);
+            }
+            std::vector<float> hl(frames);
+            for (std::size_t i = 0; i < frames; i++) {
+                float a = 0.f, b = 0.f;
+                high.readFrame(i, a, b);
+                hl[i] = a;
+            }
+            const int span = std::max(1, (int)std::lround((double)c.from / c.to));
+            std::vector<float> smoothed(hl.size(), 0.f);
+            double running = 0.0;
+            for (std::size_t i = 0; i < hl.size(); i++) {
+                running += hl[i];
+                if (i >= (std::size_t)span) running -= hl[i - span];
+                const std::size_t used = std::min(i + 1, (std::size_t)span);
+                smoothed[i] = (float)(running / (double)used);
+            }
+            double rawPeak = 0.0, filteredPeak = 0.0;
+            for (std::size_t i = span; i < hl.size(); i++) {
+                rawPeak = std::max(rawPeak, (double)std::fabs(hl[i]));
+                filteredPeak = std::max(filteredPeak, (double)std::fabs(smoothed[i]));
+            }
+            if (filteredPeak > rawPeak * 0.7) {
+                detail = "downsampling " + std::to_string(c.from) + " to " +
+                         std::to_string(c.to) + " left content above the new Nyquist at " +
+                         std::to_string(filteredPeak) + " against " +
+                         std::to_string(rawPeak);
+                return false;
+            }
+        }
+
         // And it must still be the same tone, not silence or noise.
         double peak = 0.0;
         for (std::size_t i = 0; i < target.framesStored(); i++) {

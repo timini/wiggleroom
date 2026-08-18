@@ -227,7 +227,7 @@ struct Stems : Module {
         // taking a moment here is allowed.
         const int oldRate = sampleRate_;
         const int newRate = (int)e.sampleRate;
-        captureForResample(oldRate);
+        captureForResample();
         worker_.invalidate();
         rebuild(e.sampleRate);
         restoreResampled(oldRate, newRate);
@@ -357,18 +357,29 @@ private:
                                std::memory_order_relaxed);
     }
 
-    /** Copy the current take out before the buffers are replaced. */
-    void captureForResample(int rate) {
-        (void)rate;
+    /**
+     * Copy the current take out before the buffers are replaced.
+     *
+     * Reads whichever buffer actually holds it. After a take ends,
+     * submitSeparation() swaps the completed audio into spare_ and clears
+     * buffer_, so reading buffer_ unconditionally would capture nothing during
+     * exactly the state the module spends most of its time in.
+     */
+    void captureForResample() {
         resampleLeft_.clear();
         resampleRight_.clear();
-        if (!buffer_) return;
-        const std::size_t frames = buffer_->framesStored();
-        if (frames < 2) return;
+        RingBuffer* held = nullptr;
+        if (buffer_ && buffer_->framesStored() >= 2) {
+            held = buffer_.get();
+        } else if (spare_ && spare_->framesStored() >= 2) {
+            held = spare_.get();
+        }
+        if (!held) return;
+        const std::size_t frames = held->framesStored();
         resampleLeft_.resize(frames);
         resampleRight_.resize(frames);
         for (std::size_t i = 0; i < frames; i++) {
-            buffer_->readFrame(i, resampleLeft_[i], resampleRight_[i]);
+            held->readFrame(i, resampleLeft_[i], resampleRight_[i]);
         }
     }
 
@@ -383,6 +394,19 @@ private:
         if (resampleLeft_.size() < 2 || !buffer_) return;
         const double ratio = (double)newRate / (double)std::max(1, oldRate);
         const std::size_t source = resampleLeft_.size();
+
+        // Going DOWN in rate needs a lowpass first, or everything above the new
+        // Nyquist folds back. A moving average over the decimation span is the
+        // cheap version of that and is plenty here, since the material is about
+        // to be separated again anyway.
+        if (ratio < 1.0) {
+            const int span = std::max(1, (int)std::lround(1.0 / ratio));
+            if (span > 1) {
+                smoothInPlace(resampleLeft_, span);
+                smoothInPlace(resampleRight_, span);
+            }
+        }
+
         const std::size_t target =
             std::min(buffer_->capacityFrames(), (std::size_t)((double)source * ratio));
         for (std::size_t i = 0; i < target; i++) {
@@ -393,12 +417,22 @@ private:
             buffer_->write(resampleLeft_[i0] + (resampleLeft_[i1] - resampleLeft_[i0]) * frac,
                            resampleRight_[i0] + (resampleRight_[i1] - resampleRight_[i0]) * frac);
         }
-        resampleLeft_.clear();
-        resampleRight_.clear();
+        // Freed, not merely cleared. A 32 second take leaves about 24.6 MB
+        // resident for the life of the module otherwise, for storage used once.
+        std::vector<float>().swap(resampleLeft_);
+        std::vector<float>().swap(resampleRight_);
 
-        // Hand it straight back to the worker: the stems were retired above and
-        // the module plays the unseparated recording until the new ones land,
-        // which is the same graceful path a first take takes.
+        // Recording counters are in FRAMES, so they have to move with the rate
+        // too. Left alone, recordedFrames_ is an old-rate count compared
+        // against a new-rate target and the take stops early or late.
+        recordedFrames_ = (std::size_t)((double)recordedFrames_ * ratio);
+        overdubRead_ = (std::size_t)((double)overdubRead_ * ratio);
+
+        // A take still in progress is NOT submitted. Handing the worker a
+        // partial recording starts a separation the user never asked for, and
+        // the real one follows a moment later and supersedes it.
+        if (recording_) return;
+
         const std::size_t frames = buffer_->framesStored();
         if (frames < 2048) return;
         scratchLeft_.resize(frames);
@@ -407,6 +441,20 @@ private:
             buffer_->readFrame(i, scratchLeft_[i], scratchRight_[i]);
         }
         worker_.submit(scratchLeft_.data(), scratchRight_.data(), frames, newRate);
+    }
+
+    /** In-place moving average of @p span samples. */
+    static void smoothInPlace(std::vector<float>& x, int span) {
+        if (x.size() < (std::size_t)span) return;
+        std::vector<float> out(x.size(), 0.f);
+        double running = 0.0;
+        for (std::size_t i = 0; i < x.size(); i++) {
+            running += x[i];
+            if (i >= (std::size_t)span) running -= x[i - span];
+            const std::size_t used = std::min(i + 1, (std::size_t)span);
+            out[i] = (float)(running / (double)used);
+        }
+        x.swap(out);
     }
 
     void rebuild(float sampleRate) {
