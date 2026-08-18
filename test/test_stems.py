@@ -154,7 +154,16 @@ class TestRingBuffer:
 
 
 class TestRingBufferHardening:
-    """Guarding the point where audio enters the module."""
+    """Guarding the point where audio enters the module.
+
+    Note that these guards are only real because Release builds now pass
+    -fno-finite-math-only. -ffast-math implies -ffinite-math-only, which is a
+    promise that no value is ever NaN or infinite, and the compiler acts on it
+    by folding every finiteness test to true. A bit-pattern check does not
+    survive it either, since the promise is about the values. `just test-native`
+    compiles stems_test with the real Release flags and runs these checks under
+    them, because the rest of the suite builds as Debug and would not notice.
+    """
 
     def test_non_finite_input_is_not_stored(self):
         """This is the path by which a bad sample reaches everything else: HPSS
@@ -980,6 +989,24 @@ class TestWavetableExtract:
         call reset(). Verified to have teeth.
         """
         result = run_test(["--test-wt-reset-rearm"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_budget_below_the_span_raises_the_bound(self):
+        """A slot's source reads are averaged together, so a slot cannot be
+        split across calls and is the smallest indivisible unit of work.
+        Advertising a bound of one and then doing four reads is worse than
+        admitting the floor. Verified to have teeth.
+        """
+        result = run_test(["--test-wt-tiny-budget"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_unit_ratio_does_no_averaging(self):
+        """Starting the slot at the mapped position rather than centring on it
+        puts every read half a step late, so at the DEFAULT window each output
+        sample was the mean of two adjacent source samples. Verified to have
+        teeth: a stem alternating between +1 and -1 comes out completely silent.
+        """
+        result = run_test(["--test-wt-unit-ratio"])
         assert result["failed"] == 0, result.get("detail", "")
 
     def test_frames_follow_the_playhead(self):

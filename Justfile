@@ -335,6 +335,21 @@ test-native:
     python3 test/test_euclogic.py
     echo "== test_stems.py =="
     python3 test/test_stems.py
+    echo "== stems_test under RELEASE flags =="
+    # The rest of this suite builds as Debug, where -ffast-math is not applied,
+    # so every guard against non-finite input goes untested under the flags that
+    # actually ship. -ffast-math implies -ffinite-math-only, which folds those
+    # guards away entirely, so this compiles with the real Release flags and
+    # runs the checks that depend on them.
+    RELEASE_BIN="${TMPDIR:-/tmp}/stems_test_release"
+    c++ -std=c++17 -O3 -ffast-math -fno-finite-math-only -Isrc -Isrc/common \
+        -o "$RELEASE_BIN" test/stems_test.cpp
+    for check in --test-buffer-non-finite-write --test-buffer-non-finite \
+                 --test-wt-nan-stem --test-wt-bad-input --test-quant-non-finite \
+                 --test-quant-extreme --test-yin-non-finite --test-yin-bad-params \
+                 --test-scale-bad-input --test-extreme-sweep --test-mixer-non-finite; do
+        "$RELEASE_BIN" "$check"
+    done
     echo "== test_hpss_reference.py =="
     python3 test/test_hpss_reference.py
     echo "== test_native_coverage.py =="

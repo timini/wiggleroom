@@ -105,6 +105,18 @@ public:
         budget_ = std::max(1, units);
     }
 
+    /**
+     * The per-call bound actually in force.
+     *
+     * A slot's source reads are averaged together and so cannot be split across
+     * calls, which makes one slot the floor. Asking for less than that raises
+     * the bound rather than breaking it, and this reports what is really
+     * promised.
+     */
+    std::size_t effectiveBudget() const {
+        return std::max<std::size_t>((std::size_t)budget_, span_);
+    }
+
     int windowSamples() const { return windowSamples_; }
     float offset() const { return offset_; }
 
@@ -159,10 +171,15 @@ public:
         if (phase_ == Phase::Reading) {
             // Charged by the SPAN, so a wide window costs more calls rather
             // than more work per call.
+            // A slot is the smallest indivisible unit: its source reads are
+            // averaged together, so it cannot be split across calls. A budget
+            // below the span is therefore raised to one slot rather than
+            // silently exceeded, and the bound this class advertises is the
+            // larger of the two.
+            const std::size_t limit = std::max<std::size_t>((std::size_t)budget_, span_);
             std::size_t work = 0;
             std::size_t produced = 0;
-            while (cursor_ < kFrameSize &&
-                   (work == 0 || work + span_ <= (std::size_t)budget_)) {
+            while (cursor_ < kFrameSize && work + span_ <= limit) {
                 build_[cursor_] = readWindowSlot(source, cursor_);
                 cursor_++;
                 produced++;
@@ -342,8 +359,17 @@ private:
     float readWindowSlot(const std::vector<float>& source, std::size_t outputIndex) {
         // span_ is fixed for the whole build, so the cost of every slot is
         // known in advance and can be charged against the budget.
-        const double from = buildStart_ + buildStep_ * static_cast<double>(outputIndex);
-        const double to = from + buildStep_;
+        // The slot is CENTRED on the position this output sample maps to, not
+        // started there. Starting it there puts every read half a step late,
+        // and at a unit ratio, which is the default window, that means reading
+        // halfway between two source samples and averaging them when no
+        // resampling is called for at all. A stem alternating between +1 and -1
+        // came out completely silent, and ordinary high-frequency content was
+        // being attenuated for no reason.
+        const double centre = buildStart_ + buildStep_ * static_cast<double>(outputIndex);
+        const double half = buildStep_ * 0.5;
+        const double from = centre - half;
+        const double to = centre + half;
 
         const std::size_t span = span_;
 

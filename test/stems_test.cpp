@@ -3866,10 +3866,11 @@ bool wtWorkIsAmortised(std::string& detail) {
             std::size_t worst = 0;
             const int calls = buildFrame(e, set, 0, 24000.0, &worst);
 
-            if ((int)worst > budget) {
+            if (worst > e.effectiveBudget()) {
                 detail = "window " + std::to_string(window) + ", budget " +
                          std::to_string(budget) + ": a single call did " +
-                         std::to_string(worst) + " units of work";
+                         std::to_string(worst) + " units against an effective bound of " +
+                         std::to_string(e.effectiveBudget());
                 return false;
             }
 
@@ -3916,6 +3917,88 @@ bool wtDefaultLatency(std::string& detail) {
     if (calls < 14 || calls > 18) {
         detail = "the default configuration published after " + std::to_string(calls) +
                  " calls, not the sixteen documented";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * A budget below the decimation span must raise the bound, not break it.
+ *
+ * A slot's source reads are averaged together, so a slot cannot be split across
+ * calls and is the smallest indivisible unit of work. Advertising a bound of
+ * one and then doing four reads is worse than admitting the floor.
+ */
+bool wtTinyBudget(std::string& detail) {
+    const auto set = toneSet(100.0);
+    for (int window : {2048, 4096, 8192}) {
+        for (int budget : {1, 2, 3}) {
+            WavetableExtract e;
+            e.setWindowSamples(window);
+            e.setBudgetPerCall(budget);
+            const std::size_t span =
+                (window + WavetableExtract::kFrameSize - 1) / WavetableExtract::kFrameSize;
+
+            std::size_t worst = 0;
+            const int calls = buildFrame(e, set, 0, 24000.0, &worst);
+            if (e.effectiveBudget() != std::max<std::size_t>((std::size_t)budget, span)) {
+                detail = "window " + std::to_string(window) + ", budget " +
+                         std::to_string(budget) + ": effective bound reported as " +
+                         std::to_string(e.effectiveBudget());
+                return false;
+            }
+            if (worst > e.effectiveBudget()) {
+                detail = "window " + std::to_string(window) + ", budget " +
+                         std::to_string(budget) + ": did " + std::to_string(worst) +
+                         " units against a bound of " + std::to_string(e.effectiveBudget());
+                return false;
+            }
+            if (calls <= 0 || e.debugFramePeak() < 0.5) {
+                detail = "a tiny budget failed to build a frame at all";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * At a unit ratio no averaging should happen at all.
+ *
+ * Starting the slot at the mapped position rather than centring on it puts
+ * every read half a step late, so at the default window each output sample was
+ * the mean of two adjacent source samples. A stem alternating between +1 and -1
+ * came out completely silent.
+ */
+bool wtUnitRatioAlignment(std::string& detail) {
+    // The pathological case: full-scale content at exactly Nyquist.
+    StemSet alternating;
+    alternating.channels = 1;
+    alternating.generation = 1;
+    for (int L = 0; L < StemSet::kNumLayers; L++) {
+        alternating.layer[L].channel[0].assign(8000, 0.f);
+        for (std::size_t i = 0; i < 8000; i++) {
+            alternating.layer[L].channel[0][i] = (i % 2) ? 1.f : -1.f;
+        }
+    }
+    WavetableExtract e;
+    e.setWindowSamples((int)WavetableExtract::kFrameSize);
+    buildFrame(e, alternating, 0, 4000.0);
+    if (e.debugFramePeak() < 0.9) {
+        detail = "an alternating stem at a unit ratio published a frame peaking at " +
+                 std::to_string(e.debugFramePeak());
+        return false;
+    }
+
+    // And ordinary high content must not be attenuated when nothing is being
+    // resampled: at a unit ratio the frame should reproduce the source.
+    const auto tone = toneSet(9000.0, 8000);
+    WavetableExtract t;
+    t.setWindowSamples((int)WavetableExtract::kFrameSize);
+    buildFrame(t, tone, 0, 4000.0);
+    if (t.debugSourcePeak() < 0.9) {
+        detail = "a 9 kHz tone at a unit ratio measured a source peak of " +
+                 std::to_string(t.debugSourcePeak());
         return false;
     }
     return true;
@@ -4751,6 +4834,8 @@ const TestCase kCases[] = {
     {"--test-wt-degenerate",      "wt_degenerate",      wtDegenerateSet},
     {"--test-wt-reset-rearm",     "wt_reset_rearm",     wtResetRearmsSilence},
     {"--test-wt-default-latency", "wt_default_latency", wtDefaultLatency},
+    {"--test-wt-tiny-budget",     "wt_tiny_budget",     wtTinyBudget},
+    {"--test-wt-unit-ratio",      "wt_unit_ratio",      wtUnitRatioAlignment},
     {"--test-buffer-non-finite-write","buffer_non_finite_write",bufferRejectsNonFinite},
     {"--test-wt-restart",         "wt_restart",         wtRestartsOnChange},
     {"--test-wt-bad-input",       "wt_bad_input",       wtBadInput},
