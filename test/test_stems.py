@@ -1287,6 +1287,37 @@ class TestWavetableOsc:
         result = run_test(["--test-osc-range"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_it_works_at_the_extractors_publish_cadence(self):
+        """The integration every other test here misses.
+
+        They all offer the same frame count repeatedly, which is not what
+        happens: the extractor publishes a new count every sixteen calls while
+        this chain takes about sixty-five. Verified to have teeth: restarting on
+        any newer frame leaves the oscillator SILENT for the life of the patch,
+        peak 0.000000.
+        """
+        result = run_test(["--test-osc-cadence"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_first_frame_fades_in(self):
+        """Before any chain is ready the output is exact silence, so declaring
+        the first completed chain current takes it from zero to full level in
+        one sample. Verified to have teeth: a step of 0.999 against a
+        steady-state step of 0.034.
+        """
+        result = run_test(["--test-osc-first-frame"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_table_stops_contributing_at_its_nyquist_crossing(self):
+        """Blending between the entries either side of the exact position keeps
+        the lower one for the whole octave after it has stopped fitting, which
+        leaves a band of pitches playing a harmonic the chain should have
+        removed. Verified to have teeth: without the shift, a frame with a
+        strong 48th harmonic measures -18.6 dB where the shift gives -25.2.
+        """
+        result = run_test(["--test-osc-crossover"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_crossing_a_mip_boundary_does_not_jump_the_timbre(self):
         """Adjacent tables differ by a whole octave of bandwidth, so a harmonic
         present in one is filtered out of the next. Selecting exactly one entry

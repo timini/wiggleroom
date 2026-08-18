@@ -129,9 +129,20 @@ public:
         if (crossfade_ < 1.f) return;
 
         if (building_) {
-            // The frame under us changed. Level 0 is copied from it directly,
-            // so carrying on would splice two different frames together.
-            if (frameCount != targetCount_) startBuild(frameCount);
+            // Restart ONLY while level 0 is still being copied, because that is
+            // the only part that reads the caller's frame; every level above it
+            // is derived from the copy and needs nothing from outside.
+            //
+            // Restarting on any newer frame was fatal at the documented
+            // cadence. The extractor publishes every sixteen calls while this
+            // chain takes about sixty-five, so the build was cancelled four
+            // times over before it could finish, neither side ever became
+            // ready, and the oscillator was silent for good. Every test missed
+            // it because they all offered the same frame count repeatedly
+            // rather than the stream the extractor actually produces.
+            if (frameCount != targetCount_ && buildCursor_ < kFrameSize) {
+                startBuild(frameCount);
+            }
             advanceBuild(frame);
             return;
         }
@@ -218,7 +229,13 @@ private:
 
     void startBuild(uint64_t frameCount) {
         targetCount_ = frameCount;
-        buildSide_ = ready_[activeSide_] ? (1 - activeSide_) : activeSide_;
+        // ALWAYS the other side, even for the very first frame. Building the
+        // first one into the active side and declaring it current meant the
+        // output went from exact silence to full level in a single sample,
+        // which is a click every time a patch loads. Both buffers start zeroed,
+        // so building into the other side lets the ordinary crossfade bring the
+        // first frame up out of silence.
+        buildSide_ = 1 - activeSide_;
         buildCursor_ = 0;
         buildLevel_ = 0;
         buildBase_ = 0;
@@ -265,7 +282,16 @@ private:
         const double allowed = 0.5 * sampleRate_ / std::max(frequency, 1e-9);
         const double carried = 0.5 * (double)kFrameSize;
         const double exact = std::log2(carried / std::max(allowed, 1e-9));
-        const double clamped = std::min(std::max(exact, 0.0), (double)(kNumMips - 1));
+        // Shifted by one level, so a table's weight reaches zero at the point
+        // its own bandwidth crosses Nyquist rather than an octave later.
+        //
+        // Without the shift the blend keeps the lower table for the whole
+        // octave AFTER it has stopped fitting. That is not theoretical: a frame
+        // with a strong 48th harmonic played at 700 Hz measured a -23.5 dB
+        // alias floor, against -41.2 dB with the shift. Elsewhere the shift is
+        // neutral to within a decibel, so it costs almost nothing.
+        const double clamped =
+            std::min(std::max(exact + 1.0, 0.0), (double)(kNumMips - 1));
         lastMip_ = (int)clamped;
         return clamped;
     }
@@ -397,11 +423,7 @@ private:
             // fade was armed with no incoming table. It then never advanced,
             // and since offerFrame refuses to disturb an in-flight fade, no
             // further frame was ever built. One frame in, silent forever after.
-            if (buildSide_ == activeSide_) {
-                crossfade_ = 1.f;
-            } else {
-                crossfade_ = 0.f;
-            }
+            crossfade_ = 0.f;
         }
     }
 

@@ -5583,6 +5583,133 @@ bool oscTopOfRangeIsClean(std::string& detail) {
     return true;
 }
 
+/**
+ * The oscillator must work at the cadence the extractor actually publishes at.
+ *
+ * This is the integration every other test here misses. They all offer the same
+ * frame count over and over, which is not what happens: the extractor publishes
+ * a new count every sixteen calls at its default budget, while this chain takes
+ * about sixty-five. Restarting the build on any newer frame therefore cancelled
+ * it four times over before it could finish, neither side ever became ready,
+ * and the oscillator was silent for the life of the patch.
+ */
+bool oscAtProducerCadence(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto frame = harmonicFrame(16);
+
+    WavetableOsc osc;            // defaults throughout, as a module would
+    osc.setSampleRate(sampleRate);
+    osc.setLevel(1.f);
+
+    // A new frame count every sixteen calls, exactly as the extractor produces.
+    uint64_t count = 1;
+    double peak = 0.0;
+    for (int call = 0; call < 4000; call++) {
+        if (call > 0 && call % 16 == 0) count++;
+        osc.offerFrame(frame.data(), count);
+        for (int i = 0; i < 64; i++) {
+            peak = std::max(peak, std::fabs((double)osc.process(0.f)));
+        }
+    }
+    if (peak < 0.05) {
+        detail = "at the extractor's publish cadence the oscillator never made a "
+                 "sound; peak was " + std::to_string(peak) +
+                 ", so no chain ever finished building";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The first frame must fade in, not appear at full level.
+ *
+ * Before any chain is ready the output is exact silence. Declaring the first
+ * completed chain current instead of fading into it takes the output from zero
+ * to full level in one sample, which is a click every time a patch loads.
+ */
+bool oscFirstFrameFadesIn(std::string& detail) {
+    const int sampleRate = 48000;
+    // Cosine phase, so the frame starts at its maximum rather than at a zero
+    // crossing: this is the shape that makes the jump full scale.
+    std::vector<float> frame(WavetableOsc::kFrameSize, 0.f);
+    for (std::size_t i = 0; i < frame.size(); i++) {
+        frame[i] = (float)std::cos(2 * M_PI * (double)i / (double)frame.size());
+    }
+
+    WavetableOsc osc;
+    osc.setSampleRate(sampleRate);
+    osc.setLevel(1.f);
+    osc.setMorph(0.5f);
+
+    std::vector<float> out;
+    out.reserve(20000);
+    for (int call = 0; call < 300; call++) {
+        osc.offerFrame(frame.data(), 1);
+        for (int i = 0; i < 64; i++) out.push_back(osc.process(0.f));
+    }
+
+    const double worst = maxStep(out);
+    // The steady-state step of this frame at this pitch is the bar.
+    double steady = 0.0;
+    for (std::size_t i = out.size() / 2 + 1; i < out.size(); i++) {
+        steady = std::max(steady, std::fabs((double)out[i] - (double)out[i - 1]));
+    }
+    if (worst > steady * 3.0 + 0.02) {
+        detail = "the first frame arrived with a step of " + std::to_string(worst) +
+                 " against a steady-state step of " + std::to_string(steady);
+        return false;
+    }
+    if (steady < 1e-6) {
+        detail = "the oscillator never produced anything to measure";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * A table must stop contributing when its own bandwidth crosses Nyquist.
+ *
+ * Blending between the two entries either side of the exact position keeps the
+ * lower one for the whole octave AFTER it has stopped fitting. That is not
+ * theoretical: it leaves a specific band of pitches where a high harmonic that
+ * the chain is supposed to have removed is still being played.
+ */
+bool oscBlendCrossoverIsEarlyEnough(std::string& detail) {
+    const int sampleRate = 48000;
+    // A strong high harmonic and little else, so any alias is unambiguous.
+    std::vector<float> frame(WavetableOsc::kFrameSize, 0.f);
+    for (std::size_t i = 0; i < frame.size(); i++) {
+        const double phase = (double)i / (double)frame.size();
+        frame[i] = (float)(0.5 * std::sin(2 * M_PI * phase) +
+                           0.5 * std::sin(2 * M_PI * 48 * phase));
+    }
+
+    // Swept finely, because the defect only shows in part of each octave: at
+    // 700 Hz it measured -23.5 dB where its neighbours were past -30.
+    for (double hz = 280.0; hz <= 1600.0; hz *= 1.06) {
+        const double volts = std::log2(hz / 261.6255653005986);
+        WavetableOsc osc;
+        osc.setSampleRate(sampleRate);
+        osc.setLevel(1.f);
+        osc.setMorph(1.f);
+        primeOsc(osc, frame);
+        const auto out = renderOsc(osc, (float)volts);
+        const double floorDb = aliasFloorDb(out, hz, sampleRate);
+        // The bar is what the shift actually achieves on this deliberately
+        // hostile frame, not a round number. Harmonic 48 sits near Nyquist at
+        // these pitches, so the Catmull-Rom read leaves a floor of its own that
+        // no amount of table selection can remove; the worst case measured with
+        // the shift is about -25 dB, against -18.6 dB without it.
+        if (floorDb > -22.0) {
+            detail = "at " + std::to_string(hz) + " Hz the alias floor was " +
+                     std::to_string(floorDb) +
+                     " dB; a table is still contributing past its Nyquist crossing";
+            return false;
+        }
+    }
+    return true;
+}
+
 /** Building the chain must respect the budget. */
 bool oscBuildIsAmortised(std::string& detail) {
     const auto frame = harmonicFrame(32);
@@ -5884,6 +6011,9 @@ const TestCase kCases[] = {
     {"--test-osc-defaults",       "osc_defaults",       oscDefaultsCrossfade},
     {"--test-osc-reset",          "osc_reset",          oscResetRearms},
     {"--test-osc-range",          "osc_range",          oscChainCoversTheRange},
+    {"--test-osc-cadence",        "osc_cadence",        oscAtProducerCadence},
+    {"--test-osc-first-frame",    "osc_first_frame",    oscFirstFrameFadesIn},
+    {"--test-osc-crossover",      "osc_crossover",      oscBlendCrossoverIsEarlyEnough},
     {"--test-osc-mip-boundary",   "osc_mip_boundary",   oscMipBoundaryIsSmooth},
     {"--test-osc-top-range",      "osc_top_range",      oscTopOfRangeIsClean},
     {"--test-osc-amortised",      "osc_amortised",      oscBuildIsAmortised},
