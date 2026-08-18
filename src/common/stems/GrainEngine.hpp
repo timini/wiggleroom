@@ -65,7 +65,14 @@ public:
             for (int i = 0; i < kMaxGrains; i++) {
                 if (!grains_[i].active) continue;
                 grains_[i].phaseIncrement *= ratio;
-                grains_[i].fade *= ratio;
+                // Recomputed from the new increment, not scaled. Scaling can
+                // carry the fade past its 0.5 cap when the rate drops: a 1 ms
+                // texture-1 grain moving from 96 to 44.1 kHz ends up with an
+                // edge above a half, envelopeAt() then stays in its attack
+                // branch for the whole grain, and it terminates near full
+                // amplitude, which is the click the cap exists to prevent.
+                grains_[i].fade =
+                    std::min(0.5, kMinFadeSamples * grains_[i].phaseIncrement);
             }
         }
         sampleRate_ = next;
@@ -136,17 +143,23 @@ public:
             // its life: a step at full envelope gain followed by silence, which
             // is exactly the click the completion guarantee is supposed to
             // prevent.
-            const double span = (double)(length - 1);
+            // Modulo LENGTH, not length - 1. Wrapping one short drops the
+            // interval between the last frame and the first, so the last frame
+            // can never be the lower tap and the loop period is wrong; in the
+            // valid two frame case the span is 1 and every position collapses
+            // to zero, so the engine plays only source[0].
+            const double span = (double)length;
             g.position = std::fmod(g.position, span);
             if (g.position < 0.0) g.position += span;
 
             const double position = g.position;
             float sample = 0.f;
             if (position >= 0.0 && position < span) {
-                const std::size_t i0 = (std::size_t)position;
-                const double frac = position - (double)i0;
+                const std::size_t i0 = (std::size_t)position % length;
+                const std::size_t i1 = (i0 + 1) % length;
+                const double frac = position - std::floor(position);
                 const float a = source[i0];
-                const float b = source[i0 + 1];
+                const float b = source[i1];
                 sample = (float)(a + (b - a) * frac);
             }
             if (!std::isfinite(sample)) sample = 0.f;
@@ -236,7 +249,7 @@ private:
         // Wrapped into the buffer rather than clamped, so jitter near either end
         // scatters into the material instead of piling every stray grain onto
         // the first or last sample.
-        const double span = (double)(length - 1);
+        const double span = (double)length;
         start = std::fmod(start, span);
         if (start < 0.0) start += span;
         g.position = start;

@@ -1427,6 +1427,33 @@ class TestLowpassGate:
         result = run_test(["--test-lpg-resting"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_a_held_gate_sustains_until_released(self):
+        """Treating every full-scale target as a ping meant setGate(1) began
+        decaying the moment the attack arrived, and full-scale gate signals
+        commonly clamp to exactly 1, so that is the ordinary case. Verified to
+        have teeth: it falls to 0.076 within a second. Also checks a trigger
+        still decays on its own.
+        """
+        result = run_test(["--test-lpg-held-gate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_extreme_finite_audio_does_not_corrupt_the_filter(self):
+        """Two consecutive legal samples of opposite extreme magnitude overflow
+        the subtraction inside the filter, and once a stage holds an infinity
+        every ordinary sample after it returns NaN for good. Checking finiteness
+        on the way in is not enough. Verified to have teeth.
+        """
+        result = run_test(["--test-lpg-extreme-audio"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_response_control_scales_both_time_constants(self):
+        """TheLantern's control scales the whole cell, so an attack fixed at
+        12 ms leaves half of it with nothing to do. Its documented 0.5 to 2
+        range should span roughly 6 to 24 ms.
+        """
+        result = run_test(["--test-lpg-response"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_hostile_input_is_safe_and_recoverable(self):
         """Also checks the gate still works afterwards, so a bad value cannot
         leave it permanently shut."""
@@ -1539,6 +1566,18 @@ class TestGrainEngine:
         Verified to have teeth: a ratio of 1.00 where it should be 2.
         """
         result = run_test(["--test-grain-rate-change"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_two_frame_source_plays_both_frames(self):
+        """Wrapping modulo length - 1 drops the interval between the last frame
+        and the first, so the last frame is never the primary interpolation tap
+        and the loop period is one short.
+
+        Asserted as SYMMETRY, not merely "some negative output": two frames of
+        +1 and -1 should swing equally either way, and wrapping short gives
+        -0.293 against +0.585, which a looser check passes.
+        """
+        result = run_test(["--test-grain-wrap"])
         assert result["failed"] == 0, result.get("detail", "")
 
     def test_missing_and_poisoned_input_is_safe(self):

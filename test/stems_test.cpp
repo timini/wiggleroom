@@ -6210,6 +6210,144 @@ bool lpgRestingLevel(std::string& detail) {
     return true;
 }
 
+/**
+ * A held gate must stay open until released.
+ *
+ * Treating every full-scale target as a ping meant setGate(1) began decaying
+ * the moment the attack arrived. Full-scale gate signals commonly clamp to
+ * exactly 1, so that is the ordinary case rather than an edge one.
+ */
+bool lpgHeldGateSustains(std::string& detail) {
+    const int sampleRate = 48000;
+    LowpassGate gate(sampleRate);
+    gate.setColour(0.5f);
+    gate.setDecaySeconds(0.25f);
+    gate.setGate(1.f);
+
+    for (int i = 0; i < sampleRate; i++) gate.process(1.f);
+    if (gate.envelope() < 0.95f) {
+        detail = "a gate held at 1.0 decayed to " + std::to_string(gate.envelope()) +
+                 " after one second without any release";
+        return false;
+    }
+
+    // And releasing it must still let it fall.
+    gate.release();
+    for (int i = 0; i < sampleRate; i++) gate.process(1.f);
+    if (gate.envelope() > 0.1f) {
+        detail = "after release the gate was still at " + std::to_string(gate.envelope());
+        return false;
+    }
+
+    // A trigger, by contrast, must decay on its own.
+    LowpassGate pinged(sampleRate);
+    pinged.setColour(0.5f);
+    pinged.setDecaySeconds(0.25f);
+    pinged.trigger();
+    for (int i = 0; i < sampleRate; i++) pinged.process(1.f);
+    if (pinged.envelope() > 0.1f) {
+        detail = "a trigger did not decay; envelope was " +
+                 std::to_string(pinged.envelope());
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Extreme but finite audio must not corrupt the filter permanently.
+ *
+ * Two consecutive legal samples of opposite extreme magnitude overflow the
+ * subtraction inside the filter, and once a stage holds an infinity every
+ * ordinary sample after it returns NaN for good. Checking finiteness on the way
+ * in is not enough.
+ */
+bool lpgExtremeAudio(std::string& detail) {
+    const int sampleRate = 48000;
+    LowpassGate gate(sampleRate);
+    gate.setColour(0.5f);
+    gate.setRestingLevel(1.f);
+
+    const float extremes[] = {std::numeric_limits<float>::max(),
+                              -std::numeric_limits<float>::max(),
+                              std::numeric_limits<float>::max(),
+                              -std::numeric_limits<float>::max(),
+                              1e30f, -1e30f, 1e20f, -1e20f};
+    for (float v : extremes) {
+        const float out = gate.process(v);
+        if (!std::isfinite(out)) {
+            detail = "an extreme finite sample produced a non-finite output";
+            return false;
+        }
+    }
+
+    // Ordinary audio afterwards must still work, which is what the overflow
+    // broke: the filter state stayed infinite and every later sample was NaN.
+    double peak = 0.0;
+    for (int i = 0; i < 20000; i++) {
+        const float out = gate.process(0.5f);
+        if (!std::isfinite(out)) {
+            detail = "ordinary audio after an extreme sample returned a non-finite value";
+            return false;
+        }
+        peak = std::max(peak, std::fabs((double)out));
+    }
+    if (peak < 1e-3) {
+        detail = "the filter was left dead after extreme input; peak " +
+                 std::to_string(peak);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The response scale must move BOTH time constants.
+ *
+ * TheLantern's control scales the whole cell, so an attack fixed at 12 ms
+ * leaves half of it with nothing to do.
+ */
+bool lpgResponseScale(std::string& detail) {
+    const int sampleRate = 48000;
+    auto riseMs = [&](float response) {
+        LowpassGate gate(sampleRate);
+        gate.setColour(0.5f);
+        gate.setDecaySeconds(0.25f);
+        gate.setResponseScale(response);
+        gate.trigger();
+        std::vector<float> envelope;
+        for (int i = 0; i < sampleRate; i++) {
+            gate.process(1.f);
+            envelope.push_back(gate.envelope());
+        }
+        int at10 = -1, at90 = -1;
+        for (std::size_t i = 0; i < envelope.size(); i++) {
+            if (at10 < 0 && envelope[i] >= 0.1f) at10 = (int)i;
+            if (at90 < 0 && envelope[i] >= 0.9f) { at90 = (int)i; break; }
+        }
+        if (at10 < 0 || at90 < 0) return -1.0;
+        return 1000.0 * (at90 - at10) / sampleRate;
+    };
+
+    const double fast = riseMs(0.5f);
+    const double normal = riseMs(1.f);
+    const double slow = riseMs(2.f);
+    if (fast < 0 || normal < 0 || slow < 0) {
+        detail = "the gate did not open at one of the response settings";
+        return false;
+    }
+    if (!(fast < normal && normal < slow)) {
+        detail = "response did not scale the attack: " + std::to_string(fast) + ", " +
+                 std::to_string(normal) + ", " + std::to_string(slow) + " ms";
+        return false;
+    }
+    // Its documented range should span roughly 6 to 24 ms.
+    if (fast > 9.0 || slow < 18.0) {
+        detail = "the response range gave " + std::to_string(fast) + " to " +
+                 std::to_string(slow) + " ms, expected about 6 to 24";
+        return false;
+    }
+    return true;
+}
+
 /** Hostile input must not produce a non-finite sample. */
 bool lpgBadInput(std::string& detail) {
     LowpassGate gate(48000);
@@ -6652,6 +6790,71 @@ bool grainSampleRateChange(std::string& detail) {
     return true;
 }
 
+/**
+ * A two-frame source must play both frames.
+ *
+ * Wrapping modulo length - 1 drops the interval between the last frame and the
+ * first, so the last frame can never be the lower interpolation tap and the
+ * loop period is one short. At the smallest valid size the span becomes 1, every
+ * position collapses to zero, and only the first frame is ever heard.
+ */
+bool grainWrapsEveryFrame(std::string& detail) {
+    const int sampleRate = 48000;
+
+    // Two frames of opposite sign: if only the first is read, the output never
+    // goes negative.
+    std::vector<float> two{1.f, -1.f};
+    GrainEngine engine(sampleRate);
+    engine.setDensityHz(50.f);
+    engine.setSizeSeconds(0.05f);
+    engine.setTexture(0.f);
+    engine.setSpread(0.f);
+    engine.setPitchSemitones(-24.f);   // slow enough to dwell on each frame
+    engine.setReadPosition(0.0);
+    const auto run = runGrains(engine, two, sampleRate);
+
+    double lowest = 0.0, highest = 0.0;
+    for (float v : run.left) {
+        lowest = std::min(lowest, (double)v);
+        highest = std::max(highest, (double)v);
+    }
+    if (highest < 0.05) {
+        detail = "a two frame source never produced a positive sample";
+        return false;
+    }
+    // SYMMETRY, not merely a negative excursion. Two frames of +1 and -1 should
+    // swing equally either way. Wrapping one short leaves the last frame as an
+    // interpolation partner only, never the primary tap, so the negative side
+    // reaches half the positive one: -0.293 against +0.585. Requiring only
+    // "some negative output" passes on that.
+    if (std::fabs(lowest) < highest * 0.8) {
+        detail = "a two frame source swung to " + std::to_string(lowest) +
+                 " against " + std::to_string(highest) +
+                 "; the last frame is never the primary tap";
+        return false;
+    }
+
+    // A longer buffer must cover its whole length, including the last frame.
+    const std::size_t n = 64;
+    std::vector<float> ramp(n, 0.f);
+    for (std::size_t i = 0; i < n; i++) ramp[i] = (float)i / (float)(n - 1);
+    GrainEngine wide(sampleRate);
+    wide.setDensityHz(20.f);
+    wide.setSizeSeconds(0.2f);
+    wide.setTexture(0.f);
+    wide.setSpread(0.f);
+    wide.setReadPosition(0.0);
+    const auto wideRun = runGrains(wide, ramp, sampleRate * 2);
+    double peak = 0.0;
+    for (float v : wideRun.left) peak = std::max(peak, (double)v);
+    if (peak < 0.5) {
+        detail = "a ramp buffer only reached " + std::to_string(peak) +
+                 "; the end of the source is not being read";
+        return false;
+    }
+    return true;
+}
+
 /** Missing, short and malformed input must be safe. */
 bool grainBadInput(std::string& detail) {
     const int sampleRate = 48000;
@@ -6901,6 +7104,9 @@ const TestCase kCases[] = {
     {"--test-lpg-samplerate",     "lpg_samplerate",     lpgSampleRate},
     {"--test-lpg-audio-rate",     "lpg_audio_rate",     lpgAudioRateModulation},
     {"--test-lpg-resting",        "lpg_resting",        lpgRestingLevel},
+    {"--test-lpg-held-gate",      "lpg_held_gate",      lpgHeldGateSustains},
+    {"--test-lpg-extreme-audio",  "lpg_extreme_audio",  lpgExtremeAudio},
+    {"--test-lpg-response",       "lpg_response",       lpgResponseScale},
     {"--test-lpg-bad-input",      "lpg_bad_input",      lpgBadInput},
     {"--test-grain-pool",         "grain_pool",         grainPoolIsBounded},
     {"--test-grain-level",        "grain_level",        grainLevelIsStable},
@@ -6912,6 +7118,7 @@ const TestCase kCases[] = {
     {"--test-grain-coherent",     "grain_coherent",     grainCoherentOverlap},
     {"--test-grain-short",        "grain_short",        grainShortGrains},
     {"--test-grain-rate-change",  "grain_rate_change",  grainSampleRateChange},
+    {"--test-grain-wrap",         "grain_wrap",         grainWrapsEveryFrame},
     {"--test-grain-bad-input",    "grain_bad_input",    grainBadInput},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };
