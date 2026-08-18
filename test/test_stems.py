@@ -165,6 +165,18 @@ class TestRingBufferHardening:
     them, because the rest of the suite builds as Debug and would not notice.
     """
 
+    def test_a_recording_survives_a_sample_rate_change(self):
+        """The module resamples the take rather than discarding it, because
+        losing it is a dropout and the spec asks a mid-playback rate change to
+        have none.
+
+        This exercises the same linear resample against the RingBuffer it is
+        performed on, since the module itself includes rack.hpp and cannot be
+        built here. Checks the duration is preserved, not just the frame count.
+        """
+        result = run_test(["--test-buffer-rate-change"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_non_finite_input_is_not_stored(self):
         """This is the path by which a bad sample reaches everything else: HPSS
         carries a NaN through the FFT into all four stems, and from there into

@@ -7485,6 +7485,77 @@ bool diffusionCoprimeLengths(std::string& detail) {
     return true;
 }
 
+/**
+ * A recording must survive a sample rate change.
+ *
+ * The module resamples the take rather than discarding it, because losing it is
+ * a dropout and the spec asks a mid-playback rate change to have none. This
+ * exercises the same linear resample the module performs, against the RingBuffer
+ * it performs it on, since the module itself includes rack.hpp and cannot be
+ * built here.
+ */
+bool bufferSurvivesRateChange(std::string& detail) {
+    struct Case { int from, to; };
+    const Case cases[] = {{44100, 96000}, {96000, 44100}, {48000, 48000}, {48000, 192000}};
+    for (const auto& c : cases) {
+        RingBuffer source(c.from, 1.0f, 2);
+        const std::size_t frames = (std::size_t)(c.from * 0.5);
+        for (std::size_t i = 0; i < frames; i++) {
+            const float v = (float)std::sin(2 * M_PI * 220.0 * (double)i / c.from);
+            source.write(v, -v);
+        }
+
+        std::vector<float> left(frames), right(frames);
+        for (std::size_t i = 0; i < frames; i++) source.readFrame(i, left[i], right[i]);
+
+        RingBuffer target(c.to, 1.0f, 2);
+        const double ratio = (double)c.to / (double)c.from;
+        const std::size_t wanted =
+            std::min(target.capacityFrames(), (std::size_t)((double)frames * ratio));
+        for (std::size_t i = 0; i < wanted; i++) {
+            const double at = (double)i / ratio;
+            const std::size_t i0 = std::min((std::size_t)at, frames - 1);
+            const std::size_t i1 = std::min(i0 + 1, frames - 1);
+            const float f = (float)(at - (double)i0);
+            target.write(left[i0] + (left[i1] - left[i0]) * f,
+                         right[i0] + (right[i1] - right[i0]) * f);
+        }
+
+        if (target.framesStored() < wanted) {
+            detail = "resampling " + std::to_string(c.from) + " to " + std::to_string(c.to) +
+                     " stored only " + std::to_string(target.framesStored()) + " frames";
+            return false;
+        }
+        // The DURATION must be preserved, which is the point: the same seconds
+        // of material at a different rate.
+        const double sourceSeconds = (double)frames / c.from;
+        const double targetSeconds = (double)target.framesStored() / c.to;
+        if (std::fabs(targetSeconds - sourceSeconds) > sourceSeconds * 0.02) {
+            detail = std::to_string(c.from) + " to " + std::to_string(c.to) + ": " +
+                     std::to_string(sourceSeconds) + " s became " +
+                     std::to_string(targetSeconds) + " s";
+            return false;
+        }
+        // And it must still be the same tone, not silence or noise.
+        double peak = 0.0;
+        for (std::size_t i = 0; i < target.framesStored(); i++) {
+            float l = 0.f, r = 0.f;
+            target.readFrame(i, l, r);
+            if (!std::isfinite(l) || !std::isfinite(r)) {
+                detail = "resampling produced a non-finite sample";
+                return false;
+            }
+            peak = std::max(peak, (double)std::fabs(l));
+        }
+        if (peak < 0.9) {
+            detail = std::to_string(c.from) + " to " + std::to_string(c.to) +
+                     " left a peak of " + std::to_string(peak);
+            return false;
+        }
+    }
+    return true;
+}
+
 /** A sample rate change must not reallocate on the audio thread. */
 bool diffusionNoAlloc(std::string& detail) {
     Diffusion reverb(48000);
@@ -7827,6 +7898,7 @@ const TestCase kCases[] = {
     {"--test-diffusion-allpass",  "diffusion_allpass",   diffusionAllpassIsFlat},
     {"--test-diffusion-denormal", "diffusion_denormal",  diffusionFlushesDenormals},
     {"--test-diffusion-coprime",  "diffusion_coprime",   diffusionCoprimeLengths},
+    {"--test-buffer-rate-change", "buffer_rate_change", bufferSurvivesRateChange},
     {"--test-diffusion-no-alloc", "diffusion_no_alloc", diffusionNoAlloc},
     {"--test-empty-buffer",       "empty_buffer",       emptyBufferSweep},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},

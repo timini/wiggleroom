@@ -213,12 +213,24 @@ struct Stems : Module {
     ~Stems() override { worker_.stop(); }
 
     void onSampleRateChange(const SampleRateChangeEvent& e) override {
-        // The published stems are indexed in frames at the OLD rate, and the
-        // buffer is about to be replaced with one sized at the new rate. Keeping
-        // them would play the previous take at the wrong speed against a
-        // playhead that no longer matches it, so the take is retired instead.
+        // The recording is RESAMPLED rather than discarded.
+        //
+        // Retiring the take was the safe first move, and it is still what
+        // happens to the separated stems, since they are indexed in frames at
+        // the old rate and re-separating is the only way to get them right. But
+        // discarding the recording as well is a dropout, and the spec asks for
+        // a mid-playback rate change to have none. The take is carried across
+        // and handed to the worker again, so the loop keeps playing while the
+        // stems are rebuilt underneath it.
+        //
+        // This runs on the UI thread, not the audio thread, so allocating and
+        // taking a moment here is allowed.
+        const int oldRate = sampleRate_;
+        const int newRate = (int)e.sampleRate;
+        captureForResample(oldRate);
         worker_.invalidate();
         rebuild(e.sampleRate);
+        restoreResampled(oldRate, newRate);
     }
 
     void onReset(const ResetEvent& e) override {
@@ -345,8 +357,61 @@ private:
                                std::memory_order_relaxed);
     }
 
+    /** Copy the current take out before the buffers are replaced. */
+    void captureForResample(int rate) {
+        (void)rate;
+        resampleLeft_.clear();
+        resampleRight_.clear();
+        if (!buffer_) return;
+        const std::size_t frames = buffer_->framesStored();
+        if (frames < 2) return;
+        resampleLeft_.resize(frames);
+        resampleRight_.resize(frames);
+        for (std::size_t i = 0; i < frames; i++) {
+            buffer_->readFrame(i, resampleLeft_[i], resampleRight_[i]);
+        }
+    }
+
+    /**
+     * Write the captured take back at the new rate, then re-separate it.
+     *
+     * Linear interpolation. A rate change is a rare, non-real-time event and
+     * the material is about to be separated again anyway, so the cost of a
+     * higher-order interpolator would buy nothing audible.
+     */
+    void restoreResampled(int oldRate, int newRate) {
+        if (resampleLeft_.size() < 2 || !buffer_) return;
+        const double ratio = (double)newRate / (double)std::max(1, oldRate);
+        const std::size_t source = resampleLeft_.size();
+        const std::size_t target =
+            std::min(buffer_->capacityFrames(), (std::size_t)((double)source * ratio));
+        for (std::size_t i = 0; i < target; i++) {
+            const double at = (double)i / ratio;
+            const std::size_t i0 = std::min((std::size_t)at, source - 1);
+            const std::size_t i1 = std::min(i0 + 1, source - 1);
+            const float frac = (float)(at - (double)i0);
+            buffer_->write(resampleLeft_[i0] + (resampleLeft_[i1] - resampleLeft_[i0]) * frac,
+                           resampleRight_[i0] + (resampleRight_[i1] - resampleRight_[i0]) * frac);
+        }
+        resampleLeft_.clear();
+        resampleRight_.clear();
+
+        // Hand it straight back to the worker: the stems were retired above and
+        // the module plays the unseparated recording until the new ones land,
+        // which is the same graceful path a first take takes.
+        const std::size_t frames = buffer_->framesStored();
+        if (frames < 2048) return;
+        scratchLeft_.resize(frames);
+        scratchRight_.resize(frames);
+        for (std::size_t i = 0; i < frames; i++) {
+            buffer_->readFrame(i, scratchLeft_[i], scratchRight_[i]);
+        }
+        worker_.submit(scratchLeft_.data(), scratchRight_.data(), frames, newRate);
+    }
+
     void rebuild(float sampleRate) {
         const int rate = (int)sampleRate;
+        sampleRate_ = rate;
         // Allocated once per sample rate change, on the UI thread, never in
         // process(). Sized for the 32 second ceiling the spec sets.
         buffer_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
@@ -673,6 +738,8 @@ private:
     uint32_t walk_ = 0x2545F491u;
 
     std::vector<float> scratchLeft_, scratchRight_;
+    std::vector<float> resampleLeft_, resampleRight_;
+    int sampleRate_ = 48000;
     std::array<float, 4096> analysisWindow_{};
     std::size_t analysisFill_ = 0;
 
