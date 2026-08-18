@@ -4180,6 +4180,73 @@ bool wtStereoDownmix(std::string& detail) {
     return true;
 }
 
+/**
+ * No frame may ever exceed full scale.
+ *
+ * The taper correction is subtracted after scaling, so it shifts every sample:
+ * a window whose faded edge leans one way against an interior peak leaning the
+ * other pushed that peak past unity, and downstream stages then clip content
+ * this class claims to have normalised.
+ */
+bool wtNeverExceedsFullScale(std::string& detail) {
+    // The pathological shape: positive content confined to the faded edge, an
+    // opposite-polarity interior peak, and zero mean overall.
+    {
+        const std::size_t n = 8000;
+        const std::size_t first = 4000 - 1024, last = 4000 + 1024;
+        StemSet set;
+        set.channels = 1;
+        set.generation = 1;
+        for (int L = 0; L < StemSet::kNumLayers; L++) set.layer[L].channel[0].assign(n, 0.f);
+
+        const std::size_t edge = (last - first) / 20;
+        for (std::size_t i = first; i < first + edge; i++) set.layer[0].channel[0][i] = 1.f;
+        set.layer[0].channel[0][first + edge + 5] = 1.f;
+        double sum = 0.0;
+        for (std::size_t i = first; i < last; i++) sum += set.layer[0].channel[0][i];
+        const std::size_t negatives = (last - first) - edge - 1;
+        for (std::size_t i = last - negatives; i < last; i++) {
+            set.layer[0].channel[0][i] -= (float)(sum / (double)negatives);
+        }
+
+        WavetableExtract e;
+        buildFrame(e, set, 0, 4000.0);
+        if (e.debugFramePeak() > 1.0 + 1e-6) {
+            detail = "a lopsided window published a frame peaking at " +
+                     std::to_string(e.debugFramePeak());
+            return false;
+        }
+    }
+
+    // And a broad sweep of ordinary material, at every window, must stay inside
+    // full scale too.
+    std::mt19937 rng(31415);
+    std::uniform_real_distribution<float> dist(-1.f, 1.f);
+    for (int trial = 0; trial < 6; trial++) {
+        StemSet set;
+        set.channels = 1;
+        set.generation = 10 + trial;
+        for (int L = 0; L < StemSet::kNumLayers; L++) {
+            set.layer[L].channel[0].assign(20000, 0.f);
+            for (auto& x : set.layer[L].channel[0]) x = dist(rng);
+        }
+        for (int window : {256, 1024, 2048, 4095, 8192}) {
+            WavetableExtract e;
+            e.setWindowSamples(window);
+            for (double playhead : {0.0, 1000.0, 10000.0, 19999.0}) {
+                buildFrame(e, set, 0, playhead);
+                if (e.debugFramePeak() > 1.0 + 1e-6) {
+                    detail = "window " + std::to_string(window) + " at playhead " +
+                             std::to_string(playhead) + " published " +
+                             std::to_string(e.debugFramePeak());
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 /** Frames must follow the playhead. */
 bool wtTracksPlayhead(std::string& detail) {
     // Noise, so that successive windows genuinely differ rather than repeating
@@ -5073,6 +5140,7 @@ const TestCase kCases[] = {
     {"--test-wt-budget-window",   "wt_budget_window",   wtBudgetFollowsWindow},
     {"--test-wt-unit-ratio",      "wt_unit_ratio",      wtUnitRatioAlignment},
     {"--test-wt-taper-dc",        "wt_taper_dc",        wtTaperDc},
+    {"--test-wt-full-scale",      "wt_full_scale",      wtNeverExceedsFullScale},
     {"--test-wt-stereo",          "wt_stereo",          wtStereoDownmix},
     {"--test-wt-window-automation","wt_window_automation",wtWindowAutomation},
     {"--test-buffer-non-finite-write","buffer_non_finite_write",bufferRejectsNonFinite},

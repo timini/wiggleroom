@@ -376,8 +376,6 @@ private:
         // Silence stays silent for the same reason it always did: there is
         // nothing to bring up, and dividing by the residue would make a
         // full-scale frame out of rounding noise.
-        gain_ = (sourcePeak_ > 1e-7) ? (1.0 / sourcePeak_) : 0.0;
-
         // The taper puts DC back. Removing the source mean makes the UNTAPERED
         // window zero-mean, but multiplying by a fade that is not symmetric
         // about the content shifts it again: a window whose edges lean positive
@@ -389,6 +387,21 @@ private:
         // accumulated during the read, so this costs no extra pass.
         const double tapered = taperedSum_ - mean_ * taperWeightSum_;
         taperMean_ = tapered / static_cast<double>(kFrameSize);
+
+        // The gain has to account for that correction, or it stops being a
+        // normalisation. Removing taperMean_ AFTER scaling shifts every sample,
+        // so a window whose faded edge leans one way against an interior peak
+        // leaning the other pushes that peak past full scale: about 1.025 in the
+        // worst case, which downstream stages then clip.
+        //
+        // The bound is analytic rather than measured. The taper never exceeds
+        // one, so |(x - mean) * w| <= sourcePeak_, and the shifted result is
+        // therefore within sourcePeak_ + |taperMean_|. That is O(1), needs no
+        // extra pass over the frame, and is strictly smaller than 1 /
+        // sourcePeak_, so it cannot boost back what the decimation average
+        // rejected.
+        const double bound = sourcePeak_ + std::fabs(taperMean_);
+        gain_ = (bound > 1e-7) ? (1.0 / bound) : 0.0;
     }
 
     /**

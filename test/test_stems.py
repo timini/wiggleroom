@@ -1053,6 +1053,20 @@ class TestWavetableExtract:
         result = run_test(["--test-wt-stereo"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_no_frame_ever_exceeds_full_scale(self):
+        """The taper correction is subtracted after scaling, so it shifts every
+        sample: a window whose faded edge leans one way against an interior peak
+        leaning the other pushed that peak past unity, and downstream stages
+        then clip content this class claims to have normalised.
+
+        The bound is analytic rather than measured, so it costs no extra pass:
+        the taper never exceeds one, so the shifted result is within
+        sourcePeak + |taperMean|. Verified to have teeth: 1.024 without it.
+        Also sweeps random material across every window and several playheads.
+        """
+        result = run_test(["--test-wt-full-scale"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_frames_follow_the_playhead(self):
         """Driven with noise, so successive windows genuinely differ rather than
         repeating a periodic waveform that would look the same wherever it was
