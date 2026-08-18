@@ -154,6 +154,8 @@ private:
     static constexpr int kNumCombs = 4;
     static constexpr int kMaxSampleRate = 192000;
     static constexpr float kMaxInput = 10.f;
+    /** Slack above the nominal length for the coprimality search. */
+    static constexpr std::size_t kSearchHeadroom = 64;
     static constexpr float kCombScale = 0.25f;
     /**
      * Hard ceiling on the loop gain.
@@ -174,6 +176,8 @@ private:
     struct Line {
         float* data = nullptr;
         std::size_t index = 0;
+        /** Allocated length. A delay may never exceed this. */
+        std::size_t capacity = 0;
     };
 
     /**
@@ -189,24 +193,27 @@ private:
     void allocate(int maxRate) {
         storage_.resize(2 * (kNumAllpass + kNumCombs));
         std::size_t at = 0;
+        // Headroom for the coprimality search, which walks a length upward
+        // until it shares no factor with the others. Four samples of slack was
+        // not enough: at 192 kHz the search could push a length past the end of
+        // its own line, and every read after that was out of bounds. It passed
+        // locally and failed on Linux, which is how out-of-bounds tends to go.
         auto sizeFor = [&](float ms, float scale) {
-            return (std::size_t)(ms * scale * maxRate / 1000.f) + 4;
+            return (std::size_t)(ms * scale * maxRate / 1000.f) + kSearchHeadroom;
+        };
+        auto bind = [&](Line& line, float ms, float scale) {
+            storage_[at].assign(sizeFor(ms, scale), 0.f);
+            line.data = storage_[at].data();
+            line.capacity = storage_[at].size();
+            at++;
         };
         for (int i = 0; i < kNumAllpass; i++) {
-            storage_[at].assign(sizeFor(kAllpassMs[i], 1.f), 0.f);
-            allpassLeft_[i].data = storage_[at].data();
-            at++;
-            storage_[at].assign(sizeFor(kAllpassMs[i], kStereoOffset), 0.f);
-            allpassRight_[i].data = storage_[at].data();
-            at++;
+            bind(allpassLeft_[i], kAllpassMs[i], 1.f);
+            bind(allpassRight_[i], kAllpassMs[i], kStereoOffset);
         }
         for (int i = 0; i < kNumCombs; i++) {
-            storage_[at].assign(sizeFor(kCombMs[i], 1.f), 0.f);
-            combLeft_[i].data = storage_[at].data();
-            at++;
-            storage_[at].assign(sizeFor(kCombMs[i], kStereoOffset), 0.f);
-            combRight_[i].data = storage_[at].data();
-            at++;
+            bind(combLeft_[i], kCombMs[i], 1.f);
+            bind(combRight_[i], kCombMs[i], kStereoOffset);
         }
     }
 
@@ -219,19 +226,23 @@ private:
         // pitched flutter the spread is supposed to prevent.
         std::size_t chosen[2 * (kNumAllpass + kNumCombs)];
         int count = 0;
-        auto pick = [&](float ms, float scale) {
+        auto pick = [&](float ms, float scale, const Line& line) {
             std::size_t n = lengthFor(ms, scale);
-            while (!coprimeWithAll(n, chosen, count)) n++;
+            // Bounded by the line's own allocation. The search walks upward, so
+            // without this it can run past the end of the buffer it indexes.
+            const std::size_t limit = (line.capacity > 0) ? line.capacity : n;
+            while (n < limit && !coprimeWithAll(n, chosen, count)) n++;
+            n = std::min(n, limit);
             chosen[count++] = n;
             return n;
         };
         for (int i = 0; i < kNumAllpass; i++) {
-            allpassLength_[i] = pick(kAllpassMs[i], 1.f);
-            allpassRightLength_[i] = pick(kAllpassMs[i], kStereoOffset);
+            allpassLength_[i] = pick(kAllpassMs[i], 1.f, allpassLeft_[i]);
+            allpassRightLength_[i] = pick(kAllpassMs[i], kStereoOffset, allpassRight_[i]);
         }
         for (int i = 0; i < kNumCombs; i++) {
-            combLength_[i] = pick(kCombMs[i], 1.f);
-            combRightLength_[i] = pick(kCombMs[i], kStereoOffset);
+            combLength_[i] = pick(kCombMs[i], 1.f, combLeft_[i]);
+            combRightLength_[i] = pick(kCombMs[i], kStereoOffset, combRight_[i]);
         }
         // Deliberately NOT reset. Clearing every line here drops the tail the
         // instant the host changes rate, which is an audible hole exactly where
