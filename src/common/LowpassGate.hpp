@@ -39,6 +39,22 @@ public:
         updateCoefficients();
     }
 
+    /**
+     * Scales both vactrol time constants together, 0.25 to 4.
+     *
+     * TheLantern's `response` control moves the whole cell rather than just its
+     * decay, so an attack fixed at 12 ms leaves half of that control with
+     * nothing to do. At the extremes of its documented 0.5 to 2 range this puts
+     * the attack between about 6 and 24 ms.
+     */
+    void setResponseScale(float scale) {
+        if (!std::isfinite(scale)) return;
+        response_ = std::min(std::max(scale, 0.25f), 4.f);
+        updateCoefficients();
+    }
+
+    float responseScale() const { return response_; }
+
     /** Fall time. The vactrol's own is about 250 ms; the control widens it. */
     void setDecaySeconds(float seconds) {
         if (!std::isfinite(seconds)) return;
@@ -65,16 +81,28 @@ public:
         resting_ = std::min(std::max(level, 0.f), 1.f);
     }
 
-    /** Ping the gate fully open. */
-    void trigger() { target_ = 1.f; }
+    /** Ping the gate fully open, then let it decay on its own. */
+    void trigger() {
+        target_ = 1.f;
+        pinged_ = true;
+    }
 
     /** Hold the gate at @p level until released. */
     void setGate(float level) {
         if (!std::isfinite(level)) return;
         target_ = std::min(std::max(level, 0.f), 1.f);
+        // A held gate is NOT a ping, even at exactly 1. Treating every full
+        // scale target as a ping meant setGate(1) began decaying the moment the
+        // attack arrived, so a sustained gate fell to 0.076 within a second.
+        // Full scale gate signals commonly clamp to exactly 1, so that is the
+        // ordinary case rather than an edge one.
+        pinged_ = false;
     }
 
-    void release() { target_ = 0.f; }
+    void release() {
+        target_ = 0.f;
+        pinged_ = false;
+    }
 
     /**
      * One sample.
@@ -84,6 +112,12 @@ public:
      */
     float process(float in) {
         if (!std::isfinite(in)) in = 0.f;
+        // Clamped, not merely checked for finiteness. Two consecutive legal
+        // finite samples of opposite extreme magnitude, FLT_MAX then -FLT_MAX,
+        // overflow the subtraction in the filter below, and once a stage holds
+        // an infinity every ordinary sample after it returns NaN for good.
+        // Ten is far outside anything an audio signal carries in Rack.
+        in = std::min(std::max(in, -kMaxInput), kMaxInput);
 
         const float aim = std::max(target_, resting_);
 
@@ -99,8 +133,12 @@ public:
         conductance_ = std::min(std::max(conductance_, 0.f), 1.f);
 
         // A trigger is a ping, not a hold: once the rise has essentially
-        // arrived, stop aiming high so the fall can begin on its own.
-        if (target_ >= 1.f && conductance_ > 0.99f) target_ = 0.f;
+        // arrived, stop aiming high so the fall can begin on its own. Only a
+        // trigger, though; a gate held open stays open until released.
+        if (pinged_ && conductance_ > 0.99f) {
+            target_ = 0.f;
+            pinged_ = false;
+        }
 
         // Three positions on a continuum, not a blend of two.
         //
@@ -181,8 +219,9 @@ private:
         // so a 12 ms rise needs a 5.45 ms constant; using 12 directly gave
         // 26.4 ms. The fall is stretched by the level-dependent slowdown above,
         // so its constant is scaled back to land on the requested time.
-        riseCoefficient_ = 1.f - std::exp(-1.f / (kRiseSeconds / 2.2f * sampleRate_));
-        const float fallTau = decaySeconds_ * kFallCalibration;
+        const float riseTau = kRiseSeconds * response_ / 2.2f;
+        riseCoefficient_ = 1.f - std::exp(-1.f / (riseTau * sampleRate_));
+        const float fallTau = decaySeconds_ * response_ * kFallCalibration;
         fallCoefficient_ = 1.f - std::exp(-1.f / (fallTau * sampleRate_));
     }
 
@@ -193,14 +232,18 @@ private:
     static constexpr float kTailFloor = 0.25f;
     /** Compensates the tail slowdown so decaySeconds means what it says. */
     static constexpr float kFallCalibration = 0.70f;
+    /** Far outside anything an audio signal carries in Rack. */
+    static constexpr float kMaxInput = 10.f;
 
     int sampleRate_ = 48000;
     float decaySeconds_ = 0.25f;
+    float response_ = 1.f;
     float colour_ = 0.5f;
     float resting_ = 0.f;
 
     float conductance_ = 0.f;
     float target_ = 0.f;
+    bool pinged_ = false;
     float riseCoefficient_ = 0.f;
     float fallCoefficient_ = 0.f;
     float stage1_ = 0.f;
