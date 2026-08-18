@@ -3768,7 +3768,9 @@ int buildFrame(WavetableExtract& e, const StemSet& set, int layer, double playhe
     if (worstCall) *worstCall = 0;
     while (calls < 100000) {
         const bool done = e.process(&set, layer, playhead);
-        if (worstCall) *worstCall = std::max(*worstCall, e.debugSamplesLastCall());
+        // WORK, not output samples. At a wide window one output sample costs
+        // several source reads, so equal sample counts hide unequal work.
+        if (worstCall) *worstCall = std::max(*worstCall, e.debugWorkLastCall());
         calls++;
         if (done) break;
     }
@@ -3851,38 +3853,70 @@ bool wtWindowChangesContent(std::string& detail) {
  */
 bool wtWorkIsAmortised(std::string& detail) {
     const auto set = toneSet(100.0);
-    for (int budget : {16, 64, 128, 512}) {
-        WavetableExtract e;
-        e.setBudgetPerCall(budget);
-        std::size_t worst = 0;
-        const int calls = buildFrame(e, set, 0, 24000.0, &worst);
+    // Windows spanning the whole range, because the cost of one output sample
+    // depends on the window: at 8192 each costs four source reads. Charging
+    // only output samples let the reading phase do four times the work of the
+    // finalising phase while both reported the same number, so the cost still
+    // jumped at the boundary between them.
+    for (int window : {2048, 4096, 8192}) {
+        for (int budget : {64, 256, 512}) {
+            WavetableExtract e;
+            e.setWindowSamples(window);
+            e.setBudgetPerCall(budget);
+            std::size_t worst = 0;
+            const int calls = buildFrame(e, set, 0, 24000.0, &worst);
 
-        if ((int)worst > budget) {
-            detail = "a single call produced " + std::to_string(worst) +
-                     " samples against a budget of " + std::to_string(budget);
-            return false;
-        }
-        // Reading the window and finalising it are BOTH amortised, so a frame
-        // costs two passes of budget-sized calls rather than one pass plus a
-        // spike on the call that happens to complete the read.
-        const int expected = 2 * (int)WavetableExtract::kFrameSize / budget;
-        if (calls < expected - 1 || calls > expected + 2) {
-            detail = "budget " + std::to_string(budget) + " took " +
-                     std::to_string(calls) + " calls, expected about " +
-                     std::to_string(expected);
-            return false;
-        }
-
-        // And it must stay flat across many frames, not just the first.
-        for (int frame = 0; frame < 5; frame++) {
-            std::size_t w = 0;
-            buildFrame(e, set, 0, 24000.0 + frame * 1000.0, &w);
-            if ((int)w > budget) {
-                detail = "frame " + std::to_string(frame) + " spiked to " +
-                         std::to_string(w) + " samples";
+            if ((int)worst > budget) {
+                detail = "window " + std::to_string(window) + ", budget " +
+                         std::to_string(budget) + ": a single call did " +
+                         std::to_string(worst) + " units of work";
                 return false;
             }
+
+            // Reading and finalising are BOTH amortised, so a frame costs
+            // kFrameSize * (span + 1) units in total.
+            const int span = (window + (int)WavetableExtract::kFrameSize - 1) /
+                             (int)WavetableExtract::kFrameSize;
+            const int units = (int)WavetableExtract::kFrameSize * (span + 1);
+            const int expected = units / budget;
+            if (calls < expected - 2 || calls > expected + 3) {
+                detail = "window " + std::to_string(window) + ", budget " +
+                         std::to_string(budget) + ": took " + std::to_string(calls) +
+                         " calls, expected about " + std::to_string(expected);
+                return false;
+            }
+
+            // Flat across several frames, not just the first.
+            for (int frame = 0; frame < 4; frame++) {
+                std::size_t w = 0;
+                buildFrame(e, set, 0, 24000.0 + frame * 1000.0, &w);
+                if ((int)w > budget) {
+                    detail = "frame " + std::to_string(frame) + " spiked to " +
+                             std::to_string(w) + " units";
+                    return false;
+                }
+            }
         }
+    }
+    return true;
+}
+
+/**
+ * The default budget must publish the default window in sixteen calls.
+ *
+ * A frame costs kFrameSize * (span + 1) units, reading then writing. Sizing the
+ * default for the reading phase alone doubled the real latency: 32 calls rather
+ * than 16, which at one call per 256 sample block is 171 ms instead of 85, and
+ * that is the age of the snapshot before any morphing is applied.
+ */
+bool wtDefaultLatency(std::string& detail) {
+    const auto set = toneSet(100.0);
+    WavetableExtract e;   // defaults throughout
+    const int calls = buildFrame(e, set, 0, 24000.0);
+    if (calls < 14 || calls > 18) {
+        detail = "the default configuration published after " + std::to_string(calls) +
+                 " calls, not the sixteen documented";
+        return false;
     }
     return true;
 }
@@ -4405,17 +4439,19 @@ bool wtDegenerateSet(std::string& detail) {
     tiny.channels = 1;
     tiny.generation = 99;
     for (int L = 0; L < StemSet::kNumLayers; L++) tiny.layer[L].channel[0].assign(1, 0.5f);
+    const int silentBudget = 128;
+    e.setBudgetPerCall(silentBudget);
     std::size_t worstSilentCall = 0;
     int silentCalls = 0;
     while (silentCalls < 1000) {
         const bool published = e.process(&tiny, 0, 0.0);
-        worstSilentCall = std::max(worstSilentCall, e.debugSamplesLastCall());
+        worstSilentCall = std::max(worstSilentCall, e.debugWorkLastCall());
         silentCalls++;
         if (published) break;
     }
     // Replacing the frame must respect the budget too, or a very short take
     // recreates exactly the boundary spike the reading path avoids.
-    if ((int)worstSilentCall > (int)WavetableExtract::kFrameSize / 16) {
+    if ((int)worstSilentCall > silentBudget) {
         detail = "replacing a frame for a degenerate take wrote " +
                  std::to_string(worstSilentCall) + " samples in one call";
         return false;
@@ -4438,6 +4474,51 @@ bool wtDegenerateSet(std::string& detail) {
     buildFrame(e, again, 0, 4000.0);
     if (e.debugFramePeak() < 0.5) {
         detail = "a real take after a degenerate one produced a frame peaking at " +
+                 std::to_string(e.debugFramePeak());
+        return false;
+    }
+    return true;
+}
+
+/**
+ * reset() must re-arm the degenerate-take handling.
+ *
+ * Leaving the handled flag set while dropping the phase meant a reset partway
+ * through replacing a frame satisfied the already-handled test forever
+ * afterwards, so finalisation never restarted and the previous audible frame
+ * stayed visible. Patch load and sample rate changes both call reset().
+ */
+bool wtResetRearmsSilence(std::string& detail) {
+    const auto real = toneSet(220.0, 8000, /*generation=*/1);
+    WavetableExtract e;
+    e.setBudgetPerCall(64);
+    buildFrame(e, real, 0, 4000.0);
+    if (e.debugFramePeak() < 0.5) {
+        detail = "setup failed: no frame from real material";
+        return false;
+    }
+
+    StemSet tiny;
+    tiny.channels = 1;
+    tiny.generation = 42;
+    for (int L = 0; L < StemSet::kNumLayers; L++) tiny.layer[L].channel[0].assign(1, 0.5f);
+
+    // Start replacing the frame, then reset partway through.
+    for (int i = 0; i < 3; i++) e.process(&tiny, 0, 0.0);
+    e.reset();
+
+    // The same take must still be able to replace the frame.
+    bool published = false;
+    for (int i = 0; i < 500; i++) {
+        if (e.process(&tiny, 0, 0.0)) published = true;
+    }
+    if (!published) {
+        detail = "after a reset mid-replacement, the degenerate take never "
+                 "invalidated the old wavetable";
+        return false;
+    }
+    if (e.debugFramePeak() > 1e-6) {
+        detail = "after a reset, the old audible frame is still showing at " +
                  std::to_string(e.debugFramePeak());
         return false;
     }
@@ -4668,6 +4749,8 @@ const TestCase kCases[] = {
     {"--test-wt-nan-stem",        "wt_nan_stem",        wtNonFiniteStem},
     {"--test-wt-boundary",        "wt_boundary",        wtBoundaryPadding},
     {"--test-wt-degenerate",      "wt_degenerate",      wtDegenerateSet},
+    {"--test-wt-reset-rearm",     "wt_reset_rearm",     wtResetRearmsSilence},
+    {"--test-wt-default-latency", "wt_default_latency", wtDefaultLatency},
     {"--test-buffer-non-finite-write","buffer_non_finite_write",bufferRejectsNonFinite},
     {"--test-wt-restart",         "wt_restart",         wtRestartsOnChange},
     {"--test-wt-bad-input",       "wt_bad_input",       wtBadInput},

@@ -87,14 +87,22 @@ public:
     }
 
     /**
-     * Output samples produced per process() call.
+     * Work units per process() call, where a unit is one source read or one
+     * output write.
      *
-     * The default spreads a frame over sixteen calls, which at a 256 sample
-     * block is about a twelfth of a second: fast enough that the wavetable
-     * tracks the playhead, flat enough that no single block pays for a frame.
+     * Counting OUTPUT SAMPLES instead was wrong. At a window of 8192 each
+     * output sample costs four source reads, so a call in the reading phase did
+     * four times the work of one in the finalising phase while both reported
+     * the same number, and the cost still jumped at the boundary between them.
+     *
+     * A frame costs kFrameSize * (span + 1) units: the reads, then one write
+     * each. At the default window that is 4096, so the default budget of 256
+     * publishes in sixteen calls, which at a 256 sample block is about 85 ms.
+     * A longer window genuinely costs more and therefore takes longer, which is
+     * the point of a fixed budget; at the maximum window it is forty calls.
      */
-    void setBudgetPerCall(int samples) {
-        budget_ = std::max(1, samples);
+    void setBudgetPerCall(int units) {
+        budget_ = std::max(1, units);
     }
 
     int windowSamples() const { return windowSamples_; }
@@ -149,13 +157,19 @@ public:
         if (phase_ == Phase::Idle) return false;
 
         if (phase_ == Phase::Reading) {
-            const std::size_t count =
-                std::min<std::size_t>(kFrameSize - cursor_, (std::size_t)budget_);
-            for (std::size_t i = 0; i < count; i++) {
-                build_[cursor_ + i] = readWindowSlot(source, cursor_ + i);
+            // Charged by the SPAN, so a wide window costs more calls rather
+            // than more work per call.
+            std::size_t work = 0;
+            std::size_t produced = 0;
+            while (cursor_ < kFrameSize &&
+                   (work == 0 || work + span_ <= (std::size_t)budget_)) {
+                build_[cursor_] = readWindowSlot(source, cursor_);
+                cursor_++;
+                produced++;
+                work += span_;
             }
-            cursor_ += count;
-            samplesLastCall_ = count;
+            samplesLastCall_ = produced;
+            workLastCall_ = work;
             if (cursor_ < kFrameSize) return false;
             beginFinalise();
             return false;
@@ -178,6 +192,7 @@ public:
         }
         cursor_ += count;
         samplesLastCall_ = count;
+        workLastCall_ = count;
         if (cursor_ < kFrameSize) return false;
 
         // Publication is a pointer swap, so it costs nothing whatever the frame
@@ -215,10 +230,26 @@ public:
     /** Output samples produced by the last process() call. Diagnostics. */
     std::size_t debugSamplesLastCall() const { return samplesLastCall_; }
 
+    /**
+     * Work units spent by the last process() call, a source read or an output
+     * write being one each.
+     *
+     * This, not the sample count, is what the budget bounds and what a test of
+     * the amortisation has to read: at a wide window one output sample costs
+     * several source reads, so equal sample counts hide unequal work.
+     */
+    std::size_t debugWorkLastCall() const { return workLastCall_; }
+
     /** Discard any part-built frame. For patch load and sample rate changes. */
     void reset() {
         phase_ = Phase::Idle;
         cursor_ = 0;
+        // Re-arm the degenerate-take handling. Leaving this set while dropping
+        // the phase meant a reset partway through replacing a frame satisfied
+        // the already-handled test forever afterwards, so finalisation never
+        // restarted and the previous audible frame stayed visible. Patch load
+        // and sample rate changes both call this.
+        silenceIssued_ = false;
     }
 
 private:
@@ -239,6 +270,11 @@ private:
         const double centre = playhead + static_cast<double>(offset_) * window;
         buildStart_ = centre - window * 0.5;
         buildStep_ = window / static_cast<double>(kFrameSize);
+        // Rounded UP, not truncated. A window of 4095 gives a step just under
+        // two, and truncating that to one sample turns the filter off for
+        // nearly every knob position that is not an exact multiple of the frame.
+        span_ = static_cast<std::size_t>(
+            std::max(1, static_cast<int>(std::ceil(buildStep_ - 1e-9))));
         buildLength_ = sourceLength;
 
         sourceSum_ = 0.0;
@@ -267,6 +303,7 @@ private:
         mean_ = 0.0;
         gain_ = 0.0;
         sourcePeak_ = 0.0;
+        span_ = 1;
         buildGeneration_ = generation;
         buildLayer_ = layer;
         buildWindow_ = windowSamples_;
@@ -303,16 +340,15 @@ private:
      * back down into the audible part of the waveform. See note 4.
      */
     float readWindowSlot(const std::vector<float>& source, std::size_t outputIndex) {
+        // span_ is fixed for the whole build, so the cost of every slot is
+        // known in advance and can be charged against the budget.
         const double from = buildStart_ + buildStep_ * static_cast<double>(outputIndex);
         const double to = from + buildStep_;
 
-        // Rounded UP, not truncated. A window of 4095 gives a step just under
-        // two, and truncating that to one sample turns the filter off for
-        // nearly every knob position that is not an exact multiple of the frame.
-        const int span = std::max(1, static_cast<int>(std::ceil(buildStep_ - 1e-9)));
+        const std::size_t span = span_;
 
         double accumulator = 0.0;
-        for (int i = 0; i < span; i++) {
+        for (std::size_t i = 0; i < span; i++) {
             const double at = from + (to - from) * (static_cast<double>(i) + 0.5) /
                                          static_cast<double>(span);
             const double value = readSource(source, at);
@@ -392,7 +428,9 @@ private:
 
     int windowSamples_ = 2048;
     float offset_ = 0.f;
-    int budget_ = static_cast<int>(kFrameSize) / 16;
+    // kFrameSize * (span + 1) units per frame, so 256 publishes the default
+    // window in sixteen calls.
+    int budget_ = 2 * static_cast<int>(kFrameSize) / 16;
 
     Phase phase_ = Phase::Idle;
     std::size_t cursor_ = 0;
@@ -402,6 +440,7 @@ private:
     double buildStart_ = 0.0;
     double buildStep_ = 1.0;
     std::size_t buildLength_ = 0;
+    std::size_t span_ = 1;
 
     double sourceSum_ = 0.0;
     std::size_t sourceCount_ = 0;
@@ -414,6 +453,7 @@ private:
 
     bool silenceIssued_ = false;
     std::size_t samplesLastCall_ = 0;
+    std::size_t workLastCall_ = 0;
     uint64_t frameCount_ = 0;
 
     int frontIndex_ = 0;

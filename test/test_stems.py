@@ -947,14 +947,39 @@ class TestWavetableExtract:
         """Building a whole frame in the call where the playhead crosses a
         boundary is a spike, and the spike lands on the audio thread.
 
-        Reading the window and finalising it are both amortised. Doing the mean,
-        the peak and the copy in the call that happens to complete the read
-        added three whole extra passes to one call in sixteen, and the
-        diagnostic did not count them, so this test could not see it. Checked at
-        four budgets and across several frames. Verified to have teeth: 2048
-        samples in one call against a budget of 16.
+        Reading the window and finalising it are both amortised, and the budget
+        counts WORK rather than output samples.
+
+        Counting output samples was wrong twice over. Doing the mean, the peak
+        and the copy in the call that completed the read added three whole extra
+        passes to one call in sixteen, uncounted. And at a window of 8192 each
+        output sample costs four source reads, so a reading call did four times
+        the work of a finalising call while both reported the same number.
+        Checked across three windows and three budgets. Verified to have teeth
+        in both forms.
         """
         result = run_test(["--test-wt-amortised"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_default_budget_publishes_in_sixteen_calls(self):
+        """A frame costs kFrameSize * (span + 1) units, reading then writing.
+
+        Sizing the default for the reading phase alone doubled the real latency:
+        32 calls rather than 16, which at one call per 256 sample block is
+        171 ms instead of 85, and that is the age of the snapshot before any
+        morphing is applied. Verified to have teeth.
+        """
+        result = run_test(["--test-wt-default-latency"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_reset_rearms_the_degenerate_take_handling(self):
+        """Leaving the handled flag set while dropping the phase meant a reset
+        partway through replacing a frame satisfied the already-handled test
+        forever afterwards, so finalisation never restarted and the previous
+        audible frame stayed visible. Patch load and sample rate changes both
+        call reset(). Verified to have teeth.
+        """
+        result = run_test(["--test-wt-reset-rearm"])
         assert result["failed"] == 0, result.get("detail", "")
 
     def test_frames_follow_the_playhead(self):
