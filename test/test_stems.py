@@ -1687,6 +1687,25 @@ class TestDiffusion:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestEmptyBuffer:
+    """The state the module is in every time a patch loads."""
+
+    def test_every_control_is_safe_with_nothing_recorded(self):
+        """Not an edge case: it is the first thing that happens.
+
+        Each component is driven through its whole control range against an
+        empty source, checking for non-finite output, denormals and any output
+        at all where silence went in. Also checks that silence does not produce
+        a detected key.
+
+        What this cannot cover is the module's own wiring, since that includes
+        rack.hpp and is not buildable here. The S17 ticket keeps a manual check
+        in Rack for that.
+        """
+        result = run_test(["--test-empty-buffer"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 class TestExtremeInput:
     """Hostile but legal input, across every module at once."""
 

@@ -6,6 +6,9 @@ using namespace rack;
 Plugin* pluginInstance;
 
 // Declare models from modules — all guarded so RELEASE_MODULE_LIST works
+#ifdef HAS_STEMS
+extern Model* modelStems;
+#endif
 #ifdef HAS_INTERSECT
 extern Model* modelIntersect;
 #endif
@@ -142,6 +145,9 @@ extern Model* modelPixelProbe;
 void init(Plugin* p) {
     pluginInstance = p;
 
+#ifdef HAS_STEMS
+    p->addModel(modelStems);
+#endif
 #ifdef HAS_INTERSECT
     p->addModel(modelIntersect);
 #endif
