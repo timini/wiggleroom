@@ -36,11 +36,13 @@
 #include "common/stems/Hpss.hpp"
 #include "common/stems/SeparationWorker.hpp"
 #include "common/stems/StemMixer.hpp"
+#include "common/stems/Quantizer.hpp"
 #include "common/stems/ScaleDetect.hpp"
 #include "common/stems/Yin.hpp"
 #include "common/stems/Stft.hpp"
 #include "common/stems/Transport.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iomanip>
@@ -3203,6 +3205,347 @@ bool scaleBadInput(std::string& detail) {
     return true;
 }
 
+
+// ---------------------------------------------------------------------------
+// Quantizer
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::Quantizer;
+
+namespace {
+using QScale = Quantizer::Scale;
+
+/** True when @p volts lands on a degree of @p scale rooted at @p root. */
+bool isScaleDegree(double volts, int root, QScale scale) {
+    const double semitones = volts * 12.0;
+    const double nearest = std::round(semitones);
+    if (std::fabs(semitones - nearest) > 1e-4) return false;   // not even a semitone
+    int pitchClass = (int)std::fmod(nearest - root, 12.0);
+    if (pitchClass < 0) pitchClass += 12;
+    return (Quantizer::scaleMask(scale) & (1u << pitchClass)) != 0;
+}
+
+Quantizer makeQuantizer(int root, QScale scale, float glide = 0.f) {
+    Quantizer q(48000);
+    q.setManualOverride(true);
+    q.setManualKey(root, scale);
+    q.setGlideSeconds(glide);
+    return q;
+}
+}  // namespace
+
+/**
+ * A slow ramp must give a monotonic staircase restricted to scale degrees.
+ *
+ * Monotonicity is the criterion that catches a wandering tie-break. Every
+ * non-scale semitone in a seven-note scale sits exactly between two degrees, so
+ * an implementation that resolves those ties by remembering what it chose last
+ * time steps backwards at some boundaries, which is an audible wrong note.
+ */
+bool quantStaircase(std::string& detail) {
+    const struct { int root; QScale scale; } keys[] = {
+        {0, QScale::Major}, {7, QScale::NaturalMinor}, {3, QScale::Dorian},
+        {10, QScale::PentatonicMinor}, {5, QScale::Blues},
+    };
+    for (const auto& k : keys) {
+        Quantizer q = makeQuantizer(k.root, k.scale);
+        double previous = -1e9;
+        int steps = 0;
+        // Five octaves, finely enough to land either side of every boundary.
+        for (int i = 0; i <= 60000; i++) {
+            const float in = -2.5f + (float)i * (5.0f / 60000.f);
+            const double out = q.process(in);
+            if (out < previous - 1e-9) {
+                detail = std::string("output stepped backwards in ") +
+                         Quantizer::scaleName(k.scale) + " at input " +
+                         std::to_string(in) + ": " + std::to_string(previous) +
+                         " then " + std::to_string(out);
+                return false;
+            }
+            if (out > previous + 1e-9) steps++;
+            if (!isScaleDegree(out, k.root, k.scale)) {
+                detail = std::to_string(out) + " V is not a degree of " +
+                         Quantizer::scaleName(k.scale);
+                return false;
+            }
+            previous = out;
+        }
+        if (steps < 10) {
+            detail = "only " + std::to_string(steps) + " steps over five octaves of " +
+                     Quantizer::scaleName(k.scale) + "; the ramp is not being quantised";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * The same degree an octave apart must differ by one volt.
+ *
+ * "Exactly" has a floor, and it is the output type rather than the arithmetic.
+ * process() returns float because that is what a CV output is, and float
+ * rounding at these magnitudes is about 1.2e-7 V, which is 1.4e-5 cents. The
+ * internal degrees really are exactly twelve semitones apart; it is the cast
+ * that loses it. A tighter tolerance here would be asserting something the
+ * signal type cannot deliver.
+ *
+ * This does mean the choice to compute in double is NOT observable through this
+ * interface: float accumulation would leave 2.98e-8 V, smaller than the output
+ * rounding that follows it. The double is there to keep the glide state clean
+ * over long runs, not to widen the output precision.
+ */
+bool quantOctaveExact(std::string& detail) {
+    for (int root = 0; root < 12; root++) {
+        Quantizer q = makeQuantizer(root, QScale::Major);
+        for (int octave = -4; octave < 4; octave++) {
+            const double a = q.process((float)octave + (float)root / 12.f);
+            const double b = q.process((float)(octave + 1) + (float)root / 12.f);
+            const double interval = b - a;
+            if (std::fabs(interval - 1.0) > 1e-6) {
+                detail = "octave interval at root " + std::to_string(root) +
+                         " octave " + std::to_string(octave) + " was " +
+                         std::to_string(interval);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/** Zero glide must arrive in one sample, not merely quickly. */
+bool quantGlideZero(std::string& detail) {
+    Quantizer q = makeQuantizer(0, QScale::Major, 0.f);
+    q.process(0.f);
+    const double jumped = q.process(1.f);
+    if (jumped != 1.0) {
+        detail = "with zero glide a one octave jump landed on " + std::to_string(jumped);
+        return false;
+    }
+    // And the result must be an exact scale degree, not a near miss. An
+    // exponential approach never truly arrives, so a "very short" glide leaves
+    // the output a fraction of a cent flat forever and the 1 V/octave guarantee
+    // quietly fails.
+    for (int i = 0; i < 100; i++) {
+        const double v = q.process(0.4f);
+        if (v != q.target()) {
+            detail = "zero glide did not sit exactly on the target";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * A configured glide must take about that long, and must arrive exactly.
+ */
+bool quantGlideTiming(std::string& detail) {
+    for (float glide : {0.05f, 0.2f, 1.0f}) {
+        Quantizer q = makeQuantizer(0, QScale::Major, glide);
+        q.process(0.f);
+        q.snapToTarget();
+
+        const int samples = (int)(glide * 48000);
+        double atQuarter = 0.0, atFull = 0.0;
+        for (int i = 0; i < samples; i++) {
+            const double v = q.process(1.f);
+            if (i == samples / 4) atQuarter = v;
+            atFull = v;
+        }
+        // Most of the way after the full time, and clearly not there yet at a
+        // quarter of it. Both halves matter: without the second, a glide that
+        // was really instantaneous would pass.
+        if (atFull < 0.99) {
+            detail = "a " + std::to_string(glide) + " s glide reached only " +
+                     std::to_string(atFull) + " of one octave";
+            return false;
+        }
+        if (atQuarter > 0.95) {
+            detail = "a " + std::to_string(glide) + " s glide was already at " +
+                     std::to_string(atQuarter) + " after a quarter of its time";
+            return false;
+        }
+
+        // It must ARRIVE, within a bounded multiple of its own time, not merely
+        // converge.
+        //
+        // Asserting only that it lands on the target eventually is not a test:
+        // a bare exponential reaches it anyway once the increment falls below an
+        // ULP, so "run for three seconds then check" passes with the settle snap
+        // removed. The snap puts arrival at 2.34 times the glide time whatever
+        // the glide is set to; without it, arrival depends on where the
+        // increment underflows and is never sooner than 3 times. Two and a half
+        // is the bound that separates them.
+        const int bound = (int)(glide * 48000 * 2.5) - samples;
+        for (int i = 0; i < bound; i++) q.process(1.f);
+        const double arrived = q.process(1.f);
+        if (arrived != 1.0) {
+            detail = "a " + std::to_string(glide) +
+                     " s glide had not arrived after 2.5 times its time; short by " +
+                     std::to_string(1.0 - arrived);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Glide time is in seconds, so it must not change with the sample rate. */
+bool quantGlideSampleRate(std::string& detail) {
+    auto timeToReach = [](int sampleRate) {
+        Quantizer q(sampleRate);
+        q.setManualOverride(true);
+        q.setManualKey(0, QScale::Major);
+        q.setGlideSeconds(0.2f);
+        q.process(0.f);
+        q.snapToTarget();
+        int n = 0;
+        while (n < sampleRate * 5) {
+            if (q.process(1.f) >= 0.99) break;
+            n++;
+        }
+        return (double)n / sampleRate;
+    };
+    const double at48 = timeToReach(48000);
+    const double at96 = timeToReach(96000);
+    if (at48 <= 0.0) { detail = "glide completed instantly at 48 kHz"; return false; }
+    const double ratio = at96 / at48;
+    if (ratio < 0.9 || ratio > 1.1) {
+        detail = "glide took " + std::to_string(at48) + " s at 48 kHz and " +
+                 std::to_string(at96) + " s at 96 kHz";
+        return false;
+    }
+    return true;
+}
+
+/** Manual override must win over whatever the detector reports. */
+bool quantManualOverride(std::string& detail) {
+    Quantizer q(48000);
+    q.setDetectedKey(0, QScale::Major);       // C major from the detector
+    q.setManualKey(6, QScale::PentatonicMinor);  // F sharp pentatonic minor by hand
+
+    // Auto mode: the detector wins.
+    q.setManualOverride(false);
+    if (q.activeRoot() != 0 || q.activeScale() != QScale::Major) {
+        detail = "auto mode did not follow the detector";
+        return false;
+    }
+    for (int i = 0; i <= 240; i++) {
+        const double out = q.process(-1.f + (float)i / 120.f);
+        if (!isScaleDegree(out, 0, QScale::Major)) {
+            detail = "auto mode produced " + std::to_string(out) + " V, not a C major degree";
+            return false;
+        }
+    }
+
+    // Manual mode: the override wins, and keeps winning when the detector
+    // changes its mind underneath it.
+    q.setManualOverride(true);
+    for (int i = 0; i <= 240; i++) {
+        q.setDetectedKey(i % 12, QScale::Major);  // detector thrashing
+        const double out = q.process(-1.f + (float)i / 120.f);
+        if (!isScaleDegree(out, 6, QScale::PentatonicMinor)) {
+            detail = "manual mode produced " + std::to_string(out) +
+                     " V, not an F# pentatonic minor degree";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Every scale must emit only its own degrees, in every key. */
+bool quantAllScales(std::string& detail) {
+    for (int s = 0; s < Quantizer::kNumScales; s++) {
+        const QScale scale = static_cast<QScale>(s);
+        if (Quantizer::scaleMask(scale) == 0) {
+            detail = std::string(Quantizer::scaleName(scale)) + " has an empty mask";
+            return false;
+        }
+        for (int root = 0; root < 12; root++) {
+            Quantizer q = makeQuantizer(root, scale);
+            for (int i = 0; i <= 600; i++) {
+                const float in = -2.f + (float)i / 150.f;
+                const double out = q.process(in);
+                if (!isScaleDegree(out, root, scale)) {
+                    detail = std::string(Quantizer::scaleName(scale)) + " at root " +
+                             std::to_string(root) + " produced " + std::to_string(out) + " V";
+                    return false;
+                }
+                // Never further than half the largest gap in any scale here.
+                if (std::fabs(out - in) > 3.0 / 12.0 + 1e-6) {
+                    detail = std::string(Quantizer::scaleName(scale)) + " moved " +
+                             std::to_string(in) + " V to " + std::to_string(out) + " V";
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * Quantisation must depend only on the input, never on what came before.
+ *
+ * This is what makes the staircase monotonic. An implementation that resolves
+ * ties by preferring the degree it chose last time gives a different answer for
+ * the same input depending on the approach direction, and the ramp then steps
+ * backwards.
+ */
+bool quantIsStateless(std::string& detail) {
+    Quantizer rising = makeQuantizer(0, QScale::Major);
+    Quantizer falling = makeQuantizer(0, QScale::Major);
+    Quantizer jumping = makeQuantizer(0, QScale::Major);
+
+    const int n = 2000;
+    std::vector<double> up(n), down(n), jump(n);
+    for (int i = 0; i < n; i++) up[i] = rising.process(-1.f + (float)i / 1000.f);
+    for (int i = n - 1; i >= 0; i--) down[i] = falling.process(-1.f + (float)i / 1000.f);
+    std::mt19937 rng(7);
+    std::vector<int> order(n);
+    for (int i = 0; i < n; i++) order[i] = i;
+    std::shuffle(order.begin(), order.end(), rng);
+    for (int idx : order) jump[idx] = jumping.process(-1.f + (float)idx / 1000.f);
+
+    for (int i = 0; i < n; i++) {
+        if (up[i] != down[i] || up[i] != jump[i]) {
+            detail = "the same input gave different results by approach direction at index " +
+                     std::to_string(i) + ": rising " + std::to_string(up[i]) + ", falling " +
+                     std::to_string(down[i]) + ", random " + std::to_string(jump[i]);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Non-finite input must not corrupt the output or the glide state. */
+bool quantNonFinite(std::string& detail) {
+    Quantizer q = makeQuantizer(0, QScale::Major, 0.1f);
+    q.process(0.5f);
+    q.snapToTarget();
+    const double before = q.target();
+
+    for (float bad : {std::nanf(""), std::numeric_limits<float>::infinity(),
+                      -std::numeric_limits<float>::infinity()}) {
+        const double out = q.process(bad);
+        if (!std::isfinite(out)) {
+            detail = "a non-finite input produced a non-finite output";
+            return false;
+        }
+        if (q.target() != before) {
+            detail = "a non-finite input moved the target from " + std::to_string(before) +
+                     " to " + std::to_string(q.target());
+            return false;
+        }
+    }
+
+    // Non-finite settings must be rejected rather than clamped.
+    q.setGlideSeconds(std::nanf(""));
+    const double out = q.process(0.5f);
+    if (!std::isfinite(out)) {
+        detail = "a non-finite glide setting produced a non-finite output";
+        return false;
+    }
+    return true;
+}
+
 struct TestCase {
     const char* cmd;
     const char* name;
@@ -3301,6 +3644,15 @@ const TestCase kCases[] = {
     {"--test-scale-yin-gate",     "scale_yin_gate",     scaleGateMatchesYin},
     {"--test-scale-flat",         "scale_flat",         scaleFlatHistogram},
     {"--test-scale-bad-input",    "scale_bad_input",    scaleBadInput},
+    {"--test-quant-staircase",    "quant_staircase",    quantStaircase},
+    {"--test-quant-octave",       "quant_octave",       quantOctaveExact},
+    {"--test-quant-glide-zero",   "quant_glide_zero",   quantGlideZero},
+    {"--test-quant-glide",        "quant_glide",        quantGlideTiming},
+    {"--test-quant-glide-sr",     "quant_glide_sr",     quantGlideSampleRate},
+    {"--test-quant-manual",       "quant_manual",       quantManualOverride},
+    {"--test-quant-scales",       "quant_scales",       quantAllScales},
+    {"--test-quant-stateless",    "quant_stateless",    quantIsStateless},
+    {"--test-quant-non-finite",   "quant_non_finite",   quantNonFinite},
 };
 
 /** The FFT checks take different arguments, so they are named separately. */

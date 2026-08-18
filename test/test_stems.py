@@ -823,6 +823,82 @@ class TestScaleDetect:
         result = run_test(["--test-scale-bad-input"])
         assert result["failed"] == 0, result.get("detail", "")
 
+class TestQuantizer:
+    """Scale-snapping CV output with portamento."""
+
+    def test_a_ramp_gives_a_monotonic_staircase(self):
+        """Five keys, five octaves, 60000 points each.
+
+        Every non-scale semitone in a seven-note scale sits exactly between two
+        degrees, so the tie-break has to be consistent or a rising input steps
+        backwards at some boundaries. Verified to have teeth: searching only the
+        input's own octave breaks it.
+        """
+        result = run_test(["--test-quant-staircase"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_quantisation_does_not_depend_on_history(self):
+        """Rising, falling and randomly ordered inputs must agree.
+
+        This catches hysteresis, which the ramp test cannot: preferring the
+        previously chosen degree on a tie keeps a RISING ramp monotonic while
+        still giving a different answer for the same input depending on the
+        approach direction. Verified to have teeth: real hysteresis fails here
+        and passes the staircase test.
+        """
+        result = run_test(["--test-quant-stateless"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_same_degree_an_octave_apart_differs_by_one_volt(self):
+        """To float precision, which is the floor here: process() returns float
+        because that is what a CV output is, and float rounding at these
+        magnitudes is about 1.2e-7 V, or 1.4e-5 cents. The internal degrees are
+        exactly twelve semitones apart; the cast is what loses it.
+        """
+        result = run_test(["--test-quant-octave"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_zero_glide_is_instantaneous(self):
+        """One sample, not merely fast. Verified to have teeth: flooring the
+        time constant so zero becomes a very short glide leaves an octave jump
+        at 0.65 after one sample.
+        """
+        result = run_test(["--test-quant-glide-zero"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_glide_takes_its_time_and_then_arrives(self):
+        """Three assertions, and each is needed.
+
+        It must be most of the way there after its time, clearly not there after
+        a quarter of it (without which an instantaneous glide would pass), and
+        it must ARRIVE within 2.5 times its time. A bare exponential reaches the
+        target eventually, once the increment falls below an ULP, so checking
+        only that it lands there passes with the settle snap removed. Verified
+        to have teeth at 2.5x.
+        """
+        result = run_test(["--test-quant-glide"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_glide_time_does_not_change_with_sample_rate(self):
+        result = run_test(["--test-quant-glide-sr"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_manual_override_beats_detection(self):
+        """Including while the detector changes its mind underneath it. A user
+        who has reached for the override has said what they want."""
+        result = run_test(["--test-quant-manual"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_every_scale_emits_only_its_own_degrees(self):
+        """Fourteen scales, twelve roots each, and never moving an input further
+        than half the largest gap in any of them."""
+        result = run_test(["--test-quant-scales"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_non_finite_input_does_not_corrupt_the_output(self):
+        result = run_test(["--test-quant-non-finite"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_concurrent_submit_and_acquire(self):
         """A reader standing in for the audio thread hammers acquire/release
         while jobs are submitted, checking for races and for frees landing on
