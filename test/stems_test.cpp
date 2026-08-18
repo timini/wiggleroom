@@ -36,6 +36,7 @@
 #include "common/stems/Hpss.hpp"
 #include "common/stems/SeparationWorker.hpp"
 #include "common/stems/StemMixer.hpp"
+#include "common/stems/ScaleDetect.hpp"
 #include "common/stems/Yin.hpp"
 #include "common/stems/Stft.hpp"
 #include "common/stems/Transport.hpp"
@@ -2559,6 +2560,649 @@ bool yinNoAlloc(std::string& detail) {
     return true;
 }
 
+
+// ---------------------------------------------------------------------------
+// ScaleDetect
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::ScaleDetect;
+
+namespace {
+using Mode = ScaleDetect::Mode;
+
+float midiHz(int midi) {
+    return 440.f * std::pow(2.f, (float)(midi - 69) / 12.f);
+}
+
+const char* modeName(Mode m) { return (m == Mode::Major) ? "major" : "minor"; }
+
+std::string keyName(const ScaleDetect::Result& r) {
+    return std::string(ScaleDetect::noteName(r.root)) + " " + modeName(r.mode);
+}
+
+/** Key plus the two fields that explain a failure the key alone cannot. */
+std::string keyDetail(const ScaleDetect::Result& r) {
+    return keyName(r) + " (detected=" + (r.detected ? "true" : "false") +
+           ", confidence=" + std::to_string(r.confidence) + ")";
+}
+
+/** Scale degrees, as semitone offsets from the tonic. */
+const int kMajorDegrees[7] = {0, 2, 4, 5, 7, 9, 11};
+const int kMinorDegrees[7] = {0, 2, 3, 5, 7, 8, 10};
+
+/**
+ * Feed a scale with the tonic and dominant emphasised.
+ *
+ * Real music emphasises the tonic, and that emphasis is exactly what the
+ * Krumhansl-Schmuckler profiles encode. A run of the scale with every note
+ * weighted equally carries much less information about which degree is the
+ * tonic, which is why the relative major and minor test below needs this.
+ */
+void feedKey(ScaleDetect& detector, int tonicMidi, Mode mode, int repeats = 4) {
+    const int* degrees = (mode == Mode::Major) ? kMajorDegrees : kMinorDegrees;
+    for (int rep = 0; rep < repeats; rep++) {
+        for (int d = 0; d < 7; d++) detector.addPitch(midiHz(tonicMidi + degrees[d]), 1.f);
+        for (int k = 0; k < 3; k++) {
+            detector.addPitch(midiHz(tonicMidi), 1.f);
+            detector.addPitch(midiHz(tonicMidi + degrees[4]), 1.f);
+        }
+    }
+}
+}  // namespace
+
+/** The headline case: a C major scale must detect C major. */
+bool scaleCMajor(std::string& detail) {
+    ScaleDetect detector;
+    // Equal weights, no tonic emphasis at all. The profiles are asymmetric
+    // enough to carry this on their own.
+    for (int rep = 0; rep < 4; rep++) {
+        for (int d = 0; d < 7; d++) detector.addPitch(midiHz(60 + kMajorDegrees[d]), 1.f);
+    }
+    const auto r = detector.detect();
+    if (!r.detected || r.root != 0 || r.mode != Mode::Major) {
+        detail = "a C major scale gave " + keyDetail(r);
+        return false;
+    }
+    return true;
+}
+
+/** Every transposition of both modes must land on the transposed key. */
+bool scaleTranspositions(std::string& detail) {
+    for (int mode = 0; mode < 2; mode++) {
+        const Mode m = (mode == 0) ? Mode::Major : Mode::Minor;
+        for (int t = 0; t < 12; t++) {
+            ScaleDetect detector;
+            feedKey(detector, 60 + t, m);
+            const auto r = detector.detect();
+            const int expected = t % 12;
+            if (!r.detected || r.root != expected || r.mode != m) {
+                detail = std::string("expected ") + ScaleDetect::noteName(expected) + " " +
+                         modeName(m) + " but got " + keyDetail(r);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * Relative major and minor must be told apart.
+ *
+ * C major and A minor contain exactly the same seven pitch classes, so nothing
+ * but the WEIGHTING of those classes can separate them. This is the case that
+ * fails outright if the correlation is replaced by a plain dot product or if
+ * only one profile is consulted.
+ */
+bool scaleRelativeMinor(std::string& detail) {
+    struct Case { int tonic; Mode mode; int expectedRoot; };
+    const Case cases[] = {
+        {60, Mode::Major, 0},   // C major
+        {57, Mode::Minor, 9},   // A minor, the same seven notes
+        {67, Mode::Major, 7},   // G major
+        {64, Mode::Minor, 4},   // E minor, the same seven notes
+    };
+    for (const auto& c : cases) {
+        ScaleDetect detector;
+        feedKey(detector, c.tonic, c.mode);
+        const auto r = detector.detect();
+        if (!r.detected || r.root != c.expectedRoot || r.mode != c.mode) {
+            detail = std::string("expected ") + ScaleDetect::noteName(c.expectedRoot) + " " +
+                     modeName(c.mode) + " but got " + keyDetail(r);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * A key must survive chromatic bleed.
+ *
+ * A real recording puts some weight in every pitch class, not just the seven in
+ * the key. That constant floor is exactly what separates a correlation from a
+ * dot product: the dot product is then dominated by the profile sums, and the
+ * minor profile sums higher (44.51 against 41.79), so every key comes back
+ * minor. Subtracting both means is what makes the twenty-four candidates
+ * comparable.
+ */
+bool scaleChromaticFloor(std::string& detail) {
+    struct Case { int tonic; Mode mode; int expectedRoot; };
+    const Case cases[] = {
+        {60, Mode::Major, 0},
+        {67, Mode::Major, 7},
+        {57, Mode::Minor, 9},
+        {62, Mode::Minor, 2},
+    };
+    for (const auto& c : cases) {
+        ScaleDetect detector;
+        const int* degrees = (c.mode == Mode::Major) ? kMajorDegrees : kMinorDegrees;
+        for (int rep = 0; rep < 6; rep++) {
+            for (int pc = 0; pc < 12; pc++) detector.addPitch(midiHz(60 + pc), 1.f);
+            for (int d = 0; d < 7; d++) detector.addPitch(midiHz(c.tonic + degrees[d]), 1.f);
+            detector.addPitch(midiHz(c.tonic), 1.f);
+            detector.addPitch(midiHz(c.tonic + degrees[4]), 1.f);
+        }
+        const auto r = detector.detect();
+        if (!r.detected || r.root != c.expectedRoot || r.mode != c.mode) {
+            detail = std::string("with a chromatic floor, expected ") +
+                     ScaleDetect::noteName(c.expectedRoot) + " " + modeName(c.mode) +
+                     " but got " + keyDetail(r);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Low-confidence pitches must be ignored even when they all agree.
+ *
+ * The unpitched test above is caught by the key confidence gate, because random
+ * frequencies make a flat histogram with no tonal centre. This one is not: a
+ * percussive layer has spectral peaks, so YIN latches onto the same wrong
+ * pitches repeatedly and the histogram is strongly biased rather than flat.
+ * Only the per-pitch confidence gate stops that from deciding the key.
+ */
+bool scaleLowConfidenceIsIgnored(std::string& detail) {
+    ScaleDetect detector;
+    feedKey(detector, 60, Mode::Major);  // C major
+    const auto established = detector.detect();
+    if (!established.detected || established.root != 0) {
+        detail = "setup failed: expected C major, got " + keyName(established);
+        return false;
+    }
+
+    // A great many detections, all agreeing on F sharp major, all just under the
+    // voicing threshold. Unfiltered they would swamp the real key several times
+    // over.
+    for (int rep = 0; rep < 200; rep++) {
+        for (int d = 0; d < 7; d++) detector.addPitch(midiHz(66 + kMajorDegrees[d]), 0.45f);
+    }
+
+    const auto after = detector.detect();
+    if (after.root != 0 || after.mode != Mode::Major) {
+        detail = "low-confidence pitches moved the key from C major to " + keyName(after);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * An unpitched stem must not move the key.
+ *
+ * Pitches arrive carrying YIN's confidence, and on a drum layer that confidence
+ * is low, so nothing is counted and the held result stands. This is the
+ * behaviour the spec calls for and the source concept assumed away.
+ */
+bool scaleUnpitchedHolds(std::string& detail) {
+    ScaleDetect detector;
+    // Establish a real key first, so there is something to lose.
+    feedKey(detector, 65, Mode::Major);  // F major
+    const auto established = detector.detect();
+    if (!established.detected || established.root != 5) {
+        detail = "setup failed: expected F major, got " + keyName(established);
+        return false;
+    }
+
+    // Now a drum layer: frequencies all over the place, all below the voicing
+    // threshold.
+    std::mt19937 rng(20260818);
+    std::uniform_real_distribution<float> freq(60.f, 3000.f);
+    std::uniform_real_distribution<float> conf(0.f, 0.45f);
+    for (int i = 0; i < 2000; i++) detector.addPitch(freq(rng), conf(rng));
+
+    const auto after = detector.detect();
+    if (after.root != established.root || after.mode != established.mode) {
+        detail = "an unpitched stem moved the key from " + keyName(established) + " to " +
+                 keyName(after);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * A handful of confident detections must not decide a key.
+ *
+ * Correlation alone will not stop this: a histogram with two or three bins
+ * filled correlates with something, and correlates well. The minimum
+ * accumulated weight is the gate that does it.
+ */
+bool scaleWeightGate(std::string& detail) {
+    ScaleDetect detector;
+    detector.setSeed(0, Mode::Major);
+    // Three confident pitches, which is far less evidence than a key needs.
+    detector.addPitch(midiHz(63), 1.f);
+    detector.addPitch(midiHz(66), 1.f);
+    detector.addPitch(midiHz(70), 1.f);
+
+    const auto r = detector.detect();
+    if (r.detected) {
+        detail = "three pitches were enough to detect " + keyName(r) + " at confidence " +
+                 std::to_string(r.confidence);
+        return false;
+    }
+    if (r.root != 0 || r.mode != Mode::Major) {
+        detail = "the seed was not held; got " + keyName(r);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * A fresh detector reports the manual seed, and stops doing so once a real
+ * detection lands.
+ */
+bool scaleSeeding(std::string& detail) {
+    ScaleDetect detector;
+    auto r = detector.detect();
+    if (r.detected || r.root != 0 || r.mode != Mode::Major) {
+        detail = "a fresh detector reported " + keyName(r) + " rather than the C major seed";
+        return false;
+    }
+
+    // Changing the manual setting before any detection must take effect.
+    detector.setSeed(7, Mode::Minor);
+    r = detector.detect();
+    if (r.detected || r.root != 7 || r.mode != Mode::Minor) {
+        detail = "the seed did not follow the manual setting; got " + keyName(r);
+        return false;
+    }
+
+    // Once a real key is detected the seed no longer overrides it.
+    feedKey(detector, 62, Mode::Major);  // D major
+    r = detector.detect();
+    if (!r.detected || r.root != 2 || r.mode != Mode::Major) {
+        detail = "expected D major after feeding it; got " + keyName(r);
+        return false;
+    }
+    detector.setSeed(11, Mode::Minor);
+    r = detector.detect();
+    if (r.root != 2 || r.mode != Mode::Major) {
+        detail = "the manual seed overrode a live detection; got " + keyName(r);
+        return false;
+    }
+
+    // reset() returns to the seed, which is by then B minor.
+    detector.reset();
+    r = detector.detect();
+    if (r.detected || r.root != 11 || r.mode != Mode::Minor) {
+        detail = "reset did not return to the seed; got " + keyName(r);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * With decay, a key change in the material is followed. Without it, the first
+ * thing recorded outvotes everything after it forever.
+ */
+bool scaleFollowsAKeyChange(std::string& detail) {
+    ScaleDetect withDecay;
+    withDecay.setDecay(0.99f);
+    ScaleDetect withoutDecay;
+    withoutDecay.setDecay(1.f);
+
+    // A LONG stretch of C major, so that without decay it cannot be outvoted.
+    for (auto* d : {&withDecay, &withoutDecay}) feedKey(*d, 60, Mode::Major, 40);
+    if (withDecay.detect().root != 0 || withoutDecay.detect().root != 0) {
+        detail = "setup failed: neither detector started in C major";
+        return false;
+    }
+
+    // Then a much SHORTER stretch of F sharp major, the furthest key away.
+    for (auto* d : {&withDecay, &withoutDecay}) feedKey(*d, 66, Mode::Major, 12);
+
+    const auto moved = withDecay.detect();
+    if (moved.root != 6 || moved.mode != Mode::Major) {
+        detail = "with decay the key did not follow the material; got " + keyName(moved);
+        return false;
+    }
+
+    // The contrast is the point. Without decay the opening outvotes everything
+    // that follows it, however long the module runs, so a test that only checked
+    // the decaying detector would pass with the decay removed entirely.
+    const auto stuck = withoutDecay.detect();
+    if (stuck.root != 0 || stuck.mode != Mode::Major) {
+        detail = "without decay the key still moved, to " + keyName(stuck) +
+                 "; this test no longer isolates the decay";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * While holding, the result must say it is holding.
+ *
+ * The spec requires the UI to show that analysis is inactive when a percussive
+ * stem is selected. Returning the stored result unchanged kept reporting the
+ * confidence and the detected flag from whenever the key was last found, so a
+ * caller could not tell a live detection from one made minutes ago on entirely
+ * different material.
+ */
+bool scaleReportsInactivity(std::string& detail) {
+    ScaleDetect detector;
+    feedKey(detector, 62, Mode::Major);  // D major
+    const auto live = detector.detect();
+    if (!live.detected || live.root != 2) {
+        detail = "setup failed: expected a live D major, got " + keyDetail(live);
+        return false;
+    }
+
+    // Switch to a percussive stem: everything below the voicing gate.
+    std::mt19937 rng(4242);
+    std::uniform_real_distribution<float> freq(60.f, 3000.f);
+    std::uniform_real_distribution<float> conf(0.f, 0.5f);
+    for (int i = 0; i < 500; i++) detector.addPitch(freq(rng), conf(rng));
+
+    const auto held = detector.detect();
+    if (held.root != 2 || held.mode != Mode::Major) {
+        detail = "the held key changed: " + keyDetail(held);
+        return false;
+    }
+    if (held.detected) {
+        detail = "a held result still reported detected=true: " + keyDetail(held);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The evidence gate must stay reachable however the decay is set.
+ *
+ * The histogram is a decaying accumulator, so the total weight is bounded above
+ * by 1 / (1 - decay). At decay 0.875 that ceiling is exactly the default
+ * minimum of 8, and below it the gate can never open however many pitches
+ * arrive, leaving the detector on its seed forever.
+ */
+bool scaleDecayGateIsReachable(std::string& detail) {
+    // Decay is floored at 0.9, because below that the histogram remembers fewer
+    // than ten observations and cannot hold a scale's worth of distinct pitch
+    // classes at all. Check the floor is applied rather than silently accepting
+    // a setting that would make the detector useless.
+    {
+        ScaleDetect floored;
+        floored.setDecay(0.1f);
+        feedKey(floored, 60, Mode::Major, 40);
+        const auto r = floored.detect();
+        if (!r.detected || r.root != 0) {
+            detail = "an absurdly low decay was not floored: " + keyDetail(r) +
+                     ", weight " + std::to_string(floored.totalWeight());
+            return false;
+        }
+    }
+
+    for (float decay : {0.9f, 0.95f, 0.99f, 0.999f, 1.f}) {
+        ScaleDetect detector;
+        detector.setDecay(decay);
+        // Plenty of material, well past any steady state.
+        feedKey(detector, 60, Mode::Major, 40);
+        const auto r = detector.detect();
+        if (!r.detected) {
+            detail = "at decay " + std::to_string(decay) +
+                     " a long stretch of C major never opened the gate: " + keyDetail(r) +
+                     ", weight " + std::to_string(detector.totalWeight());
+            return false;
+        }
+        if (r.root != 0 || r.mode != Mode::Major) {
+            detail = "at decay " + std::to_string(decay) + " detected " + keyDetail(r);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * A sustained note is not a scale.
+ *
+ * The weight gate counts observations and says nothing about whether they
+ * contain enough distinct pitches to imply a key. Eight observations of ONE
+ * note reach the default weight and correlate at about 0.68 with that note's
+ * major key, which is enough to replace a real key on no evidence for either a
+ * root or a mode. A repeatedly latched transient does the same.
+ */
+bool scaleSustainedNoteIsNotAKey(std::string& detail) {
+    // A single pitch, from a fresh detector.
+    for (int midi : {60, 63, 67, 70}) {
+        ScaleDetect detector;
+        detector.setSeed(5, Mode::Minor);
+        for (int i = 0; i < 40; i++) detector.addPitch(midiHz(midi), 1.f);
+        const auto r = detector.detect();
+        if (r.detected) {
+            detail = "a single sustained pitch declared " + keyDetail(r);
+            return false;
+        }
+        if (r.root != 5 || r.mode != Mode::Minor) {
+            detail = "a single sustained pitch did not hold the seed: " + keyDetail(r);
+            return false;
+        }
+    }
+
+    // And it must not displace an established key either.
+    ScaleDetect detector;
+    feedKey(detector, 60, Mode::Major);
+    const auto established = detector.detect();
+    for (int i = 0; i < 400; i++) detector.addPitch(midiHz(66), 1.f);
+    const auto after = detector.detect();
+    if (after.root != established.root || after.mode != established.mode) {
+        detail = "a sustained pitch displaced " + keyName(established) + " with " +
+                 keyDetail(after);
+        return false;
+    }
+
+    // A root and fifth is still not a key. Two classes score 0.28 spread.
+    ScaleDetect pair;
+    for (int i = 0; i < 40; i++) {
+        pair.addPitch(midiHz(60), 1.f);
+        pair.addPitch(midiHz(67), 1.f);
+    }
+    if (pair.detect().detected) {
+        detail = "a root and fifth declared " + keyDetail(pair.detect());
+        return false;
+    }
+
+    // A triad IS enough evidence to offer a key, so the guard must not be so
+    // strict that ordinary material is rejected.
+    ScaleDetect triad;
+    for (int i = 0; i < 40; i++) {
+        triad.addPitch(midiHz(60), 1.f);
+        triad.addPitch(midiHz(64), 1.f);
+        triad.addPitch(midiHz(67), 1.f);
+    }
+    if (!triad.detect().detected) {
+        detail = "a C major triad was rejected: " + keyDetail(triad.detect()) +
+                 ", spread " + std::to_string(triad.spread());
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The pitch gate must agree with YIN rather than guess at it.
+ *
+ * YIN marks a lag voiced when its CMNDF falls below its threshold and reports
+ * confidence as 1 - CMNDF, so at the default 0.12 the equivalent cutoff is
+ * 0.88. A lower cutoff here accepts estimates YIN itself classified as
+ * unvoiced, which is how moderately periodic percussion accumulates enough
+ * weight to replace a real key.
+ */
+bool scaleGateMatchesYin(std::string& detail) {
+    const int sampleRate = 48000;
+    std::mt19937 rng(31337);
+    std::uniform_real_distribution<float> nz(-1.f, 1.f);
+
+    Yin yin(4096);
+    yin.setSampleRate(sampleRate);
+    yin.setFrequencyRange(50.f, 2200.f);
+
+    // Material that lands in the awkward band. White noise alone will not do:
+    // it scores under 0.07, so a cutoff of 0.5 rejects it too and the test would
+    // pass whatever the threshold was. These are noisy tones and damped
+    // percussive hits, which YIN marks unvoiced while still reporting
+    // confidence between 0.5 and 0.88, usually on the WRONG frequency.
+    std::vector<std::vector<float>> windows;
+    for (double noiseAmp : {0.6, 0.9, 1.2}) {
+        std::vector<float> w(4096);
+        for (std::size_t i = 0; i < w.size(); i++) {
+            w[i] = (float)(std::sin(2 * M_PI * 220.0 * (double)i / sampleRate) +
+                           noiseAmp * nz(rng));
+        }
+        windows.push_back(std::move(w));
+    }
+    for (double decay : {0.9990, 0.9995, 0.9998}) {
+        std::vector<float> w(4096);
+        double env = 1.0;
+        for (std::size_t i = 0; i < w.size(); i++) {
+            if (i % 400 == 0) env = 1.0;
+            env *= decay;
+            w[i] = (float)(env * (std::sin(2 * M_PI * 180.0 * (double)i / sampleRate) +
+                                  0.7 * nz(rng)));
+        }
+        windows.push_back(std::move(w));
+    }
+
+    ScaleDetect viaFlag;
+    ScaleDetect viaConfidence;
+    int inBand = 0;
+    for (int rep = 0; rep < 10; rep++) {
+        for (const auto& w : windows) {
+            const auto r = yin.analyse(w.data(), w.size());
+            if (!r.voiced && r.confidence > 0.5f) inBand++;
+            viaFlag.addPitch(r.frequency, r.confidence, r.voiced);
+            viaConfidence.addPitch(r.frequency, r.confidence);
+        }
+    }
+    if (inBand == 0) {
+        detail = "setup failed: no unvoiced results above confidence 0.5 to test with";
+        return false;
+    }
+    if (viaFlag.totalWeight() != 0.0) {
+        detail = "the voiced flag let " + std::to_string(viaFlag.totalWeight()) +
+                 " of unpitched material through";
+        return false;
+    }
+    if (viaConfidence.totalWeight() != 0.0) {
+        detail = "the default confidence cutoff let " +
+                 std::to_string(viaConfidence.totalWeight()) +
+                 " of unpitched material through; it does not match YIN's voicing gate";
+        return false;
+    }
+
+    // The flag must win even when the confidence would have passed, so a caller
+    // that changes YIN's threshold gets the right behaviour without changing
+    // anything here.
+    ScaleDetect flagged;
+    for (int i = 0; i < 40; i++) flagged.addPitch(midiHz(60 + (i % 7)), 0.99f, false);
+    if (flagged.totalWeight() != 0.0) {
+        detail = "voiced=false was ignored for a high-confidence pitch";
+        return false;
+    }
+    return true;
+}
+
+/** A flat histogram has no key and must not produce a NaN that wins. */
+bool scaleFlatHistogram(std::string& detail) {
+    ScaleDetect detector;
+    detector.setSeed(3, Mode::Minor);
+    // Every pitch class equally weighted: zero variance, no tonal centre.
+    for (int rep = 0; rep < 4; rep++) {
+        for (int pc = 0; pc < 12; pc++) detector.addPitch(midiHz(60 + pc), 1.f);
+    }
+    const auto r = detector.detect();
+    if (!std::isfinite(r.confidence)) {
+        detail = "a flat histogram produced a non-finite confidence";
+        return false;
+    }
+    if (r.detected) {
+        detail = "a flat histogram detected " + keyName(r) + " at confidence " +
+                 std::to_string(r.confidence);
+        return false;
+    }
+    if (r.root != 3 || r.mode != Mode::Minor) {
+        detail = "a flat histogram did not hold the seed; got " + keyName(r);
+        return false;
+    }
+    return true;
+}
+
+/** Non-finite and out-of-range input must be ignored, not accumulated. */
+bool scaleBadInput(std::string& detail) {
+    ScaleDetect detector;
+    feedKey(detector, 60, Mode::Major);
+    const auto before = detector.detect();
+    const double weightBefore = detector.totalWeight();
+
+    // A bad FREQUENCY must contribute nothing at all.
+    const float badHz[] = {std::nanf(""), std::numeric_limits<float>::infinity(),
+                           -std::numeric_limits<float>::infinity(), 0.f, -100.f, 1e9f};
+    for (float f : badHz) detector.addPitch(f, 1.f);
+    if (detector.totalWeight() != weightBefore) {
+        detail = "a bad frequency changed the accumulated weight from " +
+                 std::to_string(weightBefore) + " to " +
+                 std::to_string(detector.totalWeight());
+        return false;
+    }
+
+    // A non-finite or negative CONFIDENCE must contribute nothing either.
+    const float badConf[] = {std::nanf(""), -std::numeric_limits<float>::infinity(),
+                             -1.f, 0.f};
+    for (float c : badConf) detector.addPitch(440.f, c);
+    if (detector.totalWeight() != weightBefore) {
+        detail = "a bad confidence changed the accumulated weight from " +
+                 std::to_string(weightBefore) + " to " +
+                 std::to_string(detector.totalWeight());
+        return false;
+    }
+
+    // An absurdly large confidence must be CLAMPED, not trusted. Untrusted, one
+    // such call swamps every other bin and pins the key to that single pitch.
+    const int hugeCalls = 5;
+    for (int i = 0; i < hugeCalls; i++) detector.addPitch(midiHz(61), 1e9f);
+    const double grew = detector.totalWeight() - weightBefore;
+    if (grew > (double)hugeCalls + 1e-6) {
+        detail = "five calls at confidence 1e9 added " + std::to_string(grew) +
+                 " to the weight";
+        return false;
+    }
+    if (detector.detect().root == 1) {
+        detail = "a single swamping pitch decided the key";
+        return false;
+    }
+
+    // Non-finite settings must be rejected rather than clamped, for the same
+    // reason as in Yin: std::min and std::max propagate NaN.
+    detector.setPitchConfidenceThreshold(std::nanf(""));
+    detector.setKeyConfidenceThreshold(std::nanf(""));
+    detector.setMinimumWeight(std::nanf(""));
+    detector.setDecay(std::nanf(""));
+
+    const auto after = detector.detect();
+    if (!std::isfinite(after.confidence) || after.root != before.root ||
+        after.mode != before.mode) {
+        detail = "non-finite settings disturbed the result: " + keyName(before) + " became " +
+                 keyName(after);
+        return false;
+    }
+    return true;
+}
+
 struct TestCase {
     const char* cmd;
     const char* name;
@@ -2642,6 +3286,21 @@ const TestCase kCases[] = {
     {"--test-yin-narrow-range",   "yin_narrow_range",   yinNarrowRange},
     {"--test-yin-bad-params",     "yin_bad_params",     yinNonFiniteParams},
     {"--test-yin-no-alloc",       "yin_no_alloc",       yinNoAlloc},
+    {"--test-scale-c-major",      "scale_c_major",      scaleCMajor},
+    {"--test-scale-transpose",    "scale_transpose",    scaleTranspositions},
+    {"--test-scale-relative",     "scale_relative",     scaleRelativeMinor},
+    {"--test-scale-chromatic",    "scale_chromatic",    scaleChromaticFloor},
+    {"--test-scale-low-conf",     "scale_low_conf",     scaleLowConfidenceIsIgnored},
+    {"--test-scale-unpitched",    "scale_unpitched",    scaleUnpitchedHolds},
+    {"--test-scale-weight-gate",  "scale_weight_gate",  scaleWeightGate},
+    {"--test-scale-seed",         "scale_seed",         scaleSeeding},
+    {"--test-scale-key-change",   "scale_key_change",   scaleFollowsAKeyChange},
+    {"--test-scale-inactive",     "scale_inactive",     scaleReportsInactivity},
+    {"--test-scale-decay-gate",   "scale_decay_gate",   scaleDecayGateIsReachable},
+    {"--test-scale-sustained",    "scale_sustained",    scaleSustainedNoteIsNotAKey},
+    {"--test-scale-yin-gate",     "scale_yin_gate",     scaleGateMatchesYin},
+    {"--test-scale-flat",         "scale_flat",         scaleFlatHistogram},
+    {"--test-scale-bad-input",    "scale_bad_input",    scaleBadInput},
 };
 
 /** The FFT checks take different arguments, so they are named separately. */

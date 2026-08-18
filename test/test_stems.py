@@ -685,6 +685,144 @@ class TestYin:
         result = run_test(["--test-yin-no-alloc"])
         assert result["failed"] == 0, result.get("detail", "")
 
+class TestScaleDetect:
+    """Krumhansl-Schmuckler key finding, with the two gates the spec requires."""
+
+    def test_a_c_major_scale_detects_c_major(self):
+        """Equal weights, no tonic emphasis. The published profiles are
+        asymmetric enough to carry this on their own."""
+        result = run_test(["--test-scale-c-major"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_every_transposition_of_both_modes(self):
+        """All twenty-four keys."""
+        result = run_test(["--test-scale-transpose"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_relative_major_and_minor_are_told_apart(self):
+        """C major and A minor contain exactly the same seven pitch classes, so
+        nothing but the weighting of those classes can separate them. Verified
+        to have teeth: consulting only the major profile reports A major for A
+        minor.
+        """
+        result = run_test(["--test-scale-relative"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_key_survives_chromatic_bleed(self):
+        """A real recording puts some weight in every pitch class.
+
+        That constant floor is what separates a correlation from a dot product:
+        the dot product is then dominated by the profile sums, and the minor
+        profile sums higher (44.51 against 41.79). Verified to have teeth: a dot
+        product reports A minor for C major. The plain relative-key test passes
+        against that substitution, so this needed its own case.
+        """
+        result = run_test(["--test-scale-chromatic"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_low_confidence_pitches_are_ignored_even_when_they_agree(self):
+        """A percussive layer has spectral peaks, so YIN latches onto the same
+        wrong pitches repeatedly and the histogram is strongly biased rather
+        than flat. Only the per-pitch confidence gate stops that deciding the
+        key. Verified to have teeth: without it, 200 sub-threshold detections
+        move C major to F# major.
+        """
+        result = run_test(["--test-scale-low-conf"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_an_unpitched_stem_holds_the_last_key(self):
+        """Random frequencies make a flat histogram with no tonal centre, which
+        the key confidence gate rejects."""
+        result = run_test(["--test-scale-unpitched"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_few_pitches_cannot_decide_a_key(self):
+        """Correlation alone will not stop this: a histogram with three bins
+        filled correlates with something, and correlates well. Verified to have
+        teeth: without the minimum weight gate, three pitches detect D# minor at
+        confidence 0.89.
+        """
+        result = run_test(["--test-scale-weight-gate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_manual_seed_covers_the_empty_state(self):
+        """A fresh module has no last confident result to hold, so it seeds from
+        the manual root and scale. Covers the empty buffer, an unpitched first
+        recording, and the window while separation is still running. Also checks
+        the seed stops overriding once a real detection lands.
+        """
+        result = run_test(["--test-scale-seed"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_key_follows_a_change_in_the_material(self):
+        """Asserts the contrast, not just the outcome: a long stretch of C major
+        followed by a short stretch of F# major must move WITH decay and must
+        NOT move without it. Checking only the decaying detector passed with the
+        decay removed entirely.
+        """
+        result = run_test(["--test-scale-key-change"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_held_result_reports_that_it_is_held(self):
+        """The spec requires the UI to show analysis is inactive on a percussive
+        stem, and the histogram alone cannot say so: nothing reaches it, so it
+        looks exactly as it did when the last real key was found and detect()
+        goes on re-reporting that as a current detection. A running fraction of
+        recent offers that were pitched enough to count is what distinguishes
+        them. Verified to have teeth in both parts.
+        """
+        result = run_test(["--test-scale-inactive"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_evidence_gate_is_reachable_at_any_decay(self):
+        """The histogram is a decaying accumulator, so its total is bounded by
+        1 / (1 - decay). At decay 0.875 that ceiling is exactly the default
+        minimum of 8, and below it the gate can never open however many pitches
+        arrive. Decay is now floored at 0.9, and the gate is separately
+        reconciled against the reachable ceiling. Verified to have teeth.
+        """
+        result = run_test(["--test-scale-decay-gate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_sustained_note_is_not_a_scale(self):
+        """The weight gate counts observations and says nothing about whether
+        they contain enough distinct pitches to imply a key. Verified to have
+        teeth: without the tonal spread gate, one sustained note declares its
+        own major key at confidence 0.68. A root and fifth is also rejected; a
+        triad is accepted, so the guard does not reject ordinary material.
+        """
+        result = run_test(["--test-scale-sustained"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_pitch_gate_agrees_with_yin(self):
+        """YIN marks a lag voiced when its CMNDF is below its threshold and
+        reports confidence as 1 - CMNDF, so at the default 0.12 the equivalent
+        cutoff is 0.88, not 0.5.
+
+        Driven with real YIN output on noisy tones and damped percussive hits,
+        which land between 0.5 and 0.88 while marked unvoiced, usually on the
+        wrong frequency. White noise will not do here: it scores under 0.07, so
+        a cutoff of 0.5 rejects it too and the test would pass whatever the
+        threshold was. Verified to have teeth: at 0.5 this material contributes
+        42.6 of weight.
+        """
+        result = run_test(["--test-scale-yin-gate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_flat_histogram_has_no_key(self):
+        """Zero variance, no tonal centre, no NaN."""
+        result = run_test(["--test-scale-flat"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_bad_input_is_rejected_or_clamped(self):
+        """A bad frequency or a negative confidence contributes nothing. An
+        absurdly large confidence is clamped: found while writing this test,
+        where one call at 1e9 swamped every other bin and pinned the key to that
+        single pitch.
+        """
+        result = run_test(["--test-scale-bad-input"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_concurrent_submit_and_acquire(self):
         """A reader standing in for the audio thread hammers acquire/release
         while jobs are submitted, checking for races and for frees landing on
