@@ -3515,6 +3515,52 @@ bool quantIsStateless(std::string& detail) {
     return true;
 }
 
+/**
+ * Large but finite input must be bounded, not just non-finite input.
+ *
+ * Rejecting NaN and infinity is not enough. A value like 1e20 or FLT_MAX from a
+ * misbehaving upstream module puts floor(semitones / 12) outside long long, and
+ * converting it is undefined; the octave index either side of it overflows too.
+ * That is three separate UndefinedBehaviorSanitizer reports, and in a release
+ * build it silently produced 0 V, which is a note rather than a refusal.
+ *
+ * The earlier non-finite test passed against all of this, and so did every
+ * sanitiser run, because nothing fed a large finite value.
+ */
+bool quantExtremeInput(std::string& detail) {
+    Quantizer q = makeQuantizer(0, QScale::Major);
+    const float extremes[] = {1e20f, 1e30f, std::numeric_limits<float>::max(),
+                              -1e20f, -std::numeric_limits<float>::max(),
+                              1e9f, -1e9f, 100.f, -100.f};
+    for (float v : extremes) {
+        const double out = q.process(v);
+        if (!std::isfinite(out)) {
+            detail = "input " + std::to_string(v) + " gave a non-finite output";
+            return false;
+        }
+        // Bounded, and on the correct side of zero rather than collapsing to it.
+        if (std::fabs(out) > 20.0 + 1e-6) {
+            detail = "input " + std::to_string(v) + " gave " + std::to_string(out) +
+                     " V, outside the clamped range";
+            return false;
+        }
+        if (v > 1.f && out <= 0.0) {
+            detail = "a large positive input gave " + std::to_string(out) + " V";
+            return false;
+        }
+        if (v < -1.f && out >= 0.0) {
+            detail = "a large negative input gave " + std::to_string(out) + " V";
+            return false;
+        }
+        if (!isScaleDegree(out, 0, QScale::Major)) {
+            detail = "input " + std::to_string(v) + " gave " + std::to_string(out) +
+                     " V, not a C major degree";
+            return false;
+        }
+    }
+    return true;
+}
+
 /** Non-finite input must not corrupt the output or the glide state. */
 bool quantNonFinite(std::string& detail) {
     Quantizer q = makeQuantizer(0, QScale::Major, 0.1f);
@@ -3543,6 +3589,151 @@ bool quantNonFinite(std::string& detail) {
         detail = "a non-finite glide setting produced a non-finite output";
         return false;
     }
+    return true;
+}
+
+
+// ---------------------------------------------------------------------------
+// Cross-module extreme input sweep
+// ---------------------------------------------------------------------------
+
+/**
+ * Feed every public entry point values that are hostile but legal.
+ *
+ * Written after review found that Quantizer rejected NaN and infinity but not
+ * large FINITE input: 1e20 volts put floor(semitones / 12) outside long long,
+ * and converting it is undefined. Three UndefinedBehaviorSanitizer reports, and
+ * a release build silently produced 0 V.
+ *
+ * The gap was not that the guard was missing, it was that nothing in the suite
+ * ever supplied such a value, so every sanitiser run came back clean. This
+ * sweep exists so the whole class stays covered rather than the one instance
+ * that was found. It asserts little on its own; its value is being run under
+ * AddressSanitizer and UndefinedBehaviorSanitizer, where the failure is the
+ * sanitiser aborting.
+ */
+bool extremeInputSweep(std::string& detail) {
+    const float ext[] = {1e20f, 1e30f, std::numeric_limits<float>::max(),
+                         -std::numeric_limits<float>::max(), -1e20f, 1e9f, -1e9f,
+                         std::nanf(""), std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(), 0.f, -0.f};
+    const double dext[] = {1e20, 1e300, -1e20, 1e18, -1e18, std::nan(""),
+                           std::numeric_limits<double>::infinity(),
+                           -std::numeric_limits<double>::infinity()};
+
+    {
+        RingBuffer buffer(48000, 0.25f, 2);
+        for (float v : ext) buffer.write(v, v);
+        float l = 0.f, r = 0.f;
+        for (double p : dext) buffer.readFrameInterpolated(p, l, r);
+        buffer.readFrame(0, l, r);
+        if (!std::isfinite(l) && buffer.framesStored() == 0) {
+            detail = "RingBuffer returned a non-finite sample from an empty buffer";
+            return false;
+        }
+    }
+
+    {
+        Transport transport(48000);
+        transport.setBufferFrames(48000);
+        for (float v : ext) {
+            transport.setClockDivision(v);
+            transport.setLoopBounds(v, v);
+            transport.process(v, v);
+            if (!std::isfinite(transport.playheadFrames())) {
+                detail = "Transport produced a non-finite playhead";
+                return false;
+            }
+        }
+        for (double p : dext) transport.setPhaseForTest(p);
+    }
+
+    {
+        ScaleDetect detector;
+        for (float v : ext) {
+            detector.setDecay(v);
+            detector.setMinimumWeight(v);
+            detector.setMinimumSpread(v);
+            detector.setKeyConfidenceThreshold(v);
+            detector.setPitchConfidenceThreshold(v);
+            detector.setMinimumActivity(v);
+            detector.addPitch(v, v);
+            const auto res = detector.detect();
+            if (!std::isfinite(res.confidence)) {
+                detail = "ScaleDetect produced a non-finite confidence";
+                return false;
+            }
+        }
+    }
+
+    {
+        Quantizer q(48000);
+        q.setManualOverride(true);
+        for (float v : ext) {
+            q.setGlideSeconds(v);
+            if (!std::isfinite(q.process(v))) {
+                detail = "Quantizer produced a non-finite output";
+                return false;
+            }
+        }
+    }
+
+    {
+        Yin yin(1024);
+        yin.setSampleRate(48000);
+        for (float v : ext) {
+            yin.setThreshold(v);
+            yin.setFrequencyRange(v, v);
+        }
+        std::vector<float> w(1024);
+        for (float v : ext) {
+            for (auto& x : w) x = v;
+            const auto r = yin.analyse(w.data(), w.size());
+            if (!std::isfinite(r.frequency) || !std::isfinite(r.confidence)) {
+                detail = "Yin produced a non-finite result";
+                return false;
+            }
+        }
+    }
+
+    {
+        StemSet set;
+        set.channels = 2;
+        for (int L = 0; L < StemSet::kNumLayers; L++) {
+            set.layer[L].channel[0].assign(512, 0.5f);
+            set.layer[L].channel[1].assign(512, -0.5f);
+        }
+        StemMixer mixer(48000);
+        mixer.snapToTargets(true);
+        for (float v : ext) {
+            mixer.setLevel(0, v);
+            mixer.setStemSelect((v > 0.f) ? 3 : 0);
+        }
+        for (double p : dext) {
+            const auto f = mixer.process(&set, p, 1.f, 1.f);
+            if (!std::isfinite(f.left) || !std::isfinite(f.right)) {
+                detail = "StemMixer produced a non-finite frame";
+                return false;
+            }
+        }
+    }
+
+    {
+        ReferenceFft fft(256);
+        Hpss hpss(fft);
+        for (float v : ext) {
+            hpss.setMargin(v);
+            hpss.setPower(v);
+            hpss.setLowSplitHz(v);
+        }
+        std::vector<float> in(1024, 0.f);
+        Hpss::Result out;
+        for (float v : ext) {
+            for (auto& x : in) x = v;
+            hpss.separate(in.data(), in.size(), 48000, out);
+        }
+    }
+
     return true;
 }
 
@@ -3653,6 +3844,8 @@ const TestCase kCases[] = {
     {"--test-quant-scales",       "quant_scales",       quantAllScales},
     {"--test-quant-stateless",    "quant_stateless",    quantIsStateless},
     {"--test-quant-non-finite",   "quant_non_finite",   quantNonFinite},
+    {"--test-quant-extreme",      "quant_extreme",      quantExtremeInput},
+    {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };
 
 /** The FFT checks take different arguments, so they are named separately. */

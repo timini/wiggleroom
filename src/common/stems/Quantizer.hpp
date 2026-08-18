@@ -123,7 +123,7 @@ public:
      * @return       The glided output, also 1 V/octave.
      */
     float process(float volts) {
-        if (std::isfinite(volts)) target_ = quantise(volts);
+        if (std::isfinite(volts)) target_ = quantise(clampVolts(volts));
 
         if (glideCoefficient_ <= 0.0) {
             // Zero glide means zero glide. See note 3 in the header.
@@ -191,6 +191,24 @@ public:
     }
 
 private:
+    /**
+     * Hold the input to a range the semitone arithmetic can represent.
+     *
+     * Rejecting only non-finite input is not enough. A large but finite value
+     * from a misbehaving upstream module, say 1e20 or FLT_MAX, makes
+     * floor(semitones / 12) fall outside long long, and converting it is
+     * undefined; the octave index either side of it then overflows as well.
+     * Under UndefinedBehaviorSanitizer that is three separate reports, and in a
+     * release build it silently produced 0 V, which is a note rather than a
+     * refusal.
+     *
+     * Twenty volts is far beyond Rack's rails and forty octaves wide, so
+     * clamping costs nothing real.
+     */
+    static double clampVolts(double volts) {
+        return std::min(std::max(volts, -kMaxVolts), kMaxVolts);
+    }
+
     /** Nearest scale degree to @p volts, in volts. */
     double quantise(double volts) const {
         const uint16_t bits = scaleMask(activeScale());
@@ -253,6 +271,8 @@ private:
         const int m = i % 12;
         return (m < 0) ? (m + 12) : m;
     }
+
+    static constexpr double kMaxVolts = 20.0;
 
     // A hundredth of a cent, far below anything audible or measurable.
     static constexpr double kSettleVolts = 1.0 / 12.0 / 100.0 / 100.0;

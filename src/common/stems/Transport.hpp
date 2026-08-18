@@ -48,7 +48,10 @@ public:
 
     /** Multiplier on the incoming clock. 2 = twice as fast, 0.5 = half. */
     void setClockDivision(float division) {
-        clockDivision_ = (division > 0.f) ? division : 1.f;
+        // A NaN fails the > test and falls through to 1, which is correct by
+        // accident rather than by design, so it is stated explicitly here to
+        // match setLoopBounds below.
+        clockDivision_ = (std::isfinite(division) && division > 0.f) ? division : 1.f;
     }
 
     /**
@@ -60,6 +63,13 @@ public:
      * pushed past the end of the buffer, so every read returned silence.
      */
     void setLoopBounds(float start, float length) {
+        // Reject non-finite input before clamping. std::min and std::max
+        // PROPAGATE NaN rather than clamping it, because every comparison
+        // against NaN is false, so a NaN length survives both calls and
+        // playheadFrames() then returns NaN for the rest of the patch. The same
+        // trap was found in Yin and in ScaleDetect; a cross-module sweep of
+        // hostile input is what turned this one up.
+        if (!std::isfinite(start) || !std::isfinite(length)) return;
         loopLength_ = std::min(std::max(length, kMinLoopLength), 1.f);
         loopStart_  = std::min(std::max(start, 0.f), 1.f - loopLength_);
     }

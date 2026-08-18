@@ -899,6 +899,38 @@ class TestQuantizer:
         result = run_test(["--test-quant-non-finite"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_large_finite_input_is_bounded(self):
+        """Rejecting NaN and infinity is not enough.
+
+        A value like 1e20 volts puts floor(semitones / 12) outside long long,
+        and converting it is undefined: three UndefinedBehaviorSanitizer reports,
+        and a release build silently produced 0 V. Verified to have teeth.
+        """
+        result = run_test(["--test-quant-extreme"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
+class TestExtremeInput:
+    """Hostile but legal input, across every module at once."""
+
+    def test_every_entry_point_survives_extreme_input(self):
+        """Written after review found the large-finite gap in Quantizer.
+
+        The problem was not a missing guard so much as that nothing in the suite
+        ever supplied such a value, so every sanitiser run came back clean. This
+        sweep covers the class rather than the one instance, and it immediately
+        found a second: Transport.setLoopBounds clamped with std::min and
+        std::max, which PROPAGATE NaN because every comparison against NaN is
+        false, so a NaN length survived both calls and playheadFrames() returned
+        NaN for the rest of the patch.
+
+        Most of its value comes from running under AddressSanitizer and
+        UndefinedBehaviorSanitizer, where the failure is the sanitiser aborting
+        rather than an assertion here.
+        """
+        result = run_test(["--test-extreme-sweep"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_concurrent_submit_and_acquire(self):
         """A reader standing in for the audio thread hammers acquire/release
         while jobs are submitted, checking for races and for frees landing on
