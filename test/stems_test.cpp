@@ -6482,6 +6482,176 @@ bool grainSpread(std::string& detail) {
     return true;
 }
 
+/**
+ * A grain crossing the end of the buffer must wrap, not fall off it.
+ *
+ * The read head is advanced every sample, so a grain starting near the end, or
+ * reaching it quickly at positive pitch, runs past it. Reading zero there is a
+ * step at full envelope gain followed by silence for the rest of the grain,
+ * which is exactly the click the completion guarantee exists to prevent.
+ */
+bool grainCrossesBoundary(std::string& detail) {
+    const int sampleRate = 48000;
+    // DC, so every step in the output is the engine rather than the material.
+    std::vector<float> source(8192, 0.7f);
+
+    for (double semitones : {0.0, 12.0, 24.0}) {
+        GrainEngine engine(sampleRate);
+        engine.setDensityHz(40.f);
+        engine.setSizeSeconds(0.1f);
+        engine.setTexture(0.f);
+        engine.setSpread(0.f);
+        engine.setPitchSemitones((float)semitones);
+        // Positioned so the read head crosses the end of the buffer at the
+        // MIDDLE of the grain, where the envelope is at full gain. Starting it
+        // near the end instead means the crossing happens while the envelope is
+        // still ramping up, so falling off the end costs almost nothing and the
+        // test passes with the wrap removed.
+        const double grainSamples = 0.1 * sampleRate;
+        engine.setReadPosition((double)source.size() - grainSamples * 0.5);
+        const auto run = runGrains(engine, source, sampleRate);
+
+        const double worst = maxStep(run.left);
+        if (worst > 0.02) {
+            detail = "at " + std::to_string(semitones) +
+                     " semitones a grain crossing the buffer end stepped by " +
+                     std::to_string(worst);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Coherent overlap must stay bounded.
+ *
+ * At texture 0 every grain reads the same position, so on sustained or periodic
+ * material they are near-identical and sum LINEARLY rather than as the square
+ * root the compensation assumes. Left alone the peak reaches 2.5, which clips a
+ * full-scale input.
+ */
+bool grainCoherentOverlap(std::string& detail) {
+    const int sampleRate = 48000;
+    std::vector<float> dc(sampleRate, 1.f);
+
+    double worst = 0.0;
+    for (float density : {1.f, 10.f, 50.f, 100.f}) {
+        GrainEngine engine(sampleRate);
+        engine.setDensityHz(density);
+        engine.setSizeSeconds(0.5f);
+        engine.setTexture(0.f);      // fully coherent: the worst case
+        engine.setSpread(0.f);
+        engine.setReadPosition(sampleRate / 2);
+        const auto run = runGrains(engine, dc, sampleRate * 3);
+        for (float v : run.left) worst = std::max(worst, std::fabs((double)v));
+    }
+    if (worst > 1.05) {
+        detail = "fully coherent overlap reached " + std::to_string(worst) +
+                 " with a full-scale input";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The shortest grains must still end on silence.
+ *
+ * Jitter can cut a grain to half a millisecond, which is 24 samples at 48 kHz.
+ * The last phase rendered is one increment short of 1, and with the flattened
+ * texture-1 window that sample still carried 0.37 of full gain, so the grain
+ * ended on a step. The fade is therefore a minimum in SAMPLES, not a fraction.
+ */
+bool grainShortGrains(std::string& detail) {
+    const int sampleRate = 48000;
+    std::vector<float> dc(sampleRate, 1.f);
+
+    for (float size : {0.001f, 0.002f, 0.005f}) {
+        GrainEngine engine(sampleRate);
+        engine.setDensityHz(100.f);
+        engine.setSizeSeconds(size);
+        engine.setTexture(1.f);      // maximum jitter, flattest window
+        engine.setSpread(0.f);
+        engine.setReadPosition(sampleRate / 2);
+        const auto run = runGrains(engine, dc, sampleRate);
+
+        // The bar has to sit above the envelope's OWN slope. A 24 sample grain
+        // travels from full scale to zero in twelve samples, so about 0.09 per
+        // sample is the envelope working correctly, not a click. Truncating
+        // instead gives a cliff of 0.42, so the two are far apart and the line
+        // goes between them rather than below both.
+        const double worst = maxStep(run.left);
+        if (worst > 0.15) {
+            detail = "at " + std::to_string(size * 1000.f) +
+                     " ms with full texture, grains stepped by " +
+                     std::to_string(worst);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** A sample rate change must not alter the duration of live grains. */
+bool grainSampleRateChange(std::string& detail) {
+    const int sampleRate = 48000;
+    std::vector<float> dc(sampleRate, 1.f);
+
+    GrainEngine engine(sampleRate);
+    engine.setDensityHz(4.f);
+    engine.setSizeSeconds(0.25f);
+    engine.setTexture(0.f);
+    engine.setSpread(0.f);
+    engine.setReadPosition(1000);
+
+    // Get a grain running, then change the rate underneath it. At 4 Hz the
+    // first one starts a quarter of a second in, so this has to run past that.
+    for (int i = 0; i < 14000; i++) engine.process(dc.data(), dc.size());
+    const int before = engine.activeGrains();
+    if (before < 1) { detail = "no grain was running before the rate change"; return false; }
+
+    // Count the SAMPLES the live grain still needs. Merely checking that it is
+    // still running does not work: without rescaling it takes the same number
+    // of samples as before, which at the new rate is half the seconds, and any
+    // short window sees it running either way.
+    engine.setDensityHz(0.1f);        // no new grains during the measurement
+    engine.setSampleRate(96000);
+    int remaining = 0;
+    while (remaining < 400000 && engine.activeGrains() > 0) {
+        engine.process(dc.data(), dc.size());
+        remaining++;
+    }
+    if (remaining >= 400000) {
+        detail = "the grain never finished after the rate change";
+        return false;
+    }
+
+    // The same measurement without a rate change, as the reference.
+    GrainEngine reference(sampleRate);
+    reference.setDensityHz(4.f);
+    reference.setSizeSeconds(0.25f);
+    reference.setTexture(0.f);
+    reference.setSpread(0.f);
+    reference.setReadPosition(1000);
+    for (int i = 0; i < 14000; i++) reference.process(dc.data(), dc.size());
+    reference.setDensityHz(0.1f);
+    int referenceRemaining = 0;
+    while (referenceRemaining < 400000 && reference.activeGrains() > 0) {
+        reference.process(dc.data(), dc.size());
+        referenceRemaining++;
+    }
+
+    // Doubling the rate must double the samples left, since the duration is in
+    // seconds. Leaving the increment alone keeps the sample count the same.
+    const double ratio = (double)remaining / std::max(1, referenceRemaining);
+    if (ratio < 1.6 || ratio > 2.4) {
+        detail = "after doubling the sample rate the grain needed " +
+                 std::to_string(remaining) + " samples against " +
+                 std::to_string(referenceRemaining) + " at the original rate, a ratio of " +
+                 std::to_string(ratio) + "; durations are configured in seconds";
+        return false;
+    }
+    return true;
+}
+
 /** Missing, short and malformed input must be safe. */
 bool grainBadInput(std::string& detail) {
     const int sampleRate = 48000;
@@ -6738,6 +6908,10 @@ const TestCase kCases[] = {
     {"--test-grain-pitch",        "grain_pitch",        grainPitch},
     {"--test-grain-spread",       "grain_spread",       grainSpread},
     {"--test-grain-jitter",       "grain_jitter",       grainJitterWraps},
+    {"--test-grain-boundary",     "grain_boundary",     grainCrossesBoundary},
+    {"--test-grain-coherent",     "grain_coherent",     grainCoherentOverlap},
+    {"--test-grain-short",        "grain_short",        grainShortGrains},
+    {"--test-grain-rate-change",  "grain_rate_change",  grainSampleRateChange},
     {"--test-grain-bad-input",    "grain_bad_input",    grainBadInput},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };

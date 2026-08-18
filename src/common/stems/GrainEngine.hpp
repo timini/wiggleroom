@@ -54,7 +54,21 @@ public:
     }
 
     void setSampleRate(int sampleRate) {
-        sampleRate_ = (sampleRate > 0) ? sampleRate : 48000;
+        const int next = (sampleRate > 0) ? sampleRate : 48000;
+        if (next != sampleRate_) {
+            // Live grains carry an increment computed from the OLD rate, so
+            // leaving them alone makes a 48 to 96 kHz change finish every
+            // remaining envelope in half the seconds it was given, and the
+            // reverse doubles them and holds pool slots for twice as long.
+            // Durations are configured in seconds, so they have to survive.
+            const double ratio = (double)sampleRate_ / (double)next;
+            for (int i = 0; i < kMaxGrains; i++) {
+                if (!grains_[i].active) continue;
+                grains_[i].phaseIncrement *= ratio;
+                grains_[i].fade *= ratio;
+            }
+        }
+        sampleRate_ = next;
     }
 
     /** Grain duration in seconds. */
@@ -116,9 +130,19 @@ public:
             Grain& g = grains_[i];
             if (!g.active) continue;
 
+            // Wrapped every sample, not only at the start. A grain that begins
+            // near the end of the buffer, or reaches it quickly at positive
+            // pitch, otherwise falls off the end and reads zero for the rest of
+            // its life: a step at full envelope gain followed by silence, which
+            // is exactly the click the completion guarantee is supposed to
+            // prevent.
+            const double span = (double)(length - 1);
+            g.position = std::fmod(g.position, span);
+            if (g.position < 0.0) g.position += span;
+
             const double position = g.position;
             float sample = 0.f;
-            if (position >= 0.0 && position < (double)(length - 1)) {
+            if (position >= 0.0 && position < span) {
                 const std::size_t i0 = (std::size_t)position;
                 const double frac = position - (double)i0;
                 const float a = source[i0];
@@ -127,7 +151,7 @@ public:
             }
             if (!std::isfinite(sample)) sample = 0.f;
 
-            const float envelope = envelopeAt(g.phase, g.shape);
+            const float envelope = envelopeAt(g.phase, g.shape, g.fade);
             const float value = sample * envelope * g.amplitude;
             out.left += value * g.gainLeft;
             out.right += value * g.gainRight;
@@ -143,6 +167,8 @@ public:
             }
         }
 
+        out.left = softLimit(out.left);
+        out.right = softLimit(out.right);
         if (!std::isfinite(out.left)) out.left = 0.f;
         if (!std::isfinite(out.right)) out.right = 0.f;
         return out;
@@ -174,6 +200,7 @@ private:
         float gainLeft = 0.707f;
         float gainRight = 0.707f;
         float shape = 0.f;
+        double fade = 0.0;
     };
 
     void startGrain(std::size_t length) {
@@ -201,6 +228,8 @@ private:
         const double samples = seconds * sampleRate_;
         g.phase = 0.0;
         g.phaseIncrement = 1.0 / std::max(1.0, samples);
+        // At least this many samples of fade at each end, whatever the texture.
+        g.fade = std::min(0.5, kMinFadeSamples * g.phaseIncrement);
 
         const double positionJitter = jitterRange * nextBipolar() * (double)sampleRate_ * 0.05;
         double start = readPosition_ + positionJitter;
@@ -228,9 +257,22 @@ private:
 
         // Density compensation. Grains sum, so without it the output rises with
         // the overlap: measured peaks of 0.90, 2.98 and 4.90 across the range of
-        // the two controls, which is 14 dB of level change from a control that
-        // is supposed to change texture. Expected overlap is density times size,
-        // and incoherent sources sum as the square root of their number.
+        // the two controls, which is 17 dB of level change from controls that
+        // are supposed to change texture.
+        //
+        // Incoherent sources sum as the square root of their number, which is
+        // the ordinary case: any texture above zero scatters the read positions
+        // far enough to decorrelate them.
+        //
+        // The exception is texture exactly 0, where every grain starts at the
+        // same position and on sustained or periodic material they are
+        // near-identical and sum LINEARLY: the peak climbed from 0.71 at 1 Hz
+        // to 2.5 at 100 Hz. That is handled by the soft limit in process()
+        // rather than by a stronger exponent here. Making the exponent depend
+        // on texture was tried and is worse: it over-attenuates the ordinary
+        // incoherent case, where the square root is already correct, and it
+        // would be fitting the curve to whichever test signal happened to be
+        // used.
         const double overlap = std::max(1.0, (double)densityHz_ * (double)sizeSeconds_);
         g.amplitude = (float)(1.0 / std::sqrt(overlap));
     }
@@ -241,13 +283,20 @@ private:
      * Always zero at both ends whatever the shape, because that is what stops
      * the grain boundary being a click.
      */
-    static float envelopeAt(double phase, float shape) {
+    static float envelopeAt(double phase, float shape, double fade) {
         const double p = std::min(std::max(phase, 0.0), 1.0);
         const double hann = 0.5 * (1.0 - std::cos(2 * kPi * p));
         if (shape <= 0.f) return (float)hann;
         // A plateau with cosine ends: the fraction spent fading shrinks as the
-        // shape opens, but never to zero.
-        const double edge = 0.5 * (1.0 - 0.8 * (double)shape);
+        // shape opens, but never below `fade`, which is a minimum expressed in
+        // SAMPLES rather than as a fraction of the grain.
+        //
+        // A fraction alone is not enough at the short end. Jitter can cut a
+        // grain to half a millisecond, which is 24 samples, and the last phase
+        // rendered is one increment short of 1; with the flattened texture-1
+        // window that last sample still had 0.37 of full gain, so the grain
+        // ended on a step rather than on silence.
+        const double edge = std::max(fade, 0.5 * (1.0 - 0.8 * (double)shape));
         double gain;
         if (p < edge) {
             gain = 0.5 * (1.0 - std::cos(kPi * p / edge));
@@ -259,6 +308,25 @@ private:
         return (float)(hann + (gain - hann) * (double)shape);
     }
 
+    /**
+     * Transparent below the threshold, saturating above it.
+     *
+     * Catches the coherent worst case: at texture 0 every grain reads the same
+     * position, so on periodic material they sum linearly rather than as the
+     * square root and the peak reaches 2.5, which clips a full-scale input.
+     * Below the threshold this is exactly unity, so the ordinary incoherent
+     * case passes through untouched and the compensation above is not fighting
+     * a limiter that is always engaged.
+     */
+    static float softLimit(float x) {
+        const float threshold = 0.8f;
+        const float magnitude = std::fabs(x);
+        if (magnitude <= threshold) return x;
+        const float over = magnitude - threshold;
+        const float limited = threshold + (1.f - threshold) * std::tanh(over / (1.f - threshold));
+        return (x < 0.f) ? -limited : limited;
+    }
+
     /** Cheap deterministic noise, so tests repeat exactly. */
     double nextBipolar() {
         rng_ = rng_ * 1664525u + 1013904223u;
@@ -266,6 +334,8 @@ private:
     }
 
     static constexpr double kPi = 3.14159265358979323846;
+    /** Minimum fade at each end of a grain, in samples. */
+    static constexpr double kMinFadeSamples = 32.0;
     static constexpr float kHalfPi = 1.57079632679489661923f;
 
     int sampleRate_ = 48000;

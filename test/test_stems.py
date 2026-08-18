@@ -1490,6 +1490,57 @@ class TestGrainEngine:
         result = run_test(["--test-grain-jitter"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_a_grain_crossing_the_buffer_end_wraps(self):
+        """The read head is advanced every sample, so a grain starting near the
+        end, or reaching it at positive pitch, runs past it; reading zero there
+        is a step at full envelope gain followed by silence.
+
+        Positioned so the crossing happens at the MIDDLE of the grain. Starting
+        near the end instead means it crosses while the envelope is still
+        ramping up, so falling off costs almost nothing and the test passes with
+        the wrap removed. Verified to have teeth: 0.247.
+        """
+        result = run_test(["--test-grain-boundary"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_coherent_overlap_stays_bounded(self):
+        """At texture 0 every grain reads the same position, so on sustained or
+        periodic material they sum LINEARLY rather than as the square root the
+        compensation assumes. Verified to have teeth: the peak reaches 2.5 with
+        a full-scale input, which clips.
+
+        Handled by a soft limit rather than a stronger exponent. Making the
+        exponent depend on texture was tried and over-attenuates the ordinary
+        incoherent case, where the square root is already right.
+        """
+        result = run_test(["--test-grain-coherent"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_shortest_grains_still_end_on_silence(self):
+        """Jitter can cut a grain to half a millisecond, 24 samples at 48 kHz.
+        The last phase rendered is one increment short of 1, and with the
+        flattened texture-1 window that sample still carried 0.37 of full gain.
+
+        The bar sits above the envelope's OWN slope: a 24 sample grain travels
+        full scale to zero in twelve samples, so about 0.09 per sample is
+        correct behaviour. Truncating gives 0.42, so the two are far apart.
+        """
+        result = run_test(["--test-grain-short"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_sample_rate_change_preserves_grain_duration(self):
+        """Live grains carry an increment computed from the old rate, so a 48 to
+        96 kHz change finishes every remaining envelope in half the seconds it
+        was given.
+
+        Measured in SAMPLES against an unchanged reference. Checking only that
+        the grain is still running does not work: without rescaling it takes the
+        same sample count either way, so any short window sees it running.
+        Verified to have teeth: a ratio of 1.00 where it should be 2.
+        """
+        result = run_test(["--test-grain-rate-change"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_missing_and_poisoned_input_is_safe(self):
         """Null source, which is the state on patch load, plus a one-sample
         buffer, non-finite samples in the source, and non-finite settings."""
