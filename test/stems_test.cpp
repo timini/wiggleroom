@@ -36,6 +36,7 @@
 #include "common/stems/Hpss.hpp"
 #include "common/stems/SeparationWorker.hpp"
 #include "common/stems/StemMixer.hpp"
+#include "common/stems/WavetableExtract.hpp"
 #include "common/stems/Quantizer.hpp"
 #include "common/stems/ScaleDetect.hpp"
 #include "common/stems/Yin.hpp"
@@ -3737,6 +3738,487 @@ bool extremeInputSweep(std::string& detail) {
     return true;
 }
 
+
+// ---------------------------------------------------------------------------
+// WavetableExtract
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::WavetableExtract;
+
+namespace {
+/** A stem set whose layers all hold @p hz, at 48 kHz. */
+StemSet toneSet(double hz, std::size_t frames = 48000, uint64_t generation = 1) {
+    StemSet set;
+    set.channels = 1;
+    set.generation = generation;
+    for (int L = 0; L < StemSet::kNumLayers; L++) {
+        set.layer[L].channel[0].assign(frames, 0.f);
+        for (std::size_t i = 0; i < frames; i++) {
+            set.layer[L].channel[0][i] =
+                (float)std::sin(2 * M_PI * hz * (double)i / 48000.0);
+        }
+    }
+    return set;
+}
+
+/** Build one complete frame, returning how many calls it took. */
+int buildFrame(WavetableExtract& e, const StemSet& set, int layer, double playhead,
+               std::size_t* worstCall = nullptr) {
+    int calls = 0;
+    if (worstCall) *worstCall = 0;
+    while (calls < 100000) {
+        const bool done = e.process(&set, layer, playhead);
+        if (worstCall) *worstCall = std::max(*worstCall, e.debugSamplesLastCall());
+        calls++;
+        if (done) break;
+    }
+    return calls;
+}
+
+double framePeak(const WavetableExtract& e) {
+    double peak = 0.0;
+    for (std::size_t i = 0; i < e.frameSize(); i++) {
+        peak = std::max(peak, std::fabs((double)e.frame()[i]));
+    }
+    return peak;
+}
+}  // namespace
+
+/**
+ * The frame is the same length whatever wt_window is set to.
+ *
+ * This is what makes wt_window change how much source material is captured
+ * rather than the oscillator's pitch: the fundamental is set by how fast the
+ * oscillator reads a frame, so a frame whose length moved with the window would
+ * retune the voice every time the control was touched.
+ */
+bool wtFrameSizeIsFixed(std::string& detail) {
+    const auto set = toneSet(100.0);
+    for (int window : {256, 400, 512, 1024, 2048, 3000, 4096, 8192}) {
+        WavetableExtract e;
+        e.setWindowSamples(window);
+        buildFrame(e, set, 0, 24000.0);
+        if (e.frameSize() != WavetableExtract::kFrameSize) {
+            detail = "window " + std::to_string(window) + " gave a frame of " +
+                     std::to_string(e.frameSize());
+            return false;
+        }
+        // And the frame must actually be populated, not left at zero.
+        if (framePeak(e) < 0.9) {
+            detail = "window " + std::to_string(window) + " produced a frame peaking at " +
+                     std::to_string(framePeak(e));
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * wt_window must change the captured material, or the control does nothing.
+ *
+ * The companion to the test above: holding the frame length fixed is only half
+ * the requirement. A longer window has to capture more of the source, which
+ * shows up as more cycles of a fixed tone inside the frame.
+ */
+bool wtWindowChangesContent(std::string& detail) {
+    const auto set = toneSet(100.0);  // 480 samples per cycle
+    int previousCrossings = -1;
+    for (int window : {512, 1024, 2048, 4096, 8192}) {
+        WavetableExtract e;
+        e.setWindowSamples(window);
+        buildFrame(e, set, 0, 24000.0);
+
+        int crossings = 0;
+        for (std::size_t i = 1; i < e.frameSize(); i++) {
+            if ((e.frame()[i - 1] < 0.f) != (e.frame()[i] < 0.f)) crossings++;
+        }
+        if (previousCrossings >= 0 && crossings <= previousCrossings) {
+            detail = "window " + std::to_string(window) + " captured " +
+                     std::to_string(crossings) + " zero crossings, no more than the " +
+                     std::to_string(previousCrossings) + " of the shorter window";
+            return false;
+        }
+        previousCrossings = crossings;
+    }
+    return true;
+}
+
+/**
+ * The work must be spread evenly, never concentrated in one call.
+ *
+ * Building a whole frame in the call where the playhead crosses a boundary is a
+ * spike, and the spike lands on the audio thread.
+ */
+bool wtWorkIsAmortised(std::string& detail) {
+    const auto set = toneSet(100.0);
+    for (int budget : {16, 64, 128, 512}) {
+        WavetableExtract e;
+        e.setBudgetPerCall(budget);
+        std::size_t worst = 0;
+        const int calls = buildFrame(e, set, 0, 24000.0, &worst);
+
+        if ((int)worst > budget) {
+            detail = "a single call produced " + std::to_string(worst) +
+                     " samples against a budget of " + std::to_string(budget);
+            return false;
+        }
+        const int expected = (int)WavetableExtract::kFrameSize / budget;
+        if (calls < expected || calls > expected + 1) {
+            detail = "budget " + std::to_string(budget) + " took " +
+                     std::to_string(calls) + " calls, expected about " +
+                     std::to_string(expected);
+            return false;
+        }
+
+        // And it must stay flat across many frames, not just the first.
+        for (int frame = 0; frame < 5; frame++) {
+            std::size_t w = 0;
+            buildFrame(e, set, 0, 24000.0 + frame * 1000.0, &w);
+            if ((int)w > budget) {
+                detail = "frame " + std::to_string(frame) + " spiked to " +
+                         std::to_string(w) + " samples";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/** Frames must follow the playhead. */
+bool wtTracksPlayhead(std::string& detail) {
+    // Noise, so that successive windows genuinely differ rather than repeating
+    // a periodic waveform that would look identical wherever it was sampled.
+    StemSet set;
+    set.channels = 1;
+    set.generation = 1;
+    std::mt19937 rng(808);
+    std::uniform_real_distribution<float> dist(-1.f, 1.f);
+    for (int L = 0; L < StemSet::kNumLayers; L++) {
+        set.layer[L].channel[0].assign(48000, 0.f);
+        for (auto& x : set.layer[L].channel[0]) x = dist(rng);
+    }
+
+    WavetableExtract e;
+    e.setWindowSamples(2048);
+    buildFrame(e, set, 0, 10000.0);
+    std::vector<float> first(e.frame(), e.frame() + e.frameSize());
+    const uint64_t countAfterFirst = e.frameCount();
+
+    buildFrame(e, set, 0, 30000.0);
+    if (e.frameCount() != countAfterFirst + 1) {
+        detail = "the frame counter did not advance";
+        return false;
+    }
+
+    double worst = 0.0;
+    for (std::size_t i = 0; i < e.frameSize(); i++) {
+        worst = std::max(worst, std::fabs((double)first[i] - (double)e.frame()[i]));
+    }
+    if (worst < 0.1) {
+        detail = "moving the playhead 20000 frames changed the wavetable by only " +
+                 std::to_string(worst);
+        return false;
+    }
+
+    // The same playhead must give the same frame, so the difference above is
+    // the position and not just build-to-build noise.
+    buildFrame(e, set, 0, 30000.0);
+    std::vector<float> repeat(e.frame(), e.frame() + e.frameSize());
+    buildFrame(e, set, 0, 30000.0);
+    for (std::size_t i = 0; i < e.frameSize(); i++) {
+        if (std::fabs((double)repeat[i] - (double)e.frame()[i]) > 1e-6) {
+            detail = "the same playhead gave two different frames";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * A build must not smear across playhead motion.
+ *
+ * The position is snapshotted when a build begins. Re-reading it every call
+ * would spread one frame over however far the transport moved while it was
+ * being built, so the frame would correspond to no actual moment in the
+ * material.
+ */
+bool wtSnapshotsPosition(std::string& detail) {
+    StemSet set;
+    set.channels = 1;
+    set.generation = 1;
+    std::mt19937 rng(99);
+    std::uniform_real_distribution<float> dist(-1.f, 1.f);
+    for (int L = 0; L < StemSet::kNumLayers; L++) {
+        set.layer[L].channel[0].assign(48000, 0.f);
+        for (auto& x : set.layer[L].channel[0]) x = dist(rng);
+    }
+
+    // Build one frame with a still playhead.
+    WavetableExtract still;
+    buildFrame(still, set, 0, 20000.0);
+    std::vector<float> reference(still.frame(), still.frame() + still.frameSize());
+
+    // Build another while the playhead sweeps away underneath it. The frame must
+    // match the position at the START of the build, not a blur of the sweep.
+    WavetableExtract moving;
+    double playhead = 20000.0;
+    while (!moving.process(&set, 0, playhead)) playhead += 500.0;
+
+    double worst = 0.0;
+    for (std::size_t i = 0; i < moving.frameSize(); i++) {
+        worst = std::max(worst, std::fabs((double)reference[i] - (double)moving.frame()[i]));
+    }
+    if (worst > 1e-5) {
+        detail = "a moving playhead changed the frame by " + std::to_string(worst) +
+                 "; the build is re-reading the position instead of snapshotting it";
+        return false;
+    }
+    return true;
+}
+
+/** Frames must be normalised, DC free, and silent for silence. */
+bool wtNormalises(std::string& detail) {
+    for (double amplitude : {0.01, 0.1, 1.0}) {
+        StemSet set;
+        set.channels = 1;
+        set.generation = 1;
+        for (int L = 0; L < StemSet::kNumLayers; L++) {
+            set.layer[L].channel[0].assign(48000, 0.f);
+            for (std::size_t i = 0; i < 48000; i++) {
+                // Offset on purpose, so DC removal is exercised.
+                set.layer[L].channel[0][i] =
+                    (float)(0.5 + amplitude * std::sin(2 * M_PI * 200.0 * (double)i / 48000.0));
+            }
+        }
+        WavetableExtract e;
+        buildFrame(e, set, 0, 24000.0);
+
+        const double peak = framePeak(e);
+        if (std::fabs(peak - 1.0) > 1e-3) {
+            detail = "amplitude " + std::to_string(amplitude) + " gave a peak of " +
+                     std::to_string(peak);
+            return false;
+        }
+        double mean = 0.0;
+        for (std::size_t i = 0; i < e.frameSize(); i++) mean += e.frame()[i];
+        mean /= (double)e.frameSize();
+        if (std::fabs(mean) > 0.02) {
+            detail = "frame DC was " + std::to_string(mean);
+            return false;
+        }
+    }
+
+    // Silence must stay silent.
+    //
+    // Exact zeros are not the case that matters: any gain applied to zero is
+    // still zero, so a missing guard passes. What a real empty buffer holds
+    // after a filter has run over it is denormal-level noise, and normalising
+    // THAT lifts it to full scale. Both are checked.
+    StemSet quiet;
+    quiet.channels = 1;
+    quiet.generation = 1;
+    for (int L = 0; L < StemSet::kNumLayers; L++) quiet.layer[L].channel[0].assign(48000, 0.f);
+    WavetableExtract e;
+    buildFrame(e, quiet, 0, 24000.0);
+    if (framePeak(e) > 1e-6) {
+        detail = "digital silence produced a frame peaking at " +
+                 std::to_string(framePeak(e));
+        return false;
+    }
+
+    StemSet nearlyQuiet;
+    nearlyQuiet.channels = 1;
+    nearlyQuiet.generation = 2;
+    std::mt19937 rng(1234);
+    std::uniform_real_distribution<float> tiny(-1e-9f, 1e-9f);
+    for (int L = 0; L < StemSet::kNumLayers; L++) {
+        nearlyQuiet.layer[L].channel[0].assign(48000, 0.f);
+        for (auto& x : nearlyQuiet.layer[L].channel[0]) x = tiny(rng);
+    }
+    WavetableExtract q;
+    buildFrame(q, nearlyQuiet, 0, 24000.0);
+    if (framePeak(q) > 1e-6) {
+        detail = "near-silence was normalised up to a peak of " +
+                 std::to_string(framePeak(q));
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The frame is read cyclically, so it has to join up at the wrap point.
+ *
+ * Source audio has no reason to, and the step is a click at the oscillator's own
+ * frequency, which reads as a buzz under every note.
+ */
+bool wtLoopsCleanly(std::string& detail) {
+    const auto set = toneSet(137.0);  // not a divisor of anything here
+    for (int window : {256, 1024, 8192}) {
+        WavetableExtract e;
+        e.setWindowSamples(window);
+        buildFrame(e, set, 0, 24000.0);
+
+        const double wrapStep =
+            std::fabs((double)e.frame()[0] - (double)e.frame()[e.frameSize() - 1]);
+        // Compare against the largest step INSIDE the frame, so the bar scales
+        // with how fast the waveform is moving rather than being an absolute.
+        double worstInside = 0.0;
+        for (std::size_t i = 1; i < e.frameSize(); i++) {
+            worstInside = std::max(worstInside,
+                                   std::fabs((double)e.frame()[i] - (double)e.frame()[i - 1]));
+        }
+        if (wrapStep > worstInside + 1e-4) {
+            detail = "window " + std::to_string(window) + " wraps with a step of " +
+                     std::to_string(wrapStep) + " against a worst interior step of " +
+                     std::to_string(worstInside);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Decimation must be averaged, not point sampled.
+ *
+ * At the top of the range the window is four times the frame, so taking every
+ * fourth sample folds everything above a quarter of the frame's Nyquist back
+ * down. Normalisation hides this completely: an attenuated frame and a
+ * full-scale alias both come out peaking at one. The pre-normalisation peak is
+ * the only direct evidence.
+ */
+bool wtAntiAliases(std::string& detail) {
+    struct Case { double hz; double maxRawPeak; };
+    // Measured: a box average of four at 48 kHz nulls at 12 kHz and is well
+    // down by 20 kHz. Point sampling would pass all of these at close to unity.
+    const Case cases[] = {{12000.0, 0.10}, {20000.0, 0.30}, {14000.0, 0.40}};
+    for (const auto& c : cases) {
+        const auto set = toneSet(c.hz);
+        WavetableExtract e;
+        e.setWindowSamples(8192);
+        buildFrame(e, set, 0, 24000.0);
+        if (e.debugRawPeak() > c.maxRawPeak) {
+            detail = std::to_string(c.hz) + " Hz reached a raw peak of " +
+                     std::to_string(e.debugRawPeak()) + ", above the " +
+                     std::to_string(c.maxRawPeak) + " expected from an averaged decimation";
+            return false;
+        }
+    }
+    // Low frequencies must pass essentially untouched, or the filter is simply
+    // destroying everything and the test above proves nothing.
+    const auto set = toneSet(200.0);
+    WavetableExtract e;
+    e.setWindowSamples(8192);
+    buildFrame(e, set, 0, 24000.0);
+    if (e.debugRawPeak() < 0.9) {
+        detail = "200 Hz was attenuated to " + std::to_string(e.debugRawPeak());
+        return false;
+    }
+    return true;
+}
+
+/** A stale snapshot must restart the build rather than finish a mixed frame. */
+bool wtRestartsOnChange(std::string& detail) {
+    auto setA = toneSet(100.0, 48000, /*generation=*/1);
+    auto setB = toneSet(700.0, 48000, /*generation=*/2);
+
+    // Swap the stem set halfway through a build.
+    WavetableExtract e;
+    e.setBudgetPerCall(128);
+    for (int i = 0; i < 8; i++) e.process(&setA, 0, 24000.0);
+    int calls = 0;
+    while (!e.process(&setB, 0, 24000.0) && calls < 1000) calls++;
+
+    // The completed frame must match one built entirely from B.
+    WavetableExtract clean;
+    buildFrame(clean, setB, 0, 24000.0);
+    double worst = 0.0;
+    for (std::size_t i = 0; i < e.frameSize(); i++) {
+        worst = std::max(worst, std::fabs((double)e.frame()[i] - (double)clean.frame()[i]));
+    }
+    if (worst > 1e-5) {
+        detail = "a frame built across a stem change differs from a clean one by " +
+                 std::to_string(worst);
+        return false;
+    }
+
+    // The same must hold for a window change mid-build.
+    WavetableExtract w;
+    w.setBudgetPerCall(128);
+    w.setWindowSamples(1024);
+    for (int i = 0; i < 8; i++) w.process(&setA, 0, 24000.0);
+    w.setWindowSamples(4096);
+    calls = 0;
+    while (!w.process(&setA, 0, 24000.0) && calls < 1000) calls++;
+
+    WavetableExtract cleanWindow;
+    cleanWindow.setWindowSamples(4096);
+    buildFrame(cleanWindow, setA, 0, 24000.0);
+    worst = 0.0;
+    for (std::size_t i = 0; i < w.frameSize(); i++) {
+        worst = std::max(worst, std::fabs((double)w.frame()[i] - (double)cleanWindow.frame()[i]));
+    }
+    if (worst > 1e-5) {
+        detail = "a frame built across a window change differs from a clean one by " +
+                 std::to_string(worst);
+        return false;
+    }
+    return true;
+}
+
+/** Missing, empty and malformed input must be safe. */
+bool wtBadInput(std::string& detail) {
+    WavetableExtract e;
+    const auto set = toneSet(100.0);
+
+    // No stems yet: the state on patch load.
+    for (int i = 0; i < 100; i++) {
+        if (e.process(nullptr, 0, 24000.0)) {
+            detail = "a null stem set completed a frame";
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < e.frameSize(); i++) {
+        if (!std::isfinite(e.frame()[i])) {
+            detail = "the frame holds a non-finite sample before anything was built";
+            return false;
+        }
+    }
+
+    // Out-of-range layers, empty stems, non-finite playhead.
+    StemSet empty;
+    empty.generation = 3;
+    for (int layer : {-1, 0, 4, 99}) e.process(&set, layer, 24000.0);
+    for (int i = 0; i < 100; i++) e.process(&empty, 0, 24000.0);
+    for (double bad : {std::nan(""), std::numeric_limits<double>::infinity(),
+                       -std::numeric_limits<double>::infinity()}) {
+        e.process(&set, 0, bad);
+    }
+    // Playheads far outside the stem must give silence, not a read out of range.
+    for (double far : {-1e9, 1e9, -100000.0, 1e6}) {
+        WavetableExtract off;
+        buildFrame(off, set, 0, far);
+        for (std::size_t i = 0; i < off.frameSize(); i++) {
+            if (!std::isfinite(off.frame()[i])) {
+                detail = "playhead " + std::to_string(far) + " produced a non-finite frame";
+                return false;
+            }
+        }
+    }
+
+    e.setOffset(std::nanf(""));
+    e.setWindowSamples(-5);
+    e.setWindowSamples(1 << 20);
+    e.setBudgetPerCall(-3);
+    buildFrame(e, set, 0, 24000.0);
+    for (std::size_t i = 0; i < e.frameSize(); i++) {
+        if (!std::isfinite(e.frame()[i])) {
+            detail = "malformed settings produced a non-finite frame";
+            return false;
+        }
+    }
+    return true;
+}
+
 struct TestCase {
     const char* cmd;
     const char* name;
@@ -3845,6 +4327,16 @@ const TestCase kCases[] = {
     {"--test-quant-stateless",    "quant_stateless",    quantIsStateless},
     {"--test-quant-non-finite",   "quant_non_finite",   quantNonFinite},
     {"--test-quant-extreme",      "quant_extreme",      quantExtremeInput},
+    {"--test-wt-frame-size",      "wt_frame_size",      wtFrameSizeIsFixed},
+    {"--test-wt-window-content",  "wt_window_content",  wtWindowChangesContent},
+    {"--test-wt-amortised",       "wt_amortised",       wtWorkIsAmortised},
+    {"--test-wt-tracks",          "wt_tracks",          wtTracksPlayhead},
+    {"--test-wt-snapshot",        "wt_snapshot",        wtSnapshotsPosition},
+    {"--test-wt-normalise",       "wt_normalise",       wtNormalises},
+    {"--test-wt-loop",            "wt_loop",            wtLoopsCleanly},
+    {"--test-wt-antialias",       "wt_antialias",       wtAntiAliases},
+    {"--test-wt-restart",         "wt_restart",         wtRestartsOnChange},
+    {"--test-wt-bad-input",       "wt_bad_input",       wtBadInput},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };
 

@@ -299,6 +299,24 @@ verify-manifest-tests:
 verify-test-infra:
     cd test && python3 -m pytest test_utils_unit.py test_audio_quality_unit.py -v
 
+# Rebuild stems_test straight from source, bypassing the incremental build.
+#
+# This exists for deliberately breaking the code to confirm a test fails, which
+# is the only way to know a test has teeth. The incremental build repeatedly
+# served a stale binary during that work, because editing a header, rebuilding
+# and rerunning all land in the same second or two, so a check appeared to pass
+# over code that was demonstrably broken. stems_test is a single translation
+# unit, so compiling it outright takes a few seconds and cannot go stale.
+#
+#   just stems-direct --test-wt-normalise
+#   just stems-direct --self-test
+stems-direct *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    OUT="${TMPDIR:-/tmp}/stems_test_direct"
+    c++ -std=c++17 -O2 -Isrc -Isrc/common -o "$OUT" test/stems_test.cpp
+    "$OUT" {{ARGS}}
+
 # These are standalone binaries with no Rack dependency; they test the
 # framework-free logic in src/common/. Each exits non-zero on failure.
 # Run native C++ tests (requires 'just build' first)

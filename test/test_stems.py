@@ -910,6 +910,101 @@ class TestQuantizer:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestWavetableExtract:
+    """Building fixed-size oscillator frames from a stem."""
+
+    def test_the_frame_is_the_same_length_at_every_window_size(self):
+        """This is what makes wt_window change how much source material is
+        captured rather than the oscillator's pitch: the fundamental is set by
+        how fast the oscillator reads a frame."""
+        result = run_test(["--test-wt-frame-size"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_longer_window_captures_more_material(self):
+        """The companion to the test above. Holding the frame length fixed is
+        only half the requirement; the control also has to do something.
+        Verified to have teeth: pinning the read step to one sample makes every
+        window capture the same thing.
+        """
+        result = run_test(["--test-wt-window-content"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_work_is_spread_evenly_across_calls(self):
+        """Building a whole frame in the call where the playhead crosses a
+        boundary is a spike, and the spike lands on the audio thread. Checked at
+        four budgets and across several frames. Verified to have teeth: 2048
+        samples in one call against a budget of 16.
+        """
+        result = run_test(["--test-wt-amortised"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_frames_follow_the_playhead(self):
+        """Driven with noise, so successive windows genuinely differ rather than
+        repeating a periodic waveform that would look the same wherever it was
+        sampled. Also checks the same playhead gives the same frame."""
+        result = run_test(["--test-wt-tracks"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_build_does_not_smear_across_playhead_motion(self):
+        """The position is snapshotted when a build begins. Re-reading it every
+        call spreads one frame over however far the transport moved, so the
+        frame corresponds to no actual moment in the material. Verified to have
+        teeth: a sweeping playhead changes the frame by 1.77.
+        """
+        result = run_test(["--test-wt-snapshot"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_frames_are_normalised_and_dc_free(self):
+        """Silence is checked twice, and the second case is the one that
+        matters. Exact zeros stay zero under any gain, so a missing guard passes
+        that; denormal-level noise, which is what a real empty buffer holds
+        after a filter has run over it, gets lifted to full scale. Verified to
+        have teeth at 1e-9.
+        """
+        result = run_test(["--test-wt-normalise"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_frame_joins_up_at_the_wrap_point(self):
+        """The frame is read cyclically and source audio has no reason to join
+        up, so the step is a click at the oscillator's own frequency. Measured
+        against the worst step inside the frame, so the bar scales with how fast
+        the waveform is moving. Verified to have teeth: without the edge fade
+        the wrap step is 1.50 against an interior step of 0.002.
+        """
+        result = run_test(["--test-wt-loop"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_decimation_is_averaged_not_point_sampled(self):
+        """At the top of the range the window is four times the frame, so every
+        fourth sample folds everything above a quarter of the frame's Nyquist
+        back down.
+
+        Normalisation hides this completely: an attenuated frame and a
+        full-scale alias both peak at one, so the pre-normalisation peak is the
+        only direct evidence. Verified to have teeth: point sampling passes
+        20 kHz at 0.87 where averaging gives 0.05. Low frequencies are checked
+        to pass untouched, so the filter is not simply destroying everything.
+        """
+        result = run_test(["--test-wt-antialias"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_stale_snapshot_restarts_the_build(self):
+        """A new stem set, a different layer or a changed window mid-build means
+        the snapshot no longer describes what is being read. Verified to have
+        teeth: without the restart, a frame built across a stem change differs
+        from a clean one by 2.0.
+        """
+        result = run_test(["--test-wt-restart"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_missing_and_malformed_input_is_safe(self):
+        """Null stem set, which is the state on patch load, plus empty stems,
+        out-of-range layers, non-finite playheads and playheads far outside the
+        material."""
+        result = run_test(["--test-wt-bad-input"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 class TestExtremeInput:
     """Hostile but legal input, across every module at once."""
 
