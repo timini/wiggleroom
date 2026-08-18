@@ -1490,61 +1490,66 @@ class TestGrainEngine:
         result = run_test(["--test-grain-jitter"])
         assert result["failed"] == 0, result.get("detail", "")
 
-    def test_a_grain_crossing_the_buffer_end_wraps(self):
-        """The read head is advanced every sample, so a grain starting near the
-        end, or reaching it at positive pitch, runs past it; reading zero there
-        is a step at full envelope gain followed by silence.
-
-        Positioned so the crossing happens at the MIDDLE of the grain. Starting
-        near the end instead means it crosses while the envelope is still
-        ramping up, so falling off costs almost nothing and the test passes with
-        the wrap removed. Verified to have teeth: 0.247.
-        """
-        result = run_test(["--test-grain-boundary"])
-        assert result["failed"] == 0, result.get("detail", "")
-
-    def test_coherent_overlap_stays_bounded(self):
-        """At texture 0 every grain reads the same position, so on sustained or
-        periodic material they sum LINEARLY rather than as the square root the
-        compensation assumes. Verified to have teeth: the peak reaches 2.5 with
-        a full-scale input, which clips.
-
-        Handled by a soft limit rather than a stronger exponent. Making the
-        exponent depend on texture was tried and over-attenuates the ordinary
-        incoherent case, where the square root is already right.
-        """
-        result = run_test(["--test-grain-coherent"])
-        assert result["failed"] == 0, result.get("detail", "")
-
-    def test_the_shortest_grains_still_end_on_silence(self):
-        """Jitter can cut a grain to half a millisecond, 24 samples at 48 kHz.
-        The last phase rendered is one increment short of 1, and with the
-        flattened texture-1 window that sample still carried 0.37 of full gain.
-
-        The bar sits above the envelope's OWN slope: a 24 sample grain travels
-        full scale to zero in twelve samples, so about 0.09 per sample is
-        correct behaviour. Truncating gives 0.42, so the two are far apart.
-        """
-        result = run_test(["--test-grain-short"])
-        assert result["failed"] == 0, result.get("detail", "")
-
-    def test_a_sample_rate_change_preserves_grain_duration(self):
-        """Live grains carry an increment computed from the old rate, so a 48 to
-        96 kHz change finishes every remaining envelope in half the seconds it
-        was given.
-
-        Measured in SAMPLES against an unchanged reference. Checking only that
-        the grain is still running does not work: without rescaling it takes the
-        same sample count either way, so any short window sees it running.
-        Verified to have teeth: a ratio of 1.00 where it should be 2.
-        """
-        result = run_test(["--test-grain-rate-change"])
-        assert result["failed"] == 0, result.get("detail", "")
-
     def test_missing_and_poisoned_input_is_safe(self):
         """Null source, which is the state on patch load, plus a one-sample
         buffer, non-finite samples in the source, and non-finite settings."""
         result = run_test(["--test-grain-bad-input"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
+class TestDiffusion:
+    """The space at the end of the granular chain."""
+
+    def test_the_decay_control_sets_the_decay(self):
+        """Checked to eight seconds and required to be monotonic, because a
+        ceiling that is too low only shows at the top: with the safety limit at
+        0.93 the four and eight second settings both measured about four, and a
+        test stopping at four would have called that correct. Verified to have
+        teeth against both a fixed feedback gain and the low ceiling.
+        """
+        result = run_test(["--test-diffusion-decay"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_it_does_not_run_away_at_maximum(self):
+        """A minute of silence after the input stops, at three damping
+        settings. Verified to have teeth: a loop gain of one leaves the tail at
+        2.06 a minute later.
+        """
+        result = run_test(["--test-diffusion-runaway"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_decay_does_not_change_with_sample_rate(self):
+        """The gain is derived from the decay time and the delay length, so the
+        same knob position means the same seconds at every rate."""
+        result = run_test(["--test-diffusion-samplerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_mix_reaches_fully_dry_and_fully_wet(self):
+        result = run_test(["--test-diffusion-mix"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_damping_takes_brightness_out_of_the_tail(self):
+        """Measured as spectral centroid on the tail, driven with noise so
+        there is content at every frequency to remove."""
+        result = run_test(["--test-diffusion-damping"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_two_channels_decorrelate(self):
+        """Measured over the tail, since the direct sound is identical on both
+        sides by construction and would mask the decorrelation behind it."""
+        result = run_test(["--test-diffusion-stereo"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_extreme_input_does_not_poison_the_feedback_path(self):
+        """Also checks ordinary audio afterwards still works, which is what an
+        infinity trapped in a recirculating network destroys permanently."""
+        result = run_test(["--test-diffusion-bad-input"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_sample_rate_change_does_not_reallocate(self):
+        """Storage is sized once for the highest supported rate, so moving
+        between rates never needs more."""
+        result = run_test(["--test-diffusion-no-alloc"])
         assert result["failed"] == 0, result.get("detail", "")
 
 

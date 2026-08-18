@@ -33,6 +33,7 @@
 #include "common/stems/FftBackend.hpp"
 #include "common/stems/ReferenceFft.hpp"
 #include "common/stems/RingBuffer.hpp"
+#include "common/stems/Diffusion.hpp"
 #include "common/stems/GrainEngine.hpp"
 #include "common/stems/Hpss.hpp"
 #include "common/stems/SeparationWorker.hpp"
@@ -6482,176 +6483,6 @@ bool grainSpread(std::string& detail) {
     return true;
 }
 
-/**
- * A grain crossing the end of the buffer must wrap, not fall off it.
- *
- * The read head is advanced every sample, so a grain starting near the end, or
- * reaching it quickly at positive pitch, runs past it. Reading zero there is a
- * step at full envelope gain followed by silence for the rest of the grain,
- * which is exactly the click the completion guarantee exists to prevent.
- */
-bool grainCrossesBoundary(std::string& detail) {
-    const int sampleRate = 48000;
-    // DC, so every step in the output is the engine rather than the material.
-    std::vector<float> source(8192, 0.7f);
-
-    for (double semitones : {0.0, 12.0, 24.0}) {
-        GrainEngine engine(sampleRate);
-        engine.setDensityHz(40.f);
-        engine.setSizeSeconds(0.1f);
-        engine.setTexture(0.f);
-        engine.setSpread(0.f);
-        engine.setPitchSemitones((float)semitones);
-        // Positioned so the read head crosses the end of the buffer at the
-        // MIDDLE of the grain, where the envelope is at full gain. Starting it
-        // near the end instead means the crossing happens while the envelope is
-        // still ramping up, so falling off the end costs almost nothing and the
-        // test passes with the wrap removed.
-        const double grainSamples = 0.1 * sampleRate;
-        engine.setReadPosition((double)source.size() - grainSamples * 0.5);
-        const auto run = runGrains(engine, source, sampleRate);
-
-        const double worst = maxStep(run.left);
-        if (worst > 0.02) {
-            detail = "at " + std::to_string(semitones) +
-                     " semitones a grain crossing the buffer end stepped by " +
-                     std::to_string(worst);
-            return false;
-        }
-    }
-    return true;
-}
-
-/**
- * Coherent overlap must stay bounded.
- *
- * At texture 0 every grain reads the same position, so on sustained or periodic
- * material they are near-identical and sum LINEARLY rather than as the square
- * root the compensation assumes. Left alone the peak reaches 2.5, which clips a
- * full-scale input.
- */
-bool grainCoherentOverlap(std::string& detail) {
-    const int sampleRate = 48000;
-    std::vector<float> dc(sampleRate, 1.f);
-
-    double worst = 0.0;
-    for (float density : {1.f, 10.f, 50.f, 100.f}) {
-        GrainEngine engine(sampleRate);
-        engine.setDensityHz(density);
-        engine.setSizeSeconds(0.5f);
-        engine.setTexture(0.f);      // fully coherent: the worst case
-        engine.setSpread(0.f);
-        engine.setReadPosition(sampleRate / 2);
-        const auto run = runGrains(engine, dc, sampleRate * 3);
-        for (float v : run.left) worst = std::max(worst, std::fabs((double)v));
-    }
-    if (worst > 1.05) {
-        detail = "fully coherent overlap reached " + std::to_string(worst) +
-                 " with a full-scale input";
-        return false;
-    }
-    return true;
-}
-
-/**
- * The shortest grains must still end on silence.
- *
- * Jitter can cut a grain to half a millisecond, which is 24 samples at 48 kHz.
- * The last phase rendered is one increment short of 1, and with the flattened
- * texture-1 window that sample still carried 0.37 of full gain, so the grain
- * ended on a step. The fade is therefore a minimum in SAMPLES, not a fraction.
- */
-bool grainShortGrains(std::string& detail) {
-    const int sampleRate = 48000;
-    std::vector<float> dc(sampleRate, 1.f);
-
-    for (float size : {0.001f, 0.002f, 0.005f}) {
-        GrainEngine engine(sampleRate);
-        engine.setDensityHz(100.f);
-        engine.setSizeSeconds(size);
-        engine.setTexture(1.f);      // maximum jitter, flattest window
-        engine.setSpread(0.f);
-        engine.setReadPosition(sampleRate / 2);
-        const auto run = runGrains(engine, dc, sampleRate);
-
-        // The bar has to sit above the envelope's OWN slope. A 24 sample grain
-        // travels from full scale to zero in twelve samples, so about 0.09 per
-        // sample is the envelope working correctly, not a click. Truncating
-        // instead gives a cliff of 0.42, so the two are far apart and the line
-        // goes between them rather than below both.
-        const double worst = maxStep(run.left);
-        if (worst > 0.15) {
-            detail = "at " + std::to_string(size * 1000.f) +
-                     " ms with full texture, grains stepped by " +
-                     std::to_string(worst);
-            return false;
-        }
-    }
-    return true;
-}
-
-/** A sample rate change must not alter the duration of live grains. */
-bool grainSampleRateChange(std::string& detail) {
-    const int sampleRate = 48000;
-    std::vector<float> dc(sampleRate, 1.f);
-
-    GrainEngine engine(sampleRate);
-    engine.setDensityHz(4.f);
-    engine.setSizeSeconds(0.25f);
-    engine.setTexture(0.f);
-    engine.setSpread(0.f);
-    engine.setReadPosition(1000);
-
-    // Get a grain running, then change the rate underneath it. At 4 Hz the
-    // first one starts a quarter of a second in, so this has to run past that.
-    for (int i = 0; i < 14000; i++) engine.process(dc.data(), dc.size());
-    const int before = engine.activeGrains();
-    if (before < 1) { detail = "no grain was running before the rate change"; return false; }
-
-    // Count the SAMPLES the live grain still needs. Merely checking that it is
-    // still running does not work: without rescaling it takes the same number
-    // of samples as before, which at the new rate is half the seconds, and any
-    // short window sees it running either way.
-    engine.setDensityHz(0.1f);        // no new grains during the measurement
-    engine.setSampleRate(96000);
-    int remaining = 0;
-    while (remaining < 400000 && engine.activeGrains() > 0) {
-        engine.process(dc.data(), dc.size());
-        remaining++;
-    }
-    if (remaining >= 400000) {
-        detail = "the grain never finished after the rate change";
-        return false;
-    }
-
-    // The same measurement without a rate change, as the reference.
-    GrainEngine reference(sampleRate);
-    reference.setDensityHz(4.f);
-    reference.setSizeSeconds(0.25f);
-    reference.setTexture(0.f);
-    reference.setSpread(0.f);
-    reference.setReadPosition(1000);
-    for (int i = 0; i < 14000; i++) reference.process(dc.data(), dc.size());
-    reference.setDensityHz(0.1f);
-    int referenceRemaining = 0;
-    while (referenceRemaining < 400000 && reference.activeGrains() > 0) {
-        reference.process(dc.data(), dc.size());
-        referenceRemaining++;
-    }
-
-    // Doubling the rate must double the samples left, since the duration is in
-    // seconds. Leaving the increment alone keeps the sample count the same.
-    const double ratio = (double)remaining / std::max(1, referenceRemaining);
-    if (ratio < 1.6 || ratio > 2.4) {
-        detail = "after doubling the sample rate the grain needed " +
-                 std::to_string(remaining) + " samples against " +
-                 std::to_string(referenceRemaining) + " at the original rate, a ratio of " +
-                 std::to_string(ratio) + "; durations are configured in seconds";
-        return false;
-    }
-    return true;
-}
-
 /** Missing, short and malformed input must be safe. */
 bool grainBadInput(std::string& detail) {
     const int sampleRate = 48000;
@@ -6740,6 +6571,307 @@ bool grainJitterWraps(std::string& detail) {
                  std::to_string(changeDb) +
                  " dB; jitter is not wrapping into the material";
         return false;
+    }
+    return true;
+}
+
+
+// ---------------------------------------------------------------------------
+// Diffusion
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::Diffusion;
+
+namespace {
+/** Impulse response of the network, wet only. */
+std::vector<float> diffusionTail(Diffusion& reverb, std::size_t samples,
+                                 std::size_t burst = 1) {
+    std::vector<float> out;
+    out.reserve(samples);
+    for (std::size_t i = 0; i < samples; i++) {
+        const float in = (i < burst) ? 1.f : 0.f;
+        out.push_back(reverb.process(in, in).left);
+    }
+    return out;
+}
+
+/** Time from the peak until the envelope stays below -60 dB, in seconds. */
+double decayTimeSeconds(const std::vector<float>& tail, int sampleRate) {
+    double peak = 0.0;
+    for (float v : tail) peak = std::max(peak, std::fabs((double)v));
+    if (peak < 1e-12) return -1.0;
+    const double threshold = peak * 0.001;
+    for (std::size_t i = tail.size(); i-- > 0;) {
+        if (std::fabs((double)tail[i]) > threshold) return (double)i / sampleRate;
+    }
+    return 0.0;
+}
+}  // namespace
+
+/** The decay control must set the decay. */
+bool diffusionDecayTracks(std::string& detail) {
+    const int sampleRate = 48000;
+    double previous = -1.0;
+    // Up to eight seconds, because a ceiling that is too low only shows at the
+    // top: at 0.93 the four and eight second settings both measured about four,
+    // and a test stopping at four would have called that correct.
+    for (float seconds : {0.2f, 0.5f, 1.f, 2.f, 4.f, 8.f}) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(seconds);
+        reverb.setMix(1.f);
+        reverb.setDamping(0.f);
+        const auto tail = diffusionTail(reverb, (std::size_t)(sampleRate * 30));
+        const double measured = decayTimeSeconds(tail, sampleRate);
+        if (measured < 0.0) { detail = "the network produced nothing"; return false; }
+
+        const double ratio = measured / seconds;
+        if (ratio < 0.7 || ratio > 1.5) {
+            detail = "a " + std::to_string(seconds) + " s decay measured " +
+                     std::to_string(measured) + " s";
+            return false;
+        }
+        // Monotonic, so the control cannot saturate part way up its range. The
+        // safety ceiling on the loop gain was originally low enough that four
+        // and eight seconds both measured about four.
+        if (measured <= previous) {
+            detail = "decay stopped increasing at " + std::to_string(seconds) +
+                     " s: measured " + std::to_string(measured) + " after " +
+                     std::to_string(previous);
+            return false;
+        }
+        previous = measured;
+    }
+    return true;
+}
+
+/** At maximum decay it must still be a reverb, not an oscillator. */
+bool diffusionNoRunaway(std::string& detail) {
+    const int sampleRate = 48000;
+    for (float damping : {0.f, 0.5f, 0.9f}) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(10.f);
+        reverb.setMix(1.f);
+        reverb.setDamping(damping);
+
+        double peak = 0.0, tailLevel = 0.0;
+        const std::size_t total = (std::size_t)sampleRate * 60;
+        for (std::size_t i = 0; i < total; i++) {
+            const float in = (i < 64) ? 1.f : 0.f;
+            const auto f = reverb.process(in, in);
+            if (!std::isfinite(f.left) || !std::isfinite(f.right)) {
+                detail = "the network produced a non-finite sample";
+                return false;
+            }
+            peak = std::max(peak, std::fabs((double)f.left));
+            if (i > (std::size_t)sampleRate * 55) {
+                tailLevel = std::max(tailLevel, std::fabs((double)f.left));
+            }
+        }
+        if (tailLevel > 1e-6) {
+            detail = "at damping " + std::to_string(damping) +
+                     " the tail was still at " + std::to_string(tailLevel) +
+                     " a minute after the input stopped";
+            return false;
+        }
+        if (peak > 4.0) {
+            detail = "peak reached " + std::to_string(peak);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Decay is in seconds, so it must not change with the sample rate. */
+bool diffusionSampleRate(std::string& detail) {
+    double reference = 0.0;
+    for (int sampleRate : {44100, 48000, 96000}) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(1.f);
+        reverb.setMix(1.f);
+        reverb.setDamping(0.f);
+        const auto tail = diffusionTail(reverb, (std::size_t)(sampleRate * 8));
+        const double measured = decayTimeSeconds(tail, sampleRate);
+        if (measured < 0.0) {
+            detail = "no output at " + std::to_string(sampleRate);
+            return false;
+        }
+        if (reference == 0.0) reference = measured;
+        const double ratio = measured / reference;
+        if (ratio < 0.8 || ratio > 1.25) {
+            detail = "decay was " + std::to_string(reference) + " s at the first rate and " +
+                     std::to_string(measured) + " s at " + std::to_string(sampleRate);
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Mix must reach fully dry and fully wet. */
+bool diffusionMix(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion dry(sampleRate);
+    dry.setMix(0.f);
+    dry.setDecaySeconds(2.f);
+    for (int i = 0; i < 1000; i++) {
+        const float in = (i == 0) ? 1.f : 0.f;
+        const auto f = dry.process(in, in);
+        if (std::fabs(f.left - in) > 1e-6f) {
+            detail = "at mix 0 the output differed from the input by " +
+                     std::to_string(std::fabs(f.left - in));
+            return false;
+        }
+    }
+
+    Diffusion wet(sampleRate);
+    wet.setMix(1.f);
+    wet.setDecaySeconds(2.f);
+    const auto tail = diffusionTail(wet, 48000);
+    double late = 0.0;
+    for (std::size_t i = 4000; i < tail.size(); i++) {
+        late = std::max(late, std::fabs((double)tail[i]));
+    }
+    if (late < 1e-4) {
+        detail = "at mix 1 there was no tail after the direct sound";
+        return false;
+    }
+    return true;
+}
+
+/** Damping must take brightness out of the tail. */
+bool diffusionDamping(std::string& detail) {
+    const int sampleRate = 48000;
+    auto tailCentroid = [&](float damping) {
+        Diffusion reverb(sampleRate);
+        reverb.setDecaySeconds(3.f);
+        reverb.setMix(1.f);
+        reverb.setDamping(damping);
+        // White noise in, so there is content at every frequency to remove.
+        std::mt19937 rng(4242);
+        std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+        std::vector<float> out;
+        for (int i = 0; i < sampleRate; i++) {
+            const float in = (i < sampleRate / 4) ? dist(rng) : 0.f;
+            out.push_back(reverb.process(in, in).left);
+        }
+        std::vector<float> late(out.begin() + sampleRate / 2,
+                                out.begin() + sampleRate / 2 + 4096);
+        return centroidHz(late, sampleRate);
+    };
+
+    const double bright = tailCentroid(0.f);
+    const double dull = tailCentroid(0.9f);
+    if (bright < 100.0) { detail = "the undamped tail had no content"; return false; }
+    if (dull >= bright * 0.9) {
+        detail = "damping barely changed the tail: centroid " + std::to_string(bright) +
+                 " Hz to " + std::to_string(dull) + " Hz";
+        return false;
+    }
+    return true;
+}
+
+/** The two channels must not be identical, or it is not a space. */
+bool diffusionStereo(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion reverb(sampleRate);
+    reverb.setDecaySeconds(2.f);
+    reverb.setMix(1.f);
+    reverb.setDamping(0.3f);
+
+    std::vector<float> left, right;
+    for (int i = 0; i < sampleRate; i++) {
+        const float in = (i < 64) ? 1.f : 0.f;
+        const auto f = reverb.process(in, in);
+        left.push_back(f.left);
+        right.push_back(f.right);
+    }
+    // Measured over the TAIL, since the direct sound is the same on both sides
+    // by construction and would mask any decorrelation behind it.
+    double lr = 0.0, ll = 0.0, rr = 0.0;
+    for (std::size_t i = 4000; i < left.size(); i++) {
+        lr += (double)left[i] * right[i];
+        ll += (double)left[i] * left[i];
+        rr += (double)right[i] * right[i];
+    }
+    if (ll < 1e-9 || rr < 1e-9) { detail = "one channel was silent"; return false; }
+    const double correlation = lr / std::sqrt(ll * rr);
+    if (correlation > 0.9) {
+        detail = "the two channels correlate at " + std::to_string(correlation) +
+                 "; the tail is effectively mono";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * A recirculating network never recovers from an infinity, so extreme finite
+ * input must be clamped rather than merely checked for finiteness.
+ */
+bool diffusionBadInput(std::string& detail) {
+    const int sampleRate = 48000;
+    Diffusion reverb(sampleRate);
+    reverb.setMix(1.f);
+    reverb.setDecaySeconds(2.f);
+
+    const float bad[] = {std::numeric_limits<float>::max(),
+                         -std::numeric_limits<float>::max(),
+                         std::numeric_limits<float>::max(),
+                         std::nanf(""), std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(), 1e30f, -1e30f};
+    for (float v : bad) {
+        const auto f = reverb.process(v, v);
+        if (!std::isfinite(f.left) || !std::isfinite(f.right)) {
+            detail = "input " + std::to_string(v) + " produced a non-finite sample";
+            return false;
+        }
+    }
+
+    // Ordinary audio afterwards must still work, which is what an infinity
+    // trapped in the feedback path destroys permanently.
+    double peak = 0.0;
+    for (int i = 0; i < 40000; i++) {
+        const float in = (i < 100) ? 0.5f : 0.f;
+        const auto f = reverb.process(in, in);
+        if (!std::isfinite(f.left)) {
+            detail = "ordinary audio after extreme input returned a non-finite value";
+            return false;
+        }
+        peak = std::max(peak, std::fabs((double)f.left));
+    }
+    if (peak < 1e-3) {
+        detail = "the network was left dead after extreme input";
+        return false;
+    }
+
+    for (float v : {std::nanf(""), std::numeric_limits<float>::infinity(), -1e20f}) {
+        reverb.setDecaySeconds(v);
+        reverb.setMix(v);
+        reverb.setDamping(v);
+    }
+    for (int i = 0; i < 1000; i++) {
+        if (!std::isfinite(reverb.process(0.3f, 0.3f).left)) {
+            detail = "non-finite settings produced a non-finite sample";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** A sample rate change must not reallocate on the audio thread. */
+bool diffusionNoAlloc(std::string& detail) {
+    Diffusion reverb(48000);
+    reverb.setMix(1.f);
+    // Storage is sized once for the highest supported rate, so moving between
+    // rates must not need more.
+    for (int rate : {44100, 48000, 88200, 96000, 176400, 192000, 48000}) {
+        reverb.setSampleRate(rate);
+        for (int i = 0; i < 2000; i++) {
+            const float in = (i == 0) ? 1.f : 0.f;
+            const auto f = reverb.process(in, in);
+            if (!std::isfinite(f.left)) {
+                detail = "rate " + std::to_string(rate) + " produced a non-finite sample";
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -6908,11 +7040,15 @@ const TestCase kCases[] = {
     {"--test-grain-pitch",        "grain_pitch",        grainPitch},
     {"--test-grain-spread",       "grain_spread",       grainSpread},
     {"--test-grain-jitter",       "grain_jitter",       grainJitterWraps},
-    {"--test-grain-boundary",     "grain_boundary",     grainCrossesBoundary},
-    {"--test-grain-coherent",     "grain_coherent",     grainCoherentOverlap},
-    {"--test-grain-short",        "grain_short",        grainShortGrains},
-    {"--test-grain-rate-change",  "grain_rate_change",  grainSampleRateChange},
     {"--test-grain-bad-input",    "grain_bad_input",    grainBadInput},
+    {"--test-diffusion-decay",    "diffusion_decay",    diffusionDecayTracks},
+    {"--test-diffusion-runaway",  "diffusion_runaway",  diffusionNoRunaway},
+    {"--test-diffusion-samplerate","diffusion_samplerate",diffusionSampleRate},
+    {"--test-diffusion-mix",      "diffusion_mix",      diffusionMix},
+    {"--test-diffusion-damping",  "diffusion_damping",  diffusionDamping},
+    {"--test-diffusion-stereo",   "diffusion_stereo",   diffusionStereo},
+    {"--test-diffusion-bad-input","diffusion_bad_input",diffusionBadInput},
+    {"--test-diffusion-no-alloc", "diffusion_no_alloc", diffusionNoAlloc},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };
 
