@@ -1193,6 +1193,184 @@ class TestWavetableExtract:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestWavetableOsc:
+    """Playing the extracted frames, with mip-mapped antialiasing."""
+
+    def test_the_alias_floor_is_low_and_flat_across_the_range(self):
+        """A frame repeats exactly, so folded content lands on fixed inharmonic
+        partials rather than spreading into noise. That reads as a metallic ring
+        under the note, and a floor that climbs with pitch is what makes it
+        noticeable.
+
+        Measured by classifying every significant spectral peak as harmonic or
+        not. Probing a handful of fixed frequencies does not work: aliases land
+        at |k*f0 - m*sr|, and a first attempt measured almost no difference
+        between a mip-mapped and a raw oscillator purely because it looked in
+        the wrong places. Verified to have teeth: without the chain the floor
+        climbs from -25.9 dB to -12.6 dB over five octaves, where with it the
+        floor holds flat at about -31 dB.
+        """
+        result = run_test(["--test-osc-alias"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_pitch_tracks_one_volt_per_octave(self):
+        """Including that coarse and fine add on top, in semitones."""
+        result = run_test(["--test-osc-pitch"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_pitch_does_not_depend_on_sample_rate(self):
+        result = run_test(["--test-osc-samplerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_swapping_frames_does_not_click(self):
+        """Measured against the steady-state step of EACH frame played alone.
+
+        Comparing the transition against only the first frame's step is not a
+        test: the second frame here is a square whose own edge is four times
+        larger than anything in a smooth frame, so the first version of this
+        failed on the material rather than on any click. Verified to have teeth
+        against both a hard switch and fading into a chain that is still being
+        built.
+        """
+        result = run_test(["--test-osc-frame-change"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_slow_morph_still_reaches_new_frames(self):
+        """While a crossfade runs, the incoming side is being sounded.
+
+        Rebuilding it because a newer frame arrived cancels the fade before the
+        sides can swap, and with a morph slower than the extractor's publish
+        interval that happens on every publish. The default extractor publishes
+        roughly every 85 ms while morph 0 fades for a second, so this is the
+        ordinary case, not an extreme.
+
+        Compared by SPECTRUM, not sample by sample: the two runs sit at
+        different points in the cycle, so an identical signal can differ by
+        twice its amplitude. An earlier version compared waveforms and reported
+        a difference of 1.66 between two runs of the same material. Verified to
+        have teeth.
+        """
+        result = run_test(["--test-osc-slow-morph"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_defaults_crossfade_without_touching_a_setter(self):
+        """The morph coefficient was only computed inside the setters, so at the
+        documented defaults it stayed zero and the crossfade never advanced.
+
+        The test configures NOTHING, not even the sample rate, because
+        setSampleRate also recomputes the coefficient and a test that calls it
+        exercises the setter rather than the defaults. Verified to have teeth.
+        """
+        result = run_test(["--test-osc-defaults"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_reset_leaves_the_oscillator_able_to_play(self):
+        """Clearing the build while keeping the frame it was for meant a later
+        offer of that same frame saw neither a changed count nor a running
+        build, so it could never become playable.
+
+        The case that matters is a reset partway through building a SECOND frame
+        while a first is already playing. With nothing playing yet the
+        not-ready check restarts the build anyway, so that path passes either
+        way. Verified to have teeth.
+        """
+        result = run_test(["--test-osc-reset"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_mip_chain_covers_the_whole_pitch_range(self):
+        """Eight levels ended at a sixteen sample table carrying eight
+        harmonics, valid only to about 3 kHz, while an ordinary 1 V/oct input
+        crosses that by 3.5 V and keeps going. Past the end of the chain the
+        selection saturates and the content aliases. Verified to have teeth:
+        eight levels gives a -15.8 dB floor at 4.5 V.
+        """
+        result = run_test(["--test-osc-range"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_it_works_at_the_extractors_publish_cadence(self):
+        """The integration every other test here misses.
+
+        They all offer the same frame count repeatedly, which is not what
+        happens: the extractor publishes a new count every sixteen calls while
+        this chain takes about sixty-five. Verified to have teeth: restarting on
+        any newer frame leaves the oscillator SILENT for the life of the patch,
+        peak 0.000000.
+        """
+        result = run_test(["--test-osc-cadence"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_first_frame_fades_in(self):
+        """Before any chain is ready the output is exact silence, so declaring
+        the first completed chain current takes it from zero to full level in
+        one sample. Verified to have teeth: a step of 0.999 against a
+        steady-state step of 0.034.
+        """
+        result = run_test(["--test-osc-first-frame"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_table_stops_contributing_at_its_nyquist_crossing(self):
+        """Blending between the entries either side of the exact position keeps
+        the lower one for the whole octave after it has stopped fitting, which
+        leaves a band of pitches playing a harmonic the chain should have
+        removed. Verified to have teeth: without the shift, a frame with a
+        strong 48th harmonic measures -18.6 dB where the shift gives -25.2.
+        """
+        result = run_test(["--test-osc-crossover"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_crossing_a_mip_boundary_does_not_jump_the_timbre(self):
+        """Adjacent tables differ by a whole octave of bandwidth, so a harmonic
+        present in one is filtered out of the next. Selecting exactly one entry
+        means the smallest pitch modulation across a boundary is an abrupt
+        timbral step, so the two entries are blended by frequency instead.
+        Verified to have teeth: switching outright also costs 6 dB of alias
+        floor at 3 V.
+        """
+        result = run_test(["--test-osc-mip-boundary"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_top_of_the_range_carries_no_harmonic_above_nyquist(self):
+        """The decimation filter is half-band, so its response at the new
+        Nyquist is 0.5 rather than zero and that bin survives at every level.
+
+        It only matters at the end of the chain: the four sample table carries a
+        fundamental and a second harmonic, and above about 12 kHz that second
+        harmonic is itself above output Nyquist and folds back. Verified to have
+        teeth: keeping it gives a -5.5 dB alias floor at 6 V.
+        """
+        result = run_test(["--test-osc-top-range"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_building_the_chain_is_amortised(self):
+        """Charged by what a slot actually costs: one copy at level 0, a whole
+        run of the fifteen tap filter above it.
+
+        An upper bound alone does not test the accounting, since charging every
+        slot one unit also stays under the budget while doing fifteen times the
+        work. The CALL COUNT is what exposes it, because it follows the true
+        cost. Also checks that an offer after the build completes reports no
+        work, since leaving the counter stale made a finished build look like it
+        was still running. Verified to have teeth on all three.
+        """
+        result = run_test(["--test-osc-amortised"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_an_oscillator_with_no_frame_is_silent(self):
+        """This is the state on patch load. Also covers a null frame offer."""
+        result = run_test(["--test-osc-empty"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_hostile_input_does_not_produce_a_non_finite_sample(self):
+        """Also checks a sane input straight afterwards still works, so a bad
+        value cannot leave the phase permanently poisoned."""
+        result = run_test(["--test-osc-bad-input"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_level_control_scales_and_reaches_silence(self):
+        result = run_test(["--test-osc-level"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 class TestExtremeInput:
     """Hostile but legal input, across every module at once."""
 

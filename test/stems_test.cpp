@@ -37,6 +37,7 @@
 #include "common/stems/SeparationWorker.hpp"
 #include "common/stems/StemMixer.hpp"
 #include "common/stems/WavetableExtract.hpp"
+#include "common/stems/WavetableOsc.hpp"
 #include "common/stems/Quantizer.hpp"
 #include "common/stems/ScaleDetect.hpp"
 #include "common/stems/Yin.hpp"
@@ -5013,6 +5014,862 @@ bool wtBadInput(std::string& detail) {
     return true;
 }
 
+
+// ---------------------------------------------------------------------------
+// WavetableOsc
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::WavetableOsc;
+
+namespace {
+/** A frame holding @p harmonics of a sawtooth, normalised. */
+std::vector<float> harmonicFrame(int harmonics) {
+    std::vector<float> frame(WavetableOsc::kFrameSize, 0.f);
+    for (std::size_t i = 0; i < frame.size(); i++) {
+        const double phase = (double)i / (double)frame.size();
+        double v = 0.0;
+        for (int k = 1; k <= harmonics; k++) v += std::sin(2 * M_PI * k * phase) / k;
+        frame[i] = (float)(v * 0.5);
+    }
+    return frame;
+}
+
+/** Build the mip chain to completion. */
+void primeOsc(WavetableOsc& osc, const std::vector<float>& frame, uint64_t count = 1) {
+    for (int i = 0; i < 200; i++) osc.offerFrame(frame.data(), count);
+}
+
+/**
+ * Alias floor of @p out, in dB relative to the harmonic content.
+ *
+ * Every significant spectral peak is classified by whether it sits on a
+ * multiple of f0. Probing a handful of fixed frequencies instead does not work:
+ * aliases land at |k*f0 - m*sr|, which is nowhere near an arbitrary grid, and a
+ * first attempt at this measured almost no difference between a mip-mapped and
+ * a raw oscillator purely because it was looking in the wrong places.
+ */
+double aliasFloorDb(const std::vector<float>& out, double f0, int sampleRate) {
+    const std::size_t n = 16384;
+    ReferenceFft fft(n);
+    std::vector<float> in(n, 0.f), spectrum(fft.spectrumLength(), 0.f);
+    for (std::size_t i = 0; i < n && i < out.size(); i++) {
+        const double w = 0.5 * (1.0 - std::cos(2 * M_PI * (double)i / (double)n));
+        in[i] = (float)(out[i] * w);
+    }
+    fft.forward(in.data(), spectrum.data());
+
+    const double binHz = (double)sampleRate / (double)n;
+    double harmonic = 0.0, alias = 0.0;
+    for (std::size_t b = 1; b < fft.numBins(); b++) {
+        const double re = spectrum[2 * b], im = spectrum[2 * b + 1];
+        const double mag = std::sqrt(re * re + im * im);
+        if (mag < 1e-5) continue;
+        const double f = (double)b * binHz;
+        const double k = std::round(f / f0);
+        const double distance = (k >= 1.0) ? std::fabs(f - k * f0) / binHz : 1e9;
+        if (distance <= 2.0) harmonic += mag * mag;
+        else alias += mag * mag;
+    }
+    return 10.0 * std::log10(alias / std::max(harmonic, 1e-30));
+}
+
+/** Dominant frequency of @p out, by parabolic peak interpolation. */
+double dominantHz(const std::vector<float>& out, int sampleRate) {
+    const std::size_t n = 16384;
+    ReferenceFft fft(n);
+    std::vector<float> in(n, 0.f), spectrum(fft.spectrumLength(), 0.f);
+    for (std::size_t i = 0; i < n && i < out.size(); i++) {
+        const double w = 0.5 * (1.0 - std::cos(2 * M_PI * (double)i / (double)n));
+        in[i] = (float)(out[i] * w);
+    }
+    fft.forward(in.data(), spectrum.data());
+    std::size_t best = 1;
+    double bestMag = 0.0;
+    std::vector<double> mags(fft.numBins(), 0.0);
+    for (std::size_t b = 1; b < fft.numBins(); b++) {
+        const double re = spectrum[2 * b], im = spectrum[2 * b + 1];
+        mags[b] = std::sqrt(re * re + im * im);
+        if (mags[b] > bestMag) { bestMag = mags[b]; best = b; }
+    }
+    double offset = 0.0;
+    if (best > 1 && best + 1 < fft.numBins()) {
+        const double a = mags[best - 1], b2 = mags[best], c = mags[best + 1];
+        const double denom = 2.0 * (2.0 * b2 - a - c);
+        if (std::fabs(denom) > 1e-18) offset = (c - a) / denom;
+        if (!(offset > -0.5 && offset < 0.5)) offset = 0.0;
+    }
+    return ((double)best + offset) * (double)sampleRate / (double)n;
+}
+
+/**
+ * Phase-independent distance between two oscillator outputs, 0 to 1.
+ *
+ * Comparing sample by sample does not work: the two runs are at different
+ * points in the cycle, so a signal identical in every way that matters can
+ * differ by twice its amplitude. Harmonic magnitudes carry the timbre and
+ * ignore the phase, which is exactly the comparison wanted here.
+ */
+double spectralDistance(const std::vector<float>& a, const std::vector<float>& b,
+                        int sampleRate) {
+    const std::size_t n = 8192;
+    ReferenceFft fft(n);
+    auto magnitudes = [&](const std::vector<float>& x) {
+        std::vector<float> in(n, 0.f), spectrum(fft.spectrumLength(), 0.f);
+        for (std::size_t i = 0; i < n && i < x.size(); i++) {
+            const double w = 0.5 * (1.0 - std::cos(2 * M_PI * (double)i / (double)n));
+            in[i] = (float)(x[i] * w);
+        }
+        fft.forward(in.data(), spectrum.data());
+        std::vector<double> mags(fft.numBins(), 0.0);
+        for (std::size_t k = 1; k < fft.numBins(); k++) {
+            const double re = spectrum[2 * k], im = spectrum[2 * k + 1];
+            mags[k] = std::sqrt(re * re + im * im);
+        }
+        return mags;
+    };
+    (void)sampleRate;
+    const auto ma = magnitudes(a);
+    const auto mb = magnitudes(b);
+    double num = 0.0, den = 0.0;
+    for (std::size_t k = 1; k < ma.size(); k++) {
+        num += std::fabs(ma[k] - mb[k]);
+        den += std::max(ma[k], mb[k]);
+    }
+    return (den > 1e-12) ? (num / den) : 0.0;
+}
+
+std::vector<float> renderOsc(WavetableOsc& osc, float volts, std::size_t n = 16384) {
+    std::vector<float> out(n, 0.f);
+    for (auto& s : out) s = osc.process(volts);
+    return out;
+}
+}  // namespace
+
+/**
+ * The alias floor must be low AND must not rise with pitch.
+ *
+ * A frame repeats exactly, so folded content lands on fixed inharmonic partials
+ * rather than spreading into noise. That reads as a metallic ring under the
+ * note, and a floor that climbs with pitch is exactly what makes it noticeable.
+ */
+bool oscAliasFloor(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto frame = harmonicFrame(512);
+    double worst = -1e9, best = 1e9;
+    for (double volts : {-1.0, 0.0, 1.0, 2.0, 3.0}) {
+        WavetableOsc osc;
+        osc.setSampleRate(sampleRate);
+        osc.setLevel(1.f);
+        osc.setMorph(1.f);
+        primeOsc(osc, frame);
+        const auto out = renderOsc(osc, (float)volts);
+        const double f0 = 261.6255653005986 * std::exp2(volts);
+        const double floorDb = aliasFloorDb(out, f0, sampleRate);
+        worst = std::max(worst, floorDb);
+        best = std::min(best, floorDb);
+        if (floorDb > -25.0) {
+            detail = "alias floor at " + std::to_string(volts) + " V was " +
+                     std::to_string(floorDb) + " dB";
+            return false;
+        }
+    }
+    // Flat across the range, not just low at the bottom. Without the mip chain
+    // the floor climbs from -25.9 dB to -12.6 dB over these five octaves.
+    if (worst - best > 8.0) {
+        detail = "the alias floor varies by " + std::to_string(worst - best) +
+                 " dB across the range, from " + std::to_string(best) + " to " +
+                 std::to_string(worst);
+        return false;
+    }
+    return true;
+}
+
+/** Pitch must track 1 V/octave. */
+bool oscPitchTracking(std::string& detail) {
+    const int sampleRate = 48000;
+    // A single harmonic, so the dominant peak is unambiguous.
+    const auto frame = harmonicFrame(1);
+    for (double volts : {-2.0, -1.0, 0.0, 1.0, 2.0}) {
+        WavetableOsc osc;
+        osc.setSampleRate(sampleRate);
+        osc.setLevel(1.f);
+        osc.setMorph(1.f);
+        primeOsc(osc, frame);
+        const auto out = renderOsc(osc, (float)volts);
+        const double expected = 261.6255653005986 * std::exp2(volts);
+        const double measured = dominantHz(out, sampleRate);
+        const double cents = 1200.0 * std::log2(measured / expected);
+        if (std::fabs(cents) > 15.0) {
+            detail = std::to_string(volts) + " V gave " + std::to_string(measured) +
+                     " Hz, expected " + std::to_string(expected) + " (" +
+                     std::to_string(cents) + " cents)";
+            return false;
+        }
+    }
+
+    // Coarse and fine must add on top, in semitones.
+    WavetableOsc osc;
+    osc.setSampleRate(sampleRate);
+    osc.setLevel(1.f);
+    osc.setMorph(1.f);
+    primeOsc(osc, frame);
+    osc.setCoarse(12.f);
+    const double up = dominantHz(renderOsc(osc, 0.f), sampleRate);
+    osc.setCoarse(0.f);
+    const double base = dominantHz(renderOsc(osc, 0.f), sampleRate);
+    const double ratio = up / std::max(base, 1e-9);
+    if (std::fabs(ratio - 2.0) > 0.05) {
+        detail = "twelve semitones of coarse gave a ratio of " + std::to_string(ratio);
+        return false;
+    }
+    return true;
+}
+
+/** Pitch must not depend on the sample rate. */
+bool oscSampleRate(std::string& detail) {
+    const auto frame = harmonicFrame(1);
+    for (double volts : {0.0, 1.0}) {
+        double reference = 0.0;
+        for (int sampleRate : {44100, 48000, 96000}) {
+            WavetableOsc osc;
+            osc.setSampleRate(sampleRate);
+            osc.setLevel(1.f);
+            osc.setMorph(1.f);
+            primeOsc(osc, frame);
+            const double measured = dominantHz(renderOsc(osc, (float)volts), sampleRate);
+            if (reference == 0.0) reference = measured;
+            const double cents = 1200.0 * std::log2(measured / reference);
+            if (std::fabs(cents) > 15.0) {
+                detail = "sample rate " + std::to_string(sampleRate) + " shifted " +
+                         std::to_string(volts) + " V by " + std::to_string(cents) +
+                         " cents";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * Swapping frames must not click, and morph must not zipper.
+ *
+ * The oscillator crossfades between two complete chains. Fading into one that
+ * is still being built plays whatever the previous frame left in the unwritten
+ * part, which is a burst of the wrong waveform.
+ */
+bool oscFrameChangeIsClickFree(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto first = harmonicFrame(8);
+    // A very different frame, so a hard switch would be unmistakable.
+    std::vector<float> second(WavetableOsc::kFrameSize, 0.f);
+    for (std::size_t i = 0; i < second.size(); i++) {
+        second[i] = (i < second.size() / 2) ? 0.9f : -0.9f;
+    }
+
+    // The bar is the steady-state step of EACH frame played on its own.
+    // Comparing the transition against only the first frame's step is not a
+    // test: the second frame here is a square, whose own edge is four times
+    // larger than anything in a smooth frame, so the measurement failed on the
+    // material rather than on any click.
+    auto steadyStep = [&](const std::vector<float>& frame) {
+        WavetableOsc osc;
+        osc.setSampleRate(sampleRate);
+        osc.setLevel(1.f);
+        osc.setMorph(1.f);
+        primeOsc(osc, frame);
+        return maxStep(renderOsc(osc, 0.f, 8000));
+    };
+    const double bar = std::max(steadyStep(first), steadyStep(second));
+
+    for (float morph : {0.f, 0.3f, 0.7f, 1.f}) {
+        WavetableOsc osc;
+        osc.setSampleRate(sampleRate);
+        osc.setLevel(1.f);
+        osc.setMorph(morph);
+        primeOsc(osc, first, 1);
+
+        std::vector<float> out;
+        out.reserve(48000);
+        for (int i = 0; i < 8000; i++) {
+            osc.offerFrame(first.data(), 1);
+            out.push_back(osc.process(0.f));
+        }
+        for (int i = 0; i < 40000; i++) {
+            osc.offerFrame(second.data(), 2);
+            out.push_back(osc.process(0.f));
+        }
+
+        const double worst = maxStep(out);
+        if (worst > bar * 1.2 + 1e-3) {
+            detail = "morph " + std::to_string(morph) + ": swapping frames stepped by " +
+                     std::to_string(worst) + " against a steady-state step of " +
+                     std::to_string(bar);
+            return false;
+        }
+
+        // A slow morph must actually be slow, and a fast one fast, or the
+        // control does nothing and this test proves only that nothing changed.
+        if (morph <= 0.f) {
+            // Two thirds of a second in, a one second fade is still moving.
+            const double early = out[8000 + 100];
+            const double late = out[8000 + 30000];
+            if (std::fabs(early - late) < 1e-6) {
+                detail = "at morph 0 the output did not change across the fade";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * A slow morph must smear toward newer frames, not freeze on the first one.
+ *
+ * While a crossfade runs, the incoming side is being sounded. Rebuilding it
+ * because a newer frame arrived cancels the fade before the sides can swap, and
+ * with a morph slower than the extractor's publish interval that happens on
+ * every publish. The default morph publishes roughly every 85 ms while morph 0
+ * fades for a second, so this is the ordinary case rather than an extreme.
+ */
+bool oscSlowMorphStillTracks(std::string& detail) {
+    const auto first = harmonicFrame(4);
+    std::vector<float> second(WavetableOsc::kFrameSize, 0.f);
+    for (std::size_t i = 0; i < second.size(); i++) {
+        second[i] = (i < second.size() / 2) ? 0.8f : -0.8f;
+    }
+
+    WavetableOsc osc;
+    osc.setSampleRate(48000);
+    osc.setLevel(1.f);
+    osc.setMorph(0.f);            // the slowest fade available
+    primeOsc(osc, first, 1);
+
+    std::vector<float> before = renderOsc(osc, 0.f, 4000);
+
+    // New frames arriving far faster than the fade can follow, exactly as the
+    // extractor publishes them.
+    uint64_t count = 2;
+    std::vector<float> out;
+    for (int block = 0; block < 400; block++) {
+        for (int i = 0; i < 256; i++) {
+            osc.offerFrame(second.data(), count);
+            out.push_back(osc.process(0.f));
+        }
+        count++;   // a new frame every block
+    }
+
+    // It must CONVERGE on the new material, not merely wobble toward it.
+    //
+    // Checking only that the output moved is not enough: a fade that is
+    // repeatedly cancelled and restarted still blends a little each time, so it
+    // drifts without ever arriving. The tail is therefore compared against the
+    // second frame played on its own.
+    WavetableOsc reference;
+    reference.setSampleRate(48000);
+    reference.setLevel(1.f);
+    reference.setMorph(1.f);
+    primeOsc(reference, second, 1);
+    const auto target = renderOsc(reference, 0.f, 4000);
+
+    std::vector<float> tail(out.end() - (long)target.size(), out.end());
+    const double distance = spectralDistance(tail, target, 48000);
+    if (distance > 0.25) {
+        detail = "with a slow morph and frames arriving every block, the output "
+                 "never reached the new frame; spectral distance " +
+                 std::to_string(distance) +
+                 ", so the crossfade is being cancelled before it can complete";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The defaults must work without touching a setter.
+ *
+ * The morph coefficient was only computed inside the setters, so at the
+ * documented default it stayed at zero and the crossfade never advanced: the
+ * oscillator sat on its first frame for the life of the patch.
+ */
+bool oscDefaultsCrossfade(std::string& detail) {
+    const auto first = harmonicFrame(4);
+    std::vector<float> second(WavetableOsc::kFrameSize, 0.f);
+    for (std::size_t i = 0; i < second.size(); i++) {
+        second[i] = (i < second.size() / 2) ? 0.8f : -0.8f;
+    }
+
+    // NOTHING configured at all, not even the sample rate. Calling
+    // setSampleRate also recomputes the morph coefficient, so a test that calls
+    // it exercises the setter rather than the defaults and passes either way.
+    WavetableOsc osc;
+    primeOsc(osc, first, 1);
+    const auto before = renderOsc(osc, 0.f, 8192);
+
+    for (int i = 0; i < 400000; i++) {
+        osc.offerFrame(second.data(), 2);
+        osc.process(0.f);
+    }
+    const auto after = renderOsc(osc, 0.f, 8192);
+
+    const double moved = spectralDistance(before, after, 48000);
+    if (moved < 0.2) {
+        detail = "at the default settings the oscillator never moved off its "
+                 "first frame; spectral distance only " + std::to_string(moved);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * reset() must leave the oscillator able to play again.
+ *
+ * Clearing the build while keeping the frame it was for meant a later offer of
+ * that same frame saw neither a changed count nor a running build, so it could
+ * never become playable until the extractor happened to publish again.
+ */
+bool oscResetRearms(std::string& detail) {
+    const auto first = harmonicFrame(4);
+    std::vector<float> second(WavetableOsc::kFrameSize, 0.f);
+    for (std::size_t i = 0; i < second.size(); i++) {
+        second[i] = (i < second.size() / 2) ? 0.8f : -0.8f;
+    }
+
+    // The case that matters is a reset partway through building a SECOND frame
+    // while a first one is already playing. With nothing playing yet the
+    // not-ready check restarts the build anyway, so that path passes whether or
+    // not reset re-arms, and a test using it proves nothing.
+    WavetableOsc osc;
+    osc.setSampleRate(48000);
+    osc.setLevel(1.f);
+    osc.setMorph(1.f);
+    osc.setBudgetPerCall(64);
+    primeOsc(osc, first, 1);
+
+    for (int i = 0; i < 3; i++) osc.offerFrame(second.data(), 2);
+    osc.reset();
+
+    // The same second frame must still become playable.
+    for (int i = 0; i < 2000; i++) {
+        osc.offerFrame(second.data(), 2);
+        osc.process(0.f);
+    }
+    const auto out = renderOsc(osc, 0.f, 4000);
+
+    WavetableOsc reference;
+    reference.setSampleRate(48000);
+    reference.setLevel(1.f);
+    reference.setMorph(1.f);
+    primeOsc(reference, second, 1);
+    const auto target = renderOsc(reference, 0.f, 4000);
+
+    const double distance = spectralDistance(out, target, 48000);
+    if (distance > 0.25) {
+        detail = "after a reset mid-build the new frame never became playable; "
+                 "spectral distance from it is " + std::to_string(distance);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The chain must cover every pitch 1 V/octave can reach.
+ *
+ * Eight levels ended at a sixteen sample table carrying eight harmonics, valid
+ * only to about 3 kHz, while an ordinary input crosses that by 3.5 V and keeps
+ * going. Past the end of the chain the selection saturates and the content
+ * aliases, which is what the chain exists to prevent.
+ */
+bool oscChainCoversTheRange(std::string& detail) {
+    const auto frame = harmonicFrame(512);
+    for (double volts : {3.5, 4.0, 4.5, 5.0}) {
+        WavetableOsc osc;
+        osc.setSampleRate(48000);
+        osc.setLevel(1.f);
+        osc.setMorph(1.f);
+        primeOsc(osc, frame);
+        const auto out = renderOsc(osc, (float)volts);
+        const double f0 = 261.6255653005986 * std::exp2(volts);
+        if (f0 >= 24000.0) continue;
+        const double floorDb = aliasFloorDb(out, f0, 48000);
+        if (floorDb > -18.0) {
+            detail = "at " + std::to_string(volts) + " V (" + std::to_string(f0) +
+                     " Hz) the alias floor was " + std::to_string(floorDb) + " dB";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Crossing a mip boundary must not jump the timbre.
+ *
+ * Adjacent tables differ by a whole octave of bandwidth, so a harmonic present
+ * in one is filtered out of the next. Selecting exactly one entry means the
+ * smallest pitch modulation across a boundary produces an abrupt timbral step.
+ */
+bool oscMipBoundaryIsSmooth(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto frame = harmonicFrame(256);
+
+    // Sweep pitch finely through several boundaries and watch the output level.
+    // A hard switch shows up as a step in RMS where a blend gives a ramp.
+    double worstJump = 0.0;
+    double atVolts = 0.0;
+    double previous = -1.0;
+    for (int step = 0; step <= 400; step++) {
+        const double volts = 0.5 + (double)step * (3.0 / 400.0);
+        WavetableOsc osc;
+        osc.setSampleRate(sampleRate);
+        osc.setLevel(1.f);
+        osc.setMorph(1.f);
+        primeOsc(osc, frame);
+        const auto out = renderOsc(osc, (float)volts, 4096);
+        double acc = 0.0;
+        for (float v : out) acc += (double)v * v;
+        const double rms = std::sqrt(acc / (double)out.size());
+        if (previous >= 0.0) {
+            const double jump = std::fabs(rms - previous) / std::max(previous, 1e-9);
+            if (jump > worstJump) { worstJump = jump; atVolts = volts; }
+        }
+        previous = rms;
+    }
+    // Neighbouring steps are under a hundredth of a volt apart, so any real
+    // change in level between them is the table switching rather than the pitch.
+    if (worstJump > 0.08) {
+        detail = "level jumped by " + std::to_string(worstJump * 100.0) +
+                 " per cent between adjacent pitches near " + std::to_string(atVolts) +
+                 " V; mip levels are being switched rather than blended";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The coarsest table must not carry a harmonic above output Nyquist.
+ *
+ * The decimation filter is half-band, so its response at the new Nyquist is 0.5
+ * rather than zero and that bin survives at every level. It only matters at the
+ * end of the chain: the four sample table carries a fundamental and a second
+ * harmonic, and above about 12 kHz that second harmonic is itself above output
+ * Nyquist and folds back into the audible band.
+ */
+bool oscTopOfRangeIsClean(std::string& detail) {
+    const int sampleRate = 48000;
+    // A frame whose second harmonic is strong and in cosine phase, which is the
+    // component that survives the filter and folds.
+    std::vector<float> frame(WavetableOsc::kFrameSize, 0.f);
+    for (std::size_t i = 0; i < frame.size(); i++) {
+        const double phase = (double)i / (double)frame.size();
+        frame[i] = (float)(0.5 * std::sin(2 * M_PI * phase) +
+                           0.5 * std::cos(4 * M_PI * phase));
+    }
+
+    for (double volts : {5.5, 6.0, 6.5}) {
+        const double f0 = 261.6255653005986 * std::exp2(volts);
+        if (f0 >= sampleRate * 0.5) continue;
+        WavetableOsc osc;
+        osc.setSampleRate(sampleRate);
+        osc.setLevel(1.f);
+        osc.setMorph(1.f);
+        primeOsc(osc, frame);
+        const auto out = renderOsc(osc, (float)volts);
+        const double floorDb = aliasFloorDb(out, f0, sampleRate);
+        if (floorDb > -20.0) {
+            detail = "at " + std::to_string(volts) + " V (" + std::to_string(f0) +
+                     " Hz) the alias floor was " + std::to_string(floorDb) +
+                     " dB; the coarsest table is still carrying a second harmonic";
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * The oscillator must work at the cadence the extractor actually publishes at.
+ *
+ * This is the integration every other test here misses. They all offer the same
+ * frame count over and over, which is not what happens: the extractor publishes
+ * a new count every sixteen calls at its default budget, while this chain takes
+ * about sixty-five. Restarting the build on any newer frame therefore cancelled
+ * it four times over before it could finish, neither side ever became ready,
+ * and the oscillator was silent for the life of the patch.
+ */
+bool oscAtProducerCadence(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto frame = harmonicFrame(16);
+
+    WavetableOsc osc;            // defaults throughout, as a module would
+    osc.setSampleRate(sampleRate);
+    osc.setLevel(1.f);
+
+    // A new frame count every sixteen calls, exactly as the extractor produces.
+    uint64_t count = 1;
+    double peak = 0.0;
+    for (int call = 0; call < 4000; call++) {
+        if (call > 0 && call % 16 == 0) count++;
+        osc.offerFrame(frame.data(), count);
+        for (int i = 0; i < 64; i++) {
+            peak = std::max(peak, std::fabs((double)osc.process(0.f)));
+        }
+    }
+    if (peak < 0.05) {
+        detail = "at the extractor's publish cadence the oscillator never made a "
+                 "sound; peak was " + std::to_string(peak) +
+                 ", so no chain ever finished building";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The first frame must fade in, not appear at full level.
+ *
+ * Before any chain is ready the output is exact silence. Declaring the first
+ * completed chain current instead of fading into it takes the output from zero
+ * to full level in one sample, which is a click every time a patch loads.
+ */
+bool oscFirstFrameFadesIn(std::string& detail) {
+    const int sampleRate = 48000;
+    // Cosine phase, so the frame starts at its maximum rather than at a zero
+    // crossing: this is the shape that makes the jump full scale.
+    std::vector<float> frame(WavetableOsc::kFrameSize, 0.f);
+    for (std::size_t i = 0; i < frame.size(); i++) {
+        frame[i] = (float)std::cos(2 * M_PI * (double)i / (double)frame.size());
+    }
+
+    WavetableOsc osc;
+    osc.setSampleRate(sampleRate);
+    osc.setLevel(1.f);
+    osc.setMorph(0.5f);
+
+    std::vector<float> out;
+    out.reserve(20000);
+    for (int call = 0; call < 300; call++) {
+        osc.offerFrame(frame.data(), 1);
+        for (int i = 0; i < 64; i++) out.push_back(osc.process(0.f));
+    }
+
+    const double worst = maxStep(out);
+    // The steady-state step of this frame at this pitch is the bar.
+    double steady = 0.0;
+    for (std::size_t i = out.size() / 2 + 1; i < out.size(); i++) {
+        steady = std::max(steady, std::fabs((double)out[i] - (double)out[i - 1]));
+    }
+    if (worst > steady * 3.0 + 0.02) {
+        detail = "the first frame arrived with a step of " + std::to_string(worst) +
+                 " against a steady-state step of " + std::to_string(steady);
+        return false;
+    }
+    if (steady < 1e-6) {
+        detail = "the oscillator never produced anything to measure";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * A table must stop contributing when its own bandwidth crosses Nyquist.
+ *
+ * Blending between the two entries either side of the exact position keeps the
+ * lower one for the whole octave AFTER it has stopped fitting. That is not
+ * theoretical: it leaves a specific band of pitches where a high harmonic that
+ * the chain is supposed to have removed is still being played.
+ */
+bool oscBlendCrossoverIsEarlyEnough(std::string& detail) {
+    const int sampleRate = 48000;
+    // A strong high harmonic and little else, so any alias is unambiguous.
+    std::vector<float> frame(WavetableOsc::kFrameSize, 0.f);
+    for (std::size_t i = 0; i < frame.size(); i++) {
+        const double phase = (double)i / (double)frame.size();
+        frame[i] = (float)(0.5 * std::sin(2 * M_PI * phase) +
+                           0.5 * std::sin(2 * M_PI * 48 * phase));
+    }
+
+    // Swept finely, because the defect only shows in part of each octave: at
+    // 700 Hz it measured -23.5 dB where its neighbours were past -30.
+    for (double hz = 280.0; hz <= 1600.0; hz *= 1.06) {
+        const double volts = std::log2(hz / 261.6255653005986);
+        WavetableOsc osc;
+        osc.setSampleRate(sampleRate);
+        osc.setLevel(1.f);
+        osc.setMorph(1.f);
+        primeOsc(osc, frame);
+        const auto out = renderOsc(osc, (float)volts);
+        const double floorDb = aliasFloorDb(out, hz, sampleRate);
+        // The bar is what the shift actually achieves on this deliberately
+        // hostile frame, not a round number. Harmonic 48 sits near Nyquist at
+        // these pitches, so the Catmull-Rom read leaves a floor of its own that
+        // no amount of table selection can remove; the worst case measured with
+        // the shift is about -25 dB, against -18.6 dB without it.
+        if (floorDb > -22.0) {
+            detail = "at " + std::to_string(hz) + " Hz the alias floor was " +
+                     std::to_string(floorDb) +
+                     " dB; a table is still contributing past its Nyquist crossing";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Building the chain must respect the budget. */
+bool oscBuildIsAmortised(std::string& detail) {
+    const auto frame = harmonicFrame(32);
+    // Including budgets below the cost of a single filtered slot, which is a
+    // whole run of the fifteen tap kernel and cannot be split across calls.
+    for (int budget : {1, 8, 64, 256, 1024}) {
+        WavetableOsc osc;
+        osc.setSampleRate(48000);
+        osc.setBudgetPerCall(budget);
+        std::size_t worst = 0;
+        int calls = 0;
+        for (int i = 0; i < 20000; i++) {
+            osc.offerFrame(frame.data(), 1);
+            worst = std::max(worst, osc.debugWorkLastCall());
+            calls++;
+            if (osc.debugWorkLastCall() == 0) break;
+        }
+        if (worst > osc.effectiveBudget()) {
+            detail = "budget " + std::to_string(budget) + ": one call did " +
+                     std::to_string(worst) + " units against an effective bound of " +
+                     std::to_string(osc.effectiveBudget());
+            return false;
+        }
+        if (calls < 2) {
+            detail = "budget " + std::to_string(budget) +
+                     " built the whole chain in one call";
+            return false;
+        }
+
+        // An upper bound alone does not test the accounting: charging every
+        // slot one unit also stays under the budget, while doing fifteen times
+        // the work at every level above zero. The number of calls is what
+        // exposes it, because it follows the TRUE cost.
+        //
+        // Level 0 is 2048 copies at one unit each; the rest of the chain is
+        // filtered, at a whole run of the kernel per slot.
+        const std::size_t filtered = 4092 - WavetableOsc::kFrameSize;
+        const double trueUnits = (double)WavetableOsc::kFrameSize + (double)filtered * 15.0;
+        const double expected = trueUnits / (double)osc.effectiveBudget();
+        if ((double)calls < expected * 0.6 || (double)calls > expected * 1.6 + 2) {
+            detail = "budget " + std::to_string(budget) + ": took " +
+                     std::to_string(calls) + " calls, but the chain costs " +
+                     std::to_string(trueUnits) + " units so it should take about " +
+                     std::to_string(expected);
+            return false;
+        }
+
+        // And once the chain is finished, further offers of the same frame must
+        // report no work. Leaving the counter stale made a completed build look
+        // like it was still running forever.
+        for (int i = 0; i < 5; i++) {
+            osc.offerFrame(frame.data(), 1);
+            if (osc.debugWorkLastCall() != 0) {
+                detail = "budget " + std::to_string(budget) +
+                         ": an offer after the build completed reported " +
+                         std::to_string(osc.debugWorkLastCall()) + " units of work";
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/** No frame offered yet is the state on patch load. */
+bool oscEmpty(std::string& detail) {
+    WavetableOsc osc;
+    osc.setSampleRate(48000);
+    for (int i = 0; i < 1000; i++) {
+        const float out = osc.process(0.f);
+        if (out != 0.f) {
+            detail = "an oscillator with no frame produced " + std::to_string(out);
+            return false;
+        }
+    }
+    // A null offer must be ignored rather than crash or half-build.
+    for (int i = 0; i < 100; i++) osc.offerFrame(nullptr, 1);
+    for (int i = 0; i < 100; i++) {
+        if (osc.process(0.f) != 0.f) {
+            detail = "a null frame offer produced output";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Hostile but legal input must not produce a non-finite sample. */
+bool oscBadInput(std::string& detail) {
+    const auto frame = harmonicFrame(16);
+    WavetableOsc osc;
+    osc.setSampleRate(48000);
+    primeOsc(osc, frame);
+
+    const float bad[] = {std::nanf(""), std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(), 1e20f, -1e20f,
+                         std::numeric_limits<float>::max(), 100.f, -100.f};
+    for (float v : bad) {
+        for (int i = 0; i < 200; i++) {
+            const float out = osc.process(v);
+            if (!std::isfinite(out)) {
+                detail = "input " + std::to_string(v) + " produced a non-finite sample";
+                return false;
+            }
+        }
+        // And a sane input straight afterwards must still work, so a bad value
+        // cannot leave the phase permanently poisoned.
+        float peak = 0.f;
+        for (int i = 0; i < 4000; i++) peak = std::max(peak, std::fabs(osc.process(0.f)));
+        if (peak < 0.05f) {
+            detail = "after input " + std::to_string(v) +
+                     " the oscillator fell silent, peaking at " + std::to_string(peak);
+            return false;
+        }
+    }
+
+    for (float v : {std::nanf(""), std::numeric_limits<float>::infinity()}) {
+        osc.setMorph(v);
+        osc.setCoarse(v);
+        osc.setFine(v);
+        osc.setLevel(v);
+    }
+    for (int i = 0; i < 200; i++) {
+        if (!std::isfinite(osc.process(0.f))) {
+            detail = "non-finite settings produced a non-finite sample";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** The level control must scale the output and reach silence. */
+bool oscLevel(std::string& detail) {
+    const auto frame = harmonicFrame(8);
+    WavetableOsc osc;
+    osc.setSampleRate(48000);
+    osc.setMorph(1.f);
+    primeOsc(osc, frame);
+
+    osc.setLevel(1.f);
+    double full = 0.0;
+    for (int i = 0; i < 8000; i++) full = std::max(full, std::fabs((double)osc.process(0.f)));
+    osc.setLevel(0.5f);
+    double half = 0.0;
+    for (int i = 0; i < 8000; i++) half = std::max(half, std::fabs((double)osc.process(0.f)));
+    osc.setLevel(0.f);
+    double none = 0.0;
+    for (int i = 0; i < 8000; i++) none = std::max(none, std::fabs((double)osc.process(0.f)));
+
+    if (full < 0.1) { detail = "full level produced only " + std::to_string(full); return false; }
+    const double ratio = half / std::max(full, 1e-9);
+    if (std::fabs(ratio - 0.5) > 0.05) {
+        detail = "half level gave a ratio of " + std::to_string(ratio);
+        return false;
+    }
+    if (none > 1e-6) {
+        detail = "zero level still produced " + std::to_string(none);
+        return false;
+    }
+    return true;
+}
+
 struct TestCase {
     const char* cmd;
     const char* name;
@@ -5146,6 +6003,23 @@ const TestCase kCases[] = {
     {"--test-buffer-non-finite-write","buffer_non_finite_write",bufferRejectsNonFinite},
     {"--test-wt-restart",         "wt_restart",         wtRestartsOnChange},
     {"--test-wt-bad-input",       "wt_bad_input",       wtBadInput},
+    {"--test-osc-alias",          "osc_alias",          oscAliasFloor},
+    {"--test-osc-pitch",          "osc_pitch",          oscPitchTracking},
+    {"--test-osc-samplerate",     "osc_samplerate",     oscSampleRate},
+    {"--test-osc-frame-change",   "osc_frame_change",   oscFrameChangeIsClickFree},
+    {"--test-osc-slow-morph",     "osc_slow_morph",     oscSlowMorphStillTracks},
+    {"--test-osc-defaults",       "osc_defaults",       oscDefaultsCrossfade},
+    {"--test-osc-reset",          "osc_reset",          oscResetRearms},
+    {"--test-osc-range",          "osc_range",          oscChainCoversTheRange},
+    {"--test-osc-cadence",        "osc_cadence",        oscAtProducerCadence},
+    {"--test-osc-first-frame",    "osc_first_frame",    oscFirstFrameFadesIn},
+    {"--test-osc-crossover",      "osc_crossover",      oscBlendCrossoverIsEarlyEnough},
+    {"--test-osc-mip-boundary",   "osc_mip_boundary",   oscMipBoundaryIsSmooth},
+    {"--test-osc-top-range",      "osc_top_range",      oscTopOfRangeIsClean},
+    {"--test-osc-amortised",      "osc_amortised",      oscBuildIsAmortised},
+    {"--test-osc-empty",          "osc_empty",          oscEmpty},
+    {"--test-osc-bad-input",      "osc_bad_input",      oscBadInput},
+    {"--test-osc-level",          "osc_level",          oscLevel},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };
 
