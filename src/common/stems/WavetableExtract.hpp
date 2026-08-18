@@ -115,34 +115,38 @@ public:
         if (!std::isfinite(playhead)) return false;
         const auto& source = set->layer[layer].channel[0];
 
+        // A stem set too short to interpolate cannot produce a frame, but it
+        // still has to REPLACE one. Returning early on the size left frame()
+        // showing the previous recording indefinitely once a short take was
+        // published, and Hpss::separate sizes every layer to the input length
+        // and accepts sub-frame input, so such a set really does reach here.
+        const bool degenerate = source.size() < 2;
+        const bool alreadyHandled = degenerate && silenceIssuedFor(set->generation, layer);
+
         // A new stem set, a different layer or a changed window means whatever
         // is being built, or was last published, no longer describes the
         // material. Start again rather than finish a frame that is half one
         // thing and half another.
-        const bool stale = (phase_ == Phase::Idle) ||
-                           set->generation != buildGeneration_ ||
-                           layer != buildLayer_ || windowSamples_ != buildWindow_;
+        const bool stale = !alreadyHandled &&
+                           ((phase_ == Phase::Idle) ||
+                            set->generation != buildGeneration_ ||
+                            layer != buildLayer_ || windowSamples_ != buildWindow_);
 
-        // A stem set too short to interpolate cannot produce a frame. The
-        // staleness check has to come FIRST, though: returning early on the
-        // size left frame() showing the previous recording indefinitely once a
-        // short take was published, and Hpss::separate sizes every layer to the
-        // input length and accepts sub-frame input, so such a set really does
-        // reach here. Publish silence once instead, so the wavetable follows
-        // the take rather than keeping a frame from material that is gone.
-        if (source.size() < 2) {
-            if (stale && !publishedSilenceFor(set->generation, layer)) {
-                publishSilence(set->generation, layer);
-                return true;
+        if (stale) {
+            if (degenerate) {
+                beginSilentFinalise(set->generation, layer);
+            } else {
+                // Starting a build snapshots WHERE and WHAT to read, once.
+                // Re-reading the playhead every call would smear a single frame
+                // across however far the transport moved while it was being
+                // built, so the frame would never correspond to any actual
+                // moment in the material.
+                beginBuild(set, layer, source.size(), playhead);
             }
-            return false;
         }
 
-        // Starting a build snapshots WHERE and WHAT to read, once. Re-reading
-        // the playhead every call would smear a single frame across however far
-        // the transport moved while it was being built, so the frame would
-        // never correspond to any actual moment in the material.
-        if (stale) beginBuild(set, layer, source.size(), playhead);
+        // Degenerate and already dealt with: nothing left to do.
+        if (phase_ == Phase::Idle) return false;
 
         if (phase_ == Phase::Reading) {
             const std::size_t count =
@@ -227,7 +231,7 @@ private:
         buildGeneration_ = set->generation;
         buildLayer_ = layer;
         buildWindow_ = windowSamples_;
-        silencePublished_ = false;
+        silenceIssued_ = false;
 
         const double window = static_cast<double>(buildWindow_);
         // The window is CENTRED on the playhead, and the offset moves it by up
@@ -244,22 +248,29 @@ private:
         haveSourceExtent_ = false;
     }
 
-    bool publishedSilenceFor(uint64_t generation, int layer) const {
-        return silencePublished_ && buildGeneration_ == generation &&
+    bool silenceIssuedFor(uint64_t generation, int layer) const {
+        return silenceIssued_ && buildGeneration_ == generation &&
                buildLayer_ == layer && buildWindow_ == windowSamples_;
     }
 
-    void publishSilence(uint64_t generation, int layer) {
-        float* back = buffers_[1 - frontIndex_];
-        for (std::size_t i = 0; i < kFrameSize; i++) back[i] = 0.f;
-        frontIndex_ = 1 - frontIndex_;
-        phase_ = Phase::Idle;
+    /**
+     * Replace the frame with silence, through the normal amortised path.
+     *
+     * Writing all 2048 entries in the call that noticed the short take would be
+     * the same frame-boundary spike the reading and finalising paths exist to
+     * avoid. A gain of zero makes the ordinary finalise loop emit silence, so
+     * this needs no separate code path and no separate budget.
+     */
+    void beginSilentFinalise(uint64_t generation, int layer) {
+        phase_ = Phase::Finalising;
+        cursor_ = 0;
+        mean_ = 0.0;
+        gain_ = 0.0;
+        sourcePeak_ = 0.0;
         buildGeneration_ = generation;
         buildLayer_ = layer;
         buildWindow_ = windowSamples_;
-        silencePublished_ = true;
-        sourcePeak_ = 0.0;
-        frameCount_++;
+        silenceIssued_ = true;
     }
 
     void beginFinalise() {
@@ -401,7 +412,7 @@ private:
     double gain_ = 0.0;
     double sourcePeak_ = 0.0;
 
-    bool silencePublished_ = false;
+    bool silenceIssued_ = false;
     std::size_t samplesLastCall_ = 0;
     uint64_t frameCount_ = 0;
 

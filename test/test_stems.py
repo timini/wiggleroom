@@ -1055,9 +1055,13 @@ class TestWavetableExtract:
 
         Returning early on the size, before checking whether the set is stale,
         left frame() showing the previous recording indefinitely. Verified to
-        have teeth. Also checks silence is published once per take rather than
-        republished on every call, and that real material afterwards builds
-        normally.
+        have teeth.
+
+        Replacing the frame runs through the same amortised path as building
+        one, driven by a gain of zero, so a very short take cannot recreate the
+        frame-boundary spike the reading path exists to avoid. Also checks
+        silence is issued once per take rather than republished on every call,
+        and that real material afterwards builds normally.
         """
         result = run_test(["--test-wt-degenerate"])
         assert result["failed"] == 0, result.get("detail", "")

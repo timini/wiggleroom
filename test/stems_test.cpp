@@ -4398,12 +4398,33 @@ bool wtDegenerateSet(std::string& detail) {
         return false;
     }
 
-    // It must publish silence ONCE per take, not spin republishing it.
+    // It must issue silence ONCE per take, not spin republishing it. The
+    // silent replacement runs through the same amortised path as a real frame,
+    // so it takes a full pass of budget-sized calls to land; run it out first.
     StemSet tiny;
     tiny.channels = 1;
     tiny.generation = 99;
     for (int L = 0; L < StemSet::kNumLayers; L++) tiny.layer[L].channel[0].assign(1, 0.5f);
-    e.process(&tiny, 0, 0.0);
+    std::size_t worstSilentCall = 0;
+    int silentCalls = 0;
+    while (silentCalls < 1000) {
+        const bool published = e.process(&tiny, 0, 0.0);
+        worstSilentCall = std::max(worstSilentCall, e.debugSamplesLastCall());
+        silentCalls++;
+        if (published) break;
+    }
+    // Replacing the frame must respect the budget too, or a very short take
+    // recreates exactly the boundary spike the reading path avoids.
+    if ((int)worstSilentCall > (int)WavetableExtract::kFrameSize / 16) {
+        detail = "replacing a frame for a degenerate take wrote " +
+                 std::to_string(worstSilentCall) + " samples in one call";
+        return false;
+    }
+    if (silentCalls < 4) {
+        detail = "a degenerate take replaced the frame in only " +
+                 std::to_string(silentCalls) + " calls; it is not amortised";
+        return false;
+    }
     const uint64_t settled = e.frameCount();
     for (int i = 0; i < 500; i++) e.process(&tiny, 0, 0.0);
     if (e.frameCount() != settled) {
