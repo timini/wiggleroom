@@ -1287,9 +1287,40 @@ class TestWavetableOsc:
         result = run_test(["--test-osc-range"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_crossing_a_mip_boundary_does_not_jump_the_timbre(self):
+        """Adjacent tables differ by a whole octave of bandwidth, so a harmonic
+        present in one is filtered out of the next. Selecting exactly one entry
+        means the smallest pitch modulation across a boundary is an abrupt
+        timbral step, so the two entries are blended by frequency instead.
+        Verified to have teeth: switching outright also costs 6 dB of alias
+        floor at 3 V.
+        """
+        result = run_test(["--test-osc-mip-boundary"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_top_of_the_range_carries_no_harmonic_above_nyquist(self):
+        """The decimation filter is half-band, so its response at the new
+        Nyquist is 0.5 rather than zero and that bin survives at every level.
+
+        It only matters at the end of the chain: the four sample table carries a
+        fundamental and a second harmonic, and above about 12 kHz that second
+        harmonic is itself above output Nyquist and folds back. Verified to have
+        teeth: keeping it gives a -5.5 dB alias floor at 6 V.
+        """
+        result = run_test(["--test-osc-top-range"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_building_the_chain_is_amortised(self):
-        """The chain is about two frames' worth of work. Verified to have teeth:
-        4080 units in one call against a budget of 64."""
+        """Charged by what a slot actually costs: one copy at level 0, a whole
+        run of the fifteen tap filter above it.
+
+        An upper bound alone does not test the accounting, since charging every
+        slot one unit also stays under the budget while doing fifteen times the
+        work. The CALL COUNT is what exposes it, because it follows the true
+        cost. Also checks that an offer after the build completes reports no
+        work, since leaving the counter stale made a finished build look like it
+        was still running. Verified to have teeth on all three.
+        """
         result = run_test(["--test-osc-amortised"])
         assert result["failed"] == 0, result.get("detail", "")
 

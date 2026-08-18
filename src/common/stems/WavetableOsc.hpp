@@ -112,6 +112,12 @@ public:
      * rather than referenced, for the reason in the header.
      */
     void offerFrame(const float* frame, uint64_t frameCount) {
+        // Cleared first, so it always describes THIS call. Leaving the previous
+        // value in place meant a null offer, an offer during a crossfade or an
+        // ordinary no-op kept reporting the last build chunk forever, which
+        // made the instrumentation misleading and stopped the amortisation test
+        // from ever detecting that a build had finished.
+        workLastCall_ = 0;
         if (!frame) return;
 
         // While a crossfade is running, the incoming side is being SOUNDED.
@@ -153,11 +159,15 @@ public:
         phase_ += increment;
         phase_ -= std::floor(phase_);
 
-        const int level = mipFor(frequency);
-        float out = readMip(activeSide_, level, phase_);
+        // A continuous position in the chain, not a choice of one entry.
+        // Switching outright meant that near a boundary a valid harmonic could
+        // be present in one table and filtered out of the next, so the smallest
+        // pitch modulation produced an abrupt timbral jump.
+        const double position = mipPosition(frequency);
+        float out = readBlended(activeSide_, position, phase_);
 
         if (crossfade_ < 1.f && ready_[1 - activeSide_]) {
-            const float incoming = readMip(1 - activeSide_, level, phase_);
+            const float incoming = readBlended(1 - activeSide_, position, phase_);
             out = out + (incoming - out) * crossfade_;
             crossfade_ = std::min(1.f, crossfade_ + morphStep_);
             if (crossfade_ >= 1.f) activeSide_ = 1 - activeSide_;
@@ -173,6 +183,17 @@ public:
 
     /** Work units spent by the last offerFrame() call. Diagnostics. */
     std::size_t debugWorkLastCall() const { return workLastCall_; }
+
+    /**
+     * The per-call bound actually in force.
+     *
+     * A filtered slot costs a whole run of the kernel and cannot be split
+     * across calls, so that is the floor. Asking for less raises the bound
+     * rather than breaking it.
+     */
+    std::size_t effectiveBudget() const {
+        return std::max<std::size_t>((std::size_t)budget_, (std::size_t)kKernelTaps);
+    }
 
     void reset() {
         phase_ = 0.0;
@@ -236,20 +257,27 @@ private:
      * Level n carries kFrameSize / 2^(n+1) harmonics, and the note has room for
      * sampleRate / (2 * frequency) of them.
      */
-    int mipFor(double frequency) const {
+    double mipPosition(double frequency) const {
         // The 0.5 is the Nyquist criterion and is not a tuning knob: biasing it
         // to 1.0, so a longer table is chosen, was measured and makes the floor
         // steadily worse with pitch, reaching -14.8 dB at 5 V because the extra
         // harmonics genuinely do not fit.
         const double allowed = 0.5 * sampleRate_ / std::max(frequency, 1e-9);
-        int level = 0;
-        double carried = 0.5 * (double)kFrameSize;
-        while (level < kNumMips - 1 && carried > allowed) {
-            carried *= 0.5;
-            level++;
-        }
-        lastMip_ = level;
-        return level;
+        const double carried = 0.5 * (double)kFrameSize;
+        const double exact = std::log2(carried / std::max(allowed, 1e-9));
+        const double clamped = std::min(std::max(exact, 0.0), (double)(kNumMips - 1));
+        lastMip_ = (int)clamped;
+        return clamped;
+    }
+
+    /** Read at a fractional position in the chain, blending the two entries. */
+    float readBlended(int side, double position, double phase) const {
+        const int lower = (int)position;
+        const double frac = position - (double)lower;
+        const float a = readMip(side, lower, phase);
+        if (frac <= 0.0 || lower >= kNumMips - 1) return a;
+        const float b = readMip(side, lower + 1, phase);
+        return (float)(a + (b - a) * frac);
     }
 
     /** Catmull-Rom read of one chain entry, wrapping at both ends. */
@@ -300,7 +328,12 @@ private:
         std::size_t work = 0;
         float* dest = mips_[buildSide_];
 
-        while (buildCursor_ < kMipStorage && work < (std::size_t)budget_) {
+        // A slot cannot be split, so the budget is raised to one slot rather
+        // than exceeded, the same rule the extractor uses for its decimation
+        // span.
+        const std::size_t limit = std::max<std::size_t>((std::size_t)budget_,
+                                                        (std::size_t)kKernelTaps);
+        while (buildCursor_ < kMipStorage) {
             // The level and its base are carried between calls rather than
             // rescanned. Searching the chain for every sample would multiply the
             // real cost of a unit by the number of levels, so the budget would
@@ -312,6 +345,18 @@ private:
             }
             const int level = buildLevel_;
             const std::size_t index = buildCursor_ - buildBase_;
+
+            // Charged by what the slot actually costs. A level 0 slot is one
+            // copy; every level above it is a full run of the filter, so
+            // counting both as one unit let a budget of 512 execute 7680
+            // multiply-accumulates, and the jump landed exactly where the
+            // budget is meant to smooth things out.
+            const std::size_t cost = (level == 0) ? 1 : (std::size_t)kKernelTaps;
+            // Checked BEFORE the work, not after. Testing the running total
+            // first and adding afterwards lets the last slot of a call carry
+            // the total past the limit, which for a fifteen tap filter is an
+            // overshoot of fourteen units.
+            if (work > 0 && work + cost > limit) break;
 
             if (level == 0) {
                 dest[buildCursor_] = frame[index];
@@ -333,11 +378,12 @@ private:
                 dest[buildCursor_] = (float)acc;
             }
             buildCursor_++;
-            work++;
+            work += cost;
         }
         workLastCall_ = work;
 
         if (buildCursor_ >= kMipStorage) {
+            stripNyquistFromCoarsestLevel(dest);
             building_ = false;
             ready_[buildSide_] = true;
             // Start the crossfade only once the incoming chain is complete.
@@ -376,6 +422,34 @@ private:
             sum += kernel_[t];
         }
         for (int t = 0; t < kKernelTaps; t++) kernel_[t] /= sum;
+    }
+
+    /**
+     * Remove the alternating component from the shortest table.
+     *
+     * The decimation filter is a half-band lowpass, so its response at the new
+     * Nyquist is 0.5 rather than zero, and that bin survives at every level. It
+     * only matters at the end of the chain: the four sample table carries a
+     * fundamental and a second harmonic, and above about 12 kHz, which is
+     * reachable around 5.5 V or lower with positive coarse tuning, that second
+     * harmonic is itself above output Nyquist and folds straight back into the
+     * audible band.
+     *
+     * For a four sample cycle the Nyquist component is the alternating part,
+     * so removing it is one pass and leaves the fundamental untouched.
+     */
+    void stripNyquistFromCoarsestLevel(float* dest) {
+        const int level = kNumMips - 1;
+        const std::size_t n = mipLength(level);
+        float* table = dest + mipOffset(level);
+        double alternating = 0.0;
+        for (std::size_t i = 0; i < n; i++) {
+            alternating += (i % 2 == 0) ? table[i] : -table[i];
+        }
+        alternating /= (double)n;
+        for (std::size_t i = 0; i < n; i++) {
+            table[i] -= (float)((i % 2 == 0) ? alternating : -alternating);
+        }
     }
 
     void updateMorph() {

@@ -5499,10 +5499,96 @@ bool oscChainCoversTheRange(std::string& detail) {
     return true;
 }
 
+/**
+ * Crossing a mip boundary must not jump the timbre.
+ *
+ * Adjacent tables differ by a whole octave of bandwidth, so a harmonic present
+ * in one is filtered out of the next. Selecting exactly one entry means the
+ * smallest pitch modulation across a boundary produces an abrupt timbral step.
+ */
+bool oscMipBoundaryIsSmooth(std::string& detail) {
+    const int sampleRate = 48000;
+    const auto frame = harmonicFrame(256);
+
+    // Sweep pitch finely through several boundaries and watch the output level.
+    // A hard switch shows up as a step in RMS where a blend gives a ramp.
+    double worstJump = 0.0;
+    double atVolts = 0.0;
+    double previous = -1.0;
+    for (int step = 0; step <= 400; step++) {
+        const double volts = 0.5 + (double)step * (3.0 / 400.0);
+        WavetableOsc osc;
+        osc.setSampleRate(sampleRate);
+        osc.setLevel(1.f);
+        osc.setMorph(1.f);
+        primeOsc(osc, frame);
+        const auto out = renderOsc(osc, (float)volts, 4096);
+        double acc = 0.0;
+        for (float v : out) acc += (double)v * v;
+        const double rms = std::sqrt(acc / (double)out.size());
+        if (previous >= 0.0) {
+            const double jump = std::fabs(rms - previous) / std::max(previous, 1e-9);
+            if (jump > worstJump) { worstJump = jump; atVolts = volts; }
+        }
+        previous = rms;
+    }
+    // Neighbouring steps are under a hundredth of a volt apart, so any real
+    // change in level between them is the table switching rather than the pitch.
+    if (worstJump > 0.08) {
+        detail = "level jumped by " + std::to_string(worstJump * 100.0) +
+                 " per cent between adjacent pitches near " + std::to_string(atVolts) +
+                 " V; mip levels are being switched rather than blended";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The coarsest table must not carry a harmonic above output Nyquist.
+ *
+ * The decimation filter is half-band, so its response at the new Nyquist is 0.5
+ * rather than zero and that bin survives at every level. It only matters at the
+ * end of the chain: the four sample table carries a fundamental and a second
+ * harmonic, and above about 12 kHz that second harmonic is itself above output
+ * Nyquist and folds back into the audible band.
+ */
+bool oscTopOfRangeIsClean(std::string& detail) {
+    const int sampleRate = 48000;
+    // A frame whose second harmonic is strong and in cosine phase, which is the
+    // component that survives the filter and folds.
+    std::vector<float> frame(WavetableOsc::kFrameSize, 0.f);
+    for (std::size_t i = 0; i < frame.size(); i++) {
+        const double phase = (double)i / (double)frame.size();
+        frame[i] = (float)(0.5 * std::sin(2 * M_PI * phase) +
+                           0.5 * std::cos(4 * M_PI * phase));
+    }
+
+    for (double volts : {5.5, 6.0, 6.5}) {
+        const double f0 = 261.6255653005986 * std::exp2(volts);
+        if (f0 >= sampleRate * 0.5) continue;
+        WavetableOsc osc;
+        osc.setSampleRate(sampleRate);
+        osc.setLevel(1.f);
+        osc.setMorph(1.f);
+        primeOsc(osc, frame);
+        const auto out = renderOsc(osc, (float)volts);
+        const double floorDb = aliasFloorDb(out, f0, sampleRate);
+        if (floorDb > -20.0) {
+            detail = "at " + std::to_string(volts) + " V (" + std::to_string(f0) +
+                     " Hz) the alias floor was " + std::to_string(floorDb) +
+                     " dB; the coarsest table is still carrying a second harmonic";
+            return false;
+        }
+    }
+    return true;
+}
+
 /** Building the chain must respect the budget. */
 bool oscBuildIsAmortised(std::string& detail) {
     const auto frame = harmonicFrame(32);
-    for (int budget : {64, 256, 1024}) {
+    // Including budgets below the cost of a single filtered slot, which is a
+    // whole run of the fifteen tap kernel and cannot be split across calls.
+    for (int budget : {1, 8, 64, 256, 1024}) {
         WavetableOsc osc;
         osc.setSampleRate(48000);
         osc.setBudgetPerCall(budget);
@@ -5514,15 +5600,47 @@ bool oscBuildIsAmortised(std::string& detail) {
             calls++;
             if (osc.debugWorkLastCall() == 0) break;
         }
-        if ((int)worst > budget) {
+        if (worst > osc.effectiveBudget()) {
             detail = "budget " + std::to_string(budget) + ": one call did " +
-                     std::to_string(worst) + " units";
+                     std::to_string(worst) + " units against an effective bound of " +
+                     std::to_string(osc.effectiveBudget());
             return false;
         }
         if (calls < 2) {
             detail = "budget " + std::to_string(budget) +
                      " built the whole chain in one call";
             return false;
+        }
+
+        // An upper bound alone does not test the accounting: charging every
+        // slot one unit also stays under the budget, while doing fifteen times
+        // the work at every level above zero. The number of calls is what
+        // exposes it, because it follows the TRUE cost.
+        //
+        // Level 0 is 2048 copies at one unit each; the rest of the chain is
+        // filtered, at a whole run of the kernel per slot.
+        const std::size_t filtered = 4092 - WavetableOsc::kFrameSize;
+        const double trueUnits = (double)WavetableOsc::kFrameSize + (double)filtered * 15.0;
+        const double expected = trueUnits / (double)osc.effectiveBudget();
+        if ((double)calls < expected * 0.6 || (double)calls > expected * 1.6 + 2) {
+            detail = "budget " + std::to_string(budget) + ": took " +
+                     std::to_string(calls) + " calls, but the chain costs " +
+                     std::to_string(trueUnits) + " units so it should take about " +
+                     std::to_string(expected);
+            return false;
+        }
+
+        // And once the chain is finished, further offers of the same frame must
+        // report no work. Leaving the counter stale made a completed build look
+        // like it was still running forever.
+        for (int i = 0; i < 5; i++) {
+            osc.offerFrame(frame.data(), 1);
+            if (osc.debugWorkLastCall() != 0) {
+                detail = "budget " + std::to_string(budget) +
+                         ": an offer after the build completed reported " +
+                         std::to_string(osc.debugWorkLastCall()) + " units of work";
+                return false;
+            }
         }
     }
     return true;
@@ -5766,6 +5884,8 @@ const TestCase kCases[] = {
     {"--test-osc-defaults",       "osc_defaults",       oscDefaultsCrossfade},
     {"--test-osc-reset",          "osc_reset",          oscResetRearms},
     {"--test-osc-range",          "osc_range",          oscChainCoversTheRange},
+    {"--test-osc-mip-boundary",   "osc_mip_boundary",   oscMipBoundaryIsSmooth},
+    {"--test-osc-top-range",      "osc_top_range",      oscTopOfRangeIsClean},
     {"--test-osc-amortised",      "osc_amortised",      oscBuildIsAmortised},
     {"--test-osc-empty",          "osc_empty",          oscEmpty},
     {"--test-osc-bad-input",      "osc_bad_input",      oscBadInput},
