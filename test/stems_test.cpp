@@ -4290,6 +4290,66 @@ bool bufferRejectsNonFinite(std::string& detail) {
     return true;
 }
 
+/**
+ * Reading past either end of the stem must not manufacture a waveform.
+ *
+ * The window is centred on the playhead, so at the loop start half of it lies
+ * before the beginning of the material, and wt_offset can push it out entirely.
+ * Zero padding puts artificial silence into the mean and the peak, and after DC
+ * removal the padded half and the real half come out equal and opposite: a
+ * constant 1.0 stem at playhead 0 produced a full-scale square instead of
+ * silence. The loop start is not an edge case; it is where the playhead sits at
+ * the top of every bar.
+ */
+bool wtBoundaryPadding(std::string& detail) {
+    // A constant stem has no waveform anywhere in it, so anything the frame
+    // contains was manufactured by the padding.
+    StemSet flat;
+    flat.channels = 1;
+    flat.generation = 1;
+    for (int L = 0; L < StemSet::kNumLayers; L++) flat.layer[L].channel[0].assign(8000, 1.f);
+
+    struct Case { double playhead; float offset; const char* where; };
+    const Case cases[] = {
+        {0.0, 0.f, "the very start"},
+        {100.0, 0.f, "just after the start"},
+        {7999.0, 0.f, "the very end"},
+        {7000.0, 0.f, "just before the end"},
+        {4000.0, 1.f, "pushed past the end by the offset"},
+        {4000.0, -1.f, "pushed before the start by the offset"},
+        {4000.0, 0.f, "the middle"},
+    };
+    for (const auto& c : cases) {
+        WavetableExtract e;
+        e.setOffset(c.offset);
+        buildFrame(e, flat, 0, c.playhead);
+        if (e.debugFramePeak() > 1e-5) {
+            detail = std::string("a constant stem read at ") + c.where +
+                     " produced a frame peaking at " + std::to_string(e.debugFramePeak());
+            return false;
+        }
+    }
+
+    // With real material, a frame taken at the start must not be dominated by
+    // the boundary either: compare its shape against one taken well inside.
+    const auto tone = toneSet(300.0, 8000);
+    WavetableExtract atStart, inside;
+    buildFrame(atStart, tone, 0, 0.0);
+    buildFrame(inside, tone, 0, 4000.0);
+    if (atStart.debugFramePeak() > 1.0 + 1e-5) {
+        detail = "a frame at the loop start exceeded full scale at " +
+                 std::to_string(atStart.debugFramePeak());
+        return false;
+    }
+    for (std::size_t i = 0; i < atStart.frameSize(); i++) {
+        if (!std::isfinite(atStart.frame()[i])) {
+            detail = "a frame at the loop start holds a non-finite sample";
+            return false;
+        }
+    }
+    return true;
+}
+
 /** A stale snapshot must restart the build rather than finish a mixed frame. */
 bool wtRestartsOnChange(std::string& detail) {
     auto setA = toneSet(100.0, 48000, /*generation=*/1);
@@ -4512,6 +4572,7 @@ const TestCase kCases[] = {
     {"--test-wt-fractional",      "wt_fractional",      wtFractionalWindow},
     {"--test-wt-dc-source",       "wt_dc_source",       wtDcSource},
     {"--test-wt-nan-stem",        "wt_nan_stem",        wtNonFiniteStem},
+    {"--test-wt-boundary",        "wt_boundary",        wtBoundaryPadding},
     {"--test-buffer-non-finite-write","buffer_non_finite_write",bufferRejectsNonFinite},
     {"--test-wt-restart",         "wt_restart",         wtRestartsOnChange},
     {"--test-wt-bad-input",       "wt_bad_input",       wtBadInput},

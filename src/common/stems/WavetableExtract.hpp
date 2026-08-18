@@ -289,15 +289,24 @@ private:
         return static_cast<float>(accumulator / static_cast<double>(span));
     }
 
-    /** Linear read, clamped at the ends. Positions outside the stem read zero. */
+    /**
+     * Linear read, holding the end samples outside the stem.
+     *
+     * HELD, not zero-padded. The window is centred on the playhead, so at the
+     * loop start half of it lies before the beginning of the material. Reading
+     * zero there puts artificial silence into the mean and the peak, and after
+     * DC removal the padded half and the real half become equal and opposite:
+     * a constant 1.0 stem at playhead 0 came out as a full-scale square rather
+     * than silence. Holding the edge sample means padding contributes no shape
+     * of its own.
+     *
+     * Non-finite positions are still refused outright. There is no nearest
+     * endpoint to a NaN, and casting one to size_t is undefined.
+     */
     double readSource(const std::vector<float>& source, double position) const {
         const std::size_t n = buildLength_;
-        // Validate fully while still floating point. Casting a NaN or an
-        // infinity to size_t is undefined, and NaN slips past a bare `< 0`.
-        if (n == 0 || !std::isfinite(position) || position < 0.0 ||
-            position >= static_cast<double>(n)) {
-            return 0.0;
-        }
+        if (n == 0 || !std::isfinite(position)) return 0.0;
+        position = std::min(std::max(position, 0.0), static_cast<double>(n) - 1.0);
         const std::size_t i0 = static_cast<std::size_t>(position);
         const std::size_t i1 = std::min(i0 + 1, n - 1);
         const double frac = position - static_cast<double>(i0);

@@ -1035,6 +1035,20 @@ class TestWavetableExtract:
         result = run_test(["--test-wt-nan-stem"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_reading_past_the_stem_does_not_manufacture_a_waveform(self):
+        """The window is centred on the playhead, so at the loop start half of
+        it lies before the beginning of the material, and wt_offset can push it
+        out entirely.
+
+        Zero padding puts artificial silence into the mean and the peak, and
+        after DC removal the padded half and the real half come out equal and
+        opposite. Verified to have teeth: a constant 1.0 stem at playhead 0
+        produces a full-scale square instead of silence. The loop start is not
+        an edge case; it is where the playhead sits at the top of every bar.
+        """
+        result = run_test(["--test-wt-boundary"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_a_stale_snapshot_restarts_the_build(self):
         """A new stem set, a different layer or a changed window mid-build means
         the snapshot no longer describes what is being read. Verified to have
