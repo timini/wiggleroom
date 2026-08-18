@@ -1009,6 +1009,29 @@ class TestWavetableExtract:
         result = run_test(["--test-wt-unit-ratio"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_the_advertised_work_bound_follows_the_window(self):
+        """The span is only recalculated when a build begins, so reading it
+        alone reported the previous window's bound to anyone inspecting straight
+        after changing the setting, which is exactly when a caller looks.
+        Verified to have teeth: a bound of 1 reported for an 8192 window.
+        """
+        result = run_test(["--test-wt-budget-window"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_moving_window_still_produces_frames(self):
+        """Restarting the build whenever wt_window changed meant automating the
+        control, or turning it slowly enough to cross an integer on each call,
+        discarded the progress every time.
+
+        Everything the build depends on is snapshotted, so finishing at the old
+        size cannot mix two windows; the new size applies to the next build.
+        Verified to have teeth: restarting publishes ZERO frames in 4000 calls,
+        so the oscillator keeps the previous wavetable until the control stops
+        moving, which is the opposite of what a moving control should do.
+        """
+        result = run_test(["--test-wt-window-automation"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_frames_follow_the_playhead(self):
         """Driven with noise, so successive windows genuinely differ rather than
         repeating a periodic waveform that would look the same wherever it was

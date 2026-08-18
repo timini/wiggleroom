@@ -114,7 +114,12 @@ public:
      * promised.
      */
     std::size_t effectiveBudget() const {
-        return std::max<std::size_t>((std::size_t)budget_, span_);
+        // Both the span in force and the one the CONFIGURED window implies.
+        // span_ is only recalculated when a build begins, so reading it alone
+        // reported the old window's bound to anyone who inspected this straight
+        // after changing the setting, which is exactly when a caller looks.
+        return std::max<std::size_t>((std::size_t)budget_,
+                                     std::max(span_, spanFor(windowSamples_)));
     }
 
     int windowSamples() const { return windowSamples_; }
@@ -147,10 +152,18 @@ public:
         // is being built, or was last published, no longer describes the
         // material. Start again rather than finish a frame that is half one
         // thing and half another.
+        // A changed WINDOW is deliberately not stale. Everything the build
+        // depends on is snapshotted, so finishing with the old size cannot mix
+        // two windows together, and the new size is picked up by the next
+        // build. Restarting on it meant that automating wt_window, or simply
+        // turning it slowly enough to cross an integer on each call, discarded
+        // the progress every time and no frame could ever finish: the
+        // oscillator kept the previous wavetable until the control stopped
+        // moving, which is the opposite of what a moving control should do.
         const bool stale = !alreadyHandled &&
                            ((phase_ == Phase::Idle) ||
                             set->generation != buildGeneration_ ||
-                            layer != buildLayer_ || windowSamples_ != buildWindow_);
+                            layer != buildLayer_);
 
         if (stale) {
             if (degenerate) {
@@ -272,6 +285,13 @@ public:
 private:
     enum class Phase { Idle, Reading, Finalising };
 
+    /** Source reads per output sample for a given window. */
+    static std::size_t spanFor(int window) {
+        const double step = static_cast<double>(window) / static_cast<double>(kFrameSize);
+        return static_cast<std::size_t>(
+            std::max(1, static_cast<int>(std::ceil(step - 1e-9))));
+    }
+
     void beginBuild(const StemSet* set, int layer, std::size_t sourceLength,
                     double playhead) {
         phase_ = Phase::Reading;
@@ -290,8 +310,7 @@ private:
         // Rounded UP, not truncated. A window of 4095 gives a step just under
         // two, and truncating that to one sample turns the filter off for
         // nearly every knob position that is not an exact multiple of the frame.
-        span_ = static_cast<std::size_t>(
-            std::max(1, static_cast<int>(std::ceil(buildStep_ - 1e-9))));
+        span_ = spanFor(buildWindow_);
         buildLength_ = sourceLength;
 
         sourceSum_ = 0.0;
@@ -302,8 +321,10 @@ private:
     }
 
     bool silenceIssuedFor(uint64_t generation, int layer) const {
-        return silenceIssued_ && buildGeneration_ == generation &&
-               buildLayer_ == layer && buildWindow_ == windowSamples_;
+        // The window is not part of this. A degenerate take publishes silence
+        // whatever the window is, so re-arming on a window change would only
+        // republish the same silence.
+        return silenceIssued_ && buildGeneration_ == generation && buildLayer_ == layer;
     }
 
     /**

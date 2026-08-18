@@ -4004,6 +4004,40 @@ bool wtUnitRatioAlignment(std::string& detail) {
     return true;
 }
 
+/**
+ * The advertised work bound must follow the configured window at once.
+ *
+ * The span is only recalculated when a build begins, so reading it alone
+ * reported the previous window's bound to anyone inspecting straight after
+ * changing the setting, which is exactly when a caller looks.
+ */
+bool wtBudgetFollowsWindow(std::string& detail) {
+    WavetableExtract e;
+    e.setBudgetPerCall(1);
+    e.setWindowSamples(8192);
+    const std::size_t advertised = e.effectiveBudget();
+    if (advertised < 4) {
+        detail = "after setting an 8192 window, the bound was reported as " +
+                 std::to_string(advertised) + " before any build";
+        return false;
+    }
+
+    // And it must never under-report what a call then actually does.
+    const auto set = toneSet(100.0);
+    for (int window : {256, 2048, 4096, 8192, 512}) {
+        e.setWindowSamples(window);
+        const std::size_t claimed = e.effectiveBudget();
+        std::size_t worst = 0;
+        buildFrame(e, set, 0, 24000.0, &worst);
+        if (worst > claimed) {
+            detail = "window " + std::to_string(window) + ": claimed a bound of " +
+                     std::to_string(claimed) + " then did " + std::to_string(worst);
+            return false;
+        }
+    }
+    return true;
+}
+
 /** Frames must follow the playhead. */
 bool wtTracksPlayhead(std::string& detail) {
     // Noise, so that successive windows genuinely differ rather than repeating
@@ -4633,7 +4667,10 @@ bool wtRestartsOnChange(std::string& detail) {
         return false;
     }
 
-    // The same must hold for a window change mid-build.
+    // A window change is DIFFERENT: it must not discard the build. Everything
+    // the build depends on is snapshotted, so the in-flight frame finishes with
+    // the old size and the new size applies to the next one. Restarting on it
+    // meant a moving wt_window never let any frame finish.
     WavetableExtract w;
     w.setBudgetPerCall(128);
     w.setWindowSamples(1024);
@@ -4642,16 +4679,72 @@ bool wtRestartsOnChange(std::string& detail) {
     calls = 0;
     while (!w.process(&setA, 0, 24000.0) && calls < 1000) calls++;
 
-    WavetableExtract cleanWindow;
-    cleanWindow.setWindowSamples(4096);
-    buildFrame(cleanWindow, setA, 0, 24000.0);
+    WavetableExtract atOldWindow;
+    atOldWindow.setWindowSamples(1024);
+    buildFrame(atOldWindow, setA, 0, 24000.0);
     worst = 0.0;
     for (std::size_t i = 0; i < w.frameSize(); i++) {
-        worst = std::max(worst, std::fabs((double)w.frame()[i] - (double)cleanWindow.frame()[i]));
+        worst = std::max(worst, std::fabs((double)w.frame()[i] - (double)atOldWindow.frame()[i]));
     }
     if (worst > 1e-5) {
-        detail = "a frame built across a window change differs from a clean one by " +
-                 std::to_string(worst);
+        detail = "an in-flight frame did not finish at the window it started with; "
+                 "differs by " + std::to_string(worst);
+        return false;
+    }
+
+    // And the NEXT frame must use the new window.
+    buildFrame(w, setA, 0, 24000.0);
+    WavetableExtract atNewWindow;
+    atNewWindow.setWindowSamples(4096);
+    buildFrame(atNewWindow, setA, 0, 24000.0);
+    worst = 0.0;
+    for (std::size_t i = 0; i < w.frameSize(); i++) {
+        worst = std::max(worst, std::fabs((double)w.frame()[i] - (double)atNewWindow.frame()[i]));
+    }
+    if (worst > 1e-5) {
+        detail = "the frame after a window change did not use the new window; "
+                 "differs by " + std::to_string(worst);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * A moving wt_window must still produce frames.
+ *
+ * Restarting the build whenever the window changed meant that automating the
+ * control, or simply turning it slowly enough to cross an integer on each call,
+ * discarded the progress every time. No frame could ever finish and the
+ * oscillator kept the previous wavetable until the control stopped moving,
+ * which is the opposite of what a moving control should do.
+ */
+bool wtWindowAutomation(std::string& detail) {
+    const auto set = toneSet(150.0);
+    WavetableExtract e;
+    buildFrame(e, set, 0, 24000.0);
+    const uint64_t before = e.frameCount();
+
+    // A new window value on every single call, sweeping the whole range.
+    int window = WavetableExtract::kMinWindow;
+    int direction = 7;
+    for (int i = 0; i < 4000; i++) {
+        window += direction;
+        if (window >= WavetableExtract::kMaxWindow || window <= WavetableExtract::kMinWindow) {
+            direction = -direction;
+        }
+        e.setWindowSamples(window);
+        e.process(&set, 0, 24000.0 + i);
+    }
+
+    const uint64_t published = e.frameCount() - before;
+    if (published < 10) {
+        detail = "a continuously moving window published only " +
+                 std::to_string(published) + " frames in 4000 calls";
+        return false;
+    }
+    if (e.debugFramePeak() < 0.5) {
+        detail = "a continuously moving window left a frame peaking at " +
+                 std::to_string(e.debugFramePeak());
         return false;
     }
     return true;
@@ -4835,7 +4928,9 @@ const TestCase kCases[] = {
     {"--test-wt-reset-rearm",     "wt_reset_rearm",     wtResetRearmsSilence},
     {"--test-wt-default-latency", "wt_default_latency", wtDefaultLatency},
     {"--test-wt-tiny-budget",     "wt_tiny_budget",     wtTinyBudget},
+    {"--test-wt-budget-window",   "wt_budget_window",   wtBudgetFollowsWindow},
     {"--test-wt-unit-ratio",      "wt_unit_ratio",      wtUnitRatioAlignment},
+    {"--test-wt-window-automation","wt_window_automation",wtWindowAutomation},
     {"--test-buffer-non-finite-write","buffer_non_finite_write",bufferRejectsNonFinite},
     {"--test-wt-restart",         "wt_restart",         wtRestartsOnChange},
     {"--test-wt-bad-input",       "wt_bad_input",       wtBadInput},
