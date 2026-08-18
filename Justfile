@@ -299,6 +299,24 @@ verify-manifest-tests:
 verify-test-infra:
     cd test && python3 -m pytest test_utils_unit.py test_audio_quality_unit.py -v
 
+# Rebuild stems_test straight from source, bypassing the incremental build.
+#
+# This exists for deliberately breaking the code to confirm a test fails, which
+# is the only way to know a test has teeth. The incremental build repeatedly
+# served a stale binary during that work, because editing a header, rebuilding
+# and rerunning all land in the same second or two, so a check appeared to pass
+# over code that was demonstrably broken. stems_test is a single translation
+# unit, so compiling it outright takes a few seconds and cannot go stale.
+#
+#   just stems-direct --test-wt-normalise
+#   just stems-direct --self-test
+stems-direct *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    OUT="${TMPDIR:-/tmp}/stems_test_direct"
+    c++ -std=c++17 -O2 -Isrc -Isrc/common -o "$OUT" test/stems_test.cpp
+    "$OUT" {{ARGS}}
+
 # These are standalone binaries with no Rack dependency; they test the
 # framework-free logic in src/common/. Each exits non-zero on failure.
 # Run native C++ tests (requires 'just build' first)
@@ -317,6 +335,21 @@ test-native:
     python3 test/test_euclogic.py
     echo "== test_stems.py =="
     python3 test/test_stems.py
+    echo "== stems_test under RELEASE flags =="
+    # The rest of this suite builds as Debug, where -ffast-math is not applied,
+    # so every guard against non-finite input goes untested under the flags that
+    # actually ship. -ffast-math implies -ffinite-math-only, which folds those
+    # guards away entirely, so this compiles with the real Release flags and
+    # runs the checks that depend on them.
+    RELEASE_BIN="${TMPDIR:-/tmp}/stems_test_release"
+    c++ -std=c++17 -O3 -ffast-math -fno-finite-math-only -Isrc -Isrc/common \
+        -o "$RELEASE_BIN" test/stems_test.cpp
+    for check in --test-buffer-non-finite-write --test-buffer-non-finite \
+                 --test-wt-nan-stem --test-wt-bad-input --test-quant-non-finite \
+                 --test-quant-extreme --test-yin-non-finite --test-yin-bad-params \
+                 --test-scale-bad-input --test-extreme-sweep --test-mixer-non-finite; do
+        "$RELEASE_BIN" "$check"
+    done
     echo "== test_hpss_reference.py =="
     python3 test/test_hpss_reference.py
     echo "== test_native_coverage.py =="

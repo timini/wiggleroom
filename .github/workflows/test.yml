@@ -12,9 +12,18 @@ permissions:
   id-token: write
   pull-requests: write
 
+# One run per branch, and a new push supersedes the old one.
+#
+# This was `group: "pages"` with cancel-in-progress false, which is the snippet
+# GitHub's Pages deploy example uses and is wrong for a test workflow: the group
+# is a fixed literal, so only ONE Test & Validate could run across the whole
+# repository at a time, and because superseded runs were not cancelled they held
+# the slot until they finished. Pushing twice in quick succession left the
+# second run queued behind the first, and a run that got stuck blocked every
+# branch behind it indefinitely, which is what happened on PR #102.
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 # =============================================================================
 # CI PIPELINE TERMINOLOGY (ISO 9001 / Software Engineering Standard)

@@ -16,8 +16,20 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_compile_options($<$<CXX_COMPILER_ID:GNU>:-Wno-unused-local-typedefs>)
 
 # Optimization flags for release builds
+#
+# -fno-finite-math-only is not optional. -ffast-math implies
+# -ffinite-math-only, which is a PROMISE to the compiler that no value is ever
+# NaN or infinite, and it acts on that promise by folding every finiteness test
+# to true. Every guard against bad input in src/common/stems then compiles to
+# nothing in Release, silently, while still working in Debug where the flag is
+# not applied. A bit-pattern check does not survive it either: the promise is
+# about the values, so the compiler propagates it straight through the bit
+# inspection.
+#
+# This was found by review, and the reason it was not found by testing is that
+# the tests build as Debug. See the release-flag check in `just test-native`.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    add_compile_options(-O3 -ffast-math)
+    add_compile_options(-O3 -ffast-math -fno-finite-math-only)
 endif()
 
 # 3. Shared Library (Common DSP)

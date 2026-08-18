@@ -153,6 +153,29 @@ class TestRingBuffer:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestRingBufferHardening:
+    """Guarding the point where audio enters the module.
+
+    Note that these guards are only real because Release builds now pass
+    -fno-finite-math-only. -ffast-math implies -ffinite-math-only, which is a
+    promise that no value is ever NaN or infinite, and the compiler acts on it
+    by folding every finiteness test to true. A bit-pattern check does not
+    survive it either, since the promise is about the values. `just test-native`
+    compiles stems_test with the real Release flags and runs these checks under
+    them, because the rest of the suite builds as Debug and would not notice.
+    """
+
+    def test_non_finite_input_is_not_stored(self):
+        """This is the path by which a bad sample reaches everything else: HPSS
+        carries a NaN through the FFT into all four stems, and from there into
+        every oscillator frame and every value the mixer publishes. Guarding on
+        write costs one comparison per sample and saves guarding every consumer.
+        Per-sample, so the good channel of a half-bad frame survives.
+        """
+        result = run_test(["--test-buffer-non-finite-write"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 class TestTransport:
     """Clock tracking and repitch playback.
 
@@ -910,6 +933,266 @@ class TestQuantizer:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+class TestWavetableExtract:
+    """Building fixed-size oscillator frames from a stem."""
+
+    def test_the_frame_is_the_same_length_at_every_window_size(self):
+        """This is what makes wt_window change how much source material is
+        captured rather than the oscillator's pitch: the fundamental is set by
+        how fast the oscillator reads a frame."""
+        result = run_test(["--test-wt-frame-size"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_longer_window_captures_more_material(self):
+        """The companion to the test above. Holding the frame length fixed is
+        only half the requirement; the control also has to do something.
+        Verified to have teeth: pinning the read step to one sample makes every
+        window capture the same thing.
+        """
+        result = run_test(["--test-wt-window-content"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_work_is_spread_evenly_across_calls(self):
+        """Building a whole frame in the call where the playhead crosses a
+        boundary is a spike, and the spike lands on the audio thread.
+
+        Reading the window and finalising it are both amortised, and the budget
+        counts WORK rather than output samples.
+
+        Counting output samples was wrong twice over. Doing the mean, the peak
+        and the copy in the call that completed the read added three whole extra
+        passes to one call in sixteen, uncounted. And at a window of 8192 each
+        output sample costs four source reads, so a reading call did four times
+        the work of a finalising call while both reported the same number.
+        Checked across three windows and three budgets. Verified to have teeth
+        in both forms.
+        """
+        result = run_test(["--test-wt-amortised"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_default_budget_publishes_in_sixteen_calls(self):
+        """A frame costs kFrameSize * (span + 1) units, reading then writing.
+
+        Sizing the default for the reading phase alone doubled the real latency:
+        32 calls rather than 16, which at one call per 256 sample block is
+        171 ms instead of 85, and that is the age of the snapshot before any
+        morphing is applied. Verified to have teeth.
+        """
+        result = run_test(["--test-wt-default-latency"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_reset_rearms_the_degenerate_take_handling(self):
+        """Leaving the handled flag set while dropping the phase meant a reset
+        partway through replacing a frame satisfied the already-handled test
+        forever afterwards, so finalisation never restarted and the previous
+        audible frame stayed visible. Patch load and sample rate changes both
+        call reset(). Verified to have teeth.
+        """
+        result = run_test(["--test-wt-reset-rearm"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_budget_below_the_span_raises_the_bound(self):
+        """A slot's source reads are averaged together, so a slot cannot be
+        split across calls and is the smallest indivisible unit of work.
+        Advertising a bound of one and then doing four reads is worse than
+        admitting the floor. Verified to have teeth.
+        """
+        result = run_test(["--test-wt-tiny-budget"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_unit_ratio_does_no_averaging(self):
+        """Starting the slot at the mapped position rather than centring on it
+        puts every read half a step late, so at the DEFAULT window each output
+        sample was the mean of two adjacent source samples. Verified to have
+        teeth: a stem alternating between +1 and -1 comes out completely silent.
+        """
+        result = run_test(["--test-wt-unit-ratio"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_advertised_work_bound_follows_the_window(self):
+        """The span is only recalculated when a build begins, so reading it
+        alone reported the previous window's bound to anyone inspecting straight
+        after changing the setting, which is exactly when a caller looks.
+        Verified to have teeth: a bound of 1 reported for an 8192 window.
+        """
+        result = run_test(["--test-wt-budget-window"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_moving_window_still_produces_frames(self):
+        """Restarting the build whenever wt_window changed meant automating the
+        control, or turning it slowly enough to cross an integer on each call,
+        discarded the progress every time.
+
+        Everything the build depends on is snapshotted, so finishing at the old
+        size cannot mix two windows; the new size applies to the next build.
+        Verified to have teeth: restarting publishes ZERO frames in 4000 calls,
+        so the oscillator keeps the previous wavetable until the control stops
+        moving, which is the opposite of what a moving control should do.
+        """
+        result = run_test(["--test-wt-window-automation"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_edge_taper_does_not_put_dc_back(self):
+        """Removing the source mean makes the untapered window zero-mean, but
+        multiplying by a fade that is not symmetric about the content shifts it
+        again, and the offset eats headroom in the oscillator and the lowpass
+        gate. The tapered mean is accumulated during the read, so correcting it
+        costs no extra pass. Verified to have teeth: a lopsided zero-mean window
+        publishes a frame sitting 5% of full scale off centre.
+        """
+        result = run_test(["--test-wt-taper-dc"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_stereo_stems_contribute_both_channels(self):
+        """The voice is mono and there is no channel selector, and the worker
+        separates the two sides independently, so the right channel carries
+        different material. Verified to have teeth: reading only the left
+        channel publishes a SILENT wavetable for a stem panned hard right. Also
+        covers mono sets and stereo sets whose right channel is missing.
+        """
+        result = run_test(["--test-wt-stereo"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_no_frame_ever_exceeds_full_scale(self):
+        """The taper correction is subtracted after scaling, so it shifts every
+        sample: a window whose faded edge leans one way against an interior peak
+        leaning the other pushed that peak past unity, and downstream stages
+        then clip content this class claims to have normalised.
+
+        The bound is analytic rather than measured, so it costs no extra pass:
+        the taper never exceeds one, so the shifted result is within
+        sourcePeak + |taperMean|. Verified to have teeth: 1.024 without it.
+        Also sweeps random material across every window and several playheads.
+        """
+        result = run_test(["--test-wt-full-scale"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_frames_follow_the_playhead(self):
+        """Driven with noise, so successive windows genuinely differ rather than
+        repeating a periodic waveform that would look the same wherever it was
+        sampled. Also checks the same playhead gives the same frame."""
+        result = run_test(["--test-wt-tracks"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_build_does_not_smear_across_playhead_motion(self):
+        """The position is snapshotted when a build begins. Re-reading it every
+        call spreads one frame over however far the transport moved, so the
+        frame corresponds to no actual moment in the material. Verified to have
+        teeth: a sweeping playhead changes the frame by 1.77.
+        """
+        result = run_test(["--test-wt-snapshot"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_frames_are_normalised_and_dc_free(self):
+        """Silence is checked twice, and the second case is the one that
+        matters. Exact zeros stay zero under any gain, so a missing guard passes
+        that; denormal-level noise, which is what a real empty buffer holds
+        after a filter has run over it, gets lifted to full scale. Verified to
+        have teeth at 1e-9.
+        """
+        result = run_test(["--test-wt-normalise"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_frame_joins_up_at_the_wrap_point(self):
+        """The frame is read cyclically and source audio has no reason to join
+        up, so the step is a click at the oscillator's own frequency. Measured
+        against the worst step inside the frame, so the bar scales with how fast
+        the waveform is moving. Verified to have teeth: without the edge fade
+        the wrap step is 1.50 against an interior step of 0.002.
+        """
+        result = run_test(["--test-wt-loop"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_decimation_is_averaged_not_point_sampled(self):
+        """Measured on the PUBLISHED frame, not on a pre-normalisation
+        diagnostic.
+
+        Normalising to the frame's own peak undoes the filter: a tone rejected
+        down to five per cent gets multiplied by twenty and published at unity,
+        so the anti-aliasing exists only in the diagnostic. The frame is
+        normalised against the SOURCE window's peak instead, so whatever the
+        filter rejected stays rejected. Verified to have teeth: frame-peak
+        normalisation publishes 20 kHz at 1.0 against a bar of 0.3.
+        """
+        result = run_test(["--test-wt-antialias"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_filter_holds_at_fractional_window_ratios(self):
+        """Nearly every position of a continuous control gives a fractional
+        window-to-frame ratio, and a window of 4095 has a step just under two.
+        Truncating that to a single sample turns the filter off exactly where it
+        is still needed. Verified to have teeth: truncation publishes a 16.8 kHz
+        tone at full scale, while the exact 4:1 test above still passes.
+        """
+        result = run_test(["--test-wt-fractional"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_dc_is_removed_before_the_taper(self):
+        """Tapering first multiplies the offset by the fade, so a flat input
+        becomes a shape that rises and falls with the window and then normalises
+        to full scale. Verified to have teeth: a tone on a 0.9 offset leaves a
+        frame DC of -0.45.
+        """
+        result = run_test(["--test-wt-dc-source"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_one_bad_stem_sample_does_not_poison_the_frame(self):
+        """RingBuffer stores what it is given, so this is reachable from a
+        misbehaving upstream module. Without a guard the value spreads through
+        the mean and the gain into every value of every frame published
+        afterwards.
+        """
+        result = run_test(["--test-wt-nan-stem"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_reading_past_the_stem_does_not_manufacture_a_waveform(self):
+        """The window is centred on the playhead, so at the loop start half of
+        it lies before the beginning of the material, and wt_offset can push it
+        out entirely.
+
+        Zero padding puts artificial silence into the mean and the peak, and
+        after DC removal the padded half and the real half come out equal and
+        opposite. Verified to have teeth: a constant 1.0 stem at playhead 0
+        produces a full-scale square instead of silence. The loop start is not
+        an edge case; it is where the playhead sits at the top of every bar.
+        """
+        result = run_test(["--test-wt-boundary"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_degenerate_stem_set_invalidates_the_old_frame(self):
+        """Hpss.separate sizes every layer to the input length and accepts
+        sub-frame input, so a zero or one frame StemSet really can be published.
+
+        Returning early on the size, before checking whether the set is stale,
+        left frame() showing the previous recording indefinitely. Verified to
+        have teeth.
+
+        Replacing the frame runs through the same amortised path as building
+        one, driven by a gain of zero, so a very short take cannot recreate the
+        frame-boundary spike the reading path exists to avoid. Also checks
+        silence is issued once per take rather than republished on every call,
+        and that real material afterwards builds normally.
+        """
+        result = run_test(["--test-wt-degenerate"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_a_stale_snapshot_restarts_the_build(self):
+        """A new stem set, a different layer or a changed window mid-build means
+        the snapshot no longer describes what is being read. Verified to have
+        teeth: without the restart, a frame built across a stem change differs
+        from a clean one by 2.0.
+        """
+        result = run_test(["--test-wt-restart"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_missing_and_malformed_input_is_safe(self):
+        """Null stem set, which is the state on patch load, plus empty stems,
+        out-of-range layers, non-finite playheads and playheads far outside the
+        material."""
+        result = run_test(["--test-wt-bad-input"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
 class TestExtremeInput:
     """Hostile but legal input, across every module at once."""
 
@@ -943,11 +1226,33 @@ class TestExtremeInput:
         assert result["failed"] == 0, result.get("detail", "")
 
 
+def discover_test_classes() -> list:
+    """Every Test* class in this module, in definition order.
+
+    Discovered rather than listed. The list used to be hand-written and stopped
+    at TestSeparationWorker, so seven classes added afterwards were never
+    instantiated by the native runner that CI actually invokes. Every check in
+    them could have failed while the workflow stayed green.
+
+    This is the same drift that made stems_test declare its own commands instead
+    of having them scraped, and it went the same way: a list maintained by hand
+    beside the thing it describes falls behind it.
+    """
+    # vars() preserves definition order, so no explicit sort is needed.
+    module = sys.modules[__name__]
+    return [obj for name, obj in vars(module).items()
+            if name.startswith("Test") and isinstance(obj, type)]
+
+
 def run_all_tests() -> bool:
     passed = failed = 0
     errors = []
-    for cls in (TestFftBackend, TestRingBuffer, TestTransport, TestStft, TestHpss,
-                TestSeparationWorker):
+    classes = discover_test_classes()
+    if not classes:
+        print("No test classes discovered; the runner is broken.")
+        return False
+    print(f"Discovered {len(classes)} test classes\n")
+    for cls in classes:
         instance = cls()
         for name in dir(instance):
             if not name.startswith("test_"):
