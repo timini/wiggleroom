@@ -513,10 +513,10 @@ private:
     /**
      * Copy the current take out before the buffers are replaced.
      *
-     * Reads whichever buffer actually holds it. After a take ends,
-     * submitSeparation() swaps the completed audio into spare_ and clears
-     * buffer_, so reading buffer_ unconditionally would capture nothing during
-     * exactly the state the module spends most of its time in.
+     * The take always lives in buffer_. It used to be swapped into a spare on
+     * submission, which meant this had to look in two places and which left the
+     * mixer with nothing to fall back on; removing the swap removed both
+     * problems.
      */
     void captureForResample() {
         resampleLeft_.clear();
