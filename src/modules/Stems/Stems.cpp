@@ -317,7 +317,15 @@ struct Stems : Module {
             // load for; the module simply comes up empty and says so in its menu.
             const std::string path = json_string_value(audio);
             const std::string failure = loadAudioFile(path);
-            if (!failure.empty()) loadedPath_ = path;   // remembered, so the menu can show it
+            if (!failure.empty()) {
+                // Applying a preset to a module that already has audio must not
+                // leave the previous file playing under the new preset's name.
+                // The buffer goes even though the load did not happen.
+                if (buffer_) buffer_->clear();
+                cancelPendingCopy();
+                worker_.invalidate();
+                loadedPath_ = path;   // remembered, so the menu can show it
+            }
         }
 
         json_t* r = json_object_get(root, "detectedRoot");
@@ -356,10 +364,21 @@ struct Stems : Module {
 
         const std::size_t cap = loadBuffer_ ? loadBuffer_->capacityFrames() : 0;
         if (cap == 0) return "Buffer is not ready.";
-        // The file is read at ITS rate, so the cap has to allow for the
-        // resample: a 96 kHz file becomes fewer frames at 48 and more at 192.
-        const auto wav = stems::WavFile::read(bytes.data(), bytes.size(),
-                                              cap * 8);
+        // The cap is in the FILE's frames, and the file's rate is not known
+        // until its header is read, so the header is parsed first with a token
+        // amount of audio and the real read follows.
+        //
+        // A fixed multiple does not work: at eight times the buffer, a 768 kHz
+        // file loaded into a 48 kHz patch is cut to a fraction of its length
+        // before the resample has a chance to shorten it.
+        const auto probe = stems::WavFile::read(bytes.data(), bytes.size(), 1);
+        if (!probe.ok) return probe.error;
+        const double fileRatio =
+            (double)probe.sampleRate / (double)std::max(1, sampleRate_);
+        const double wanted = (double)cap * std::max(1.0, fileRatio) + 8.0;
+        const std::size_t fileCap =
+            (std::size_t)std::min(wanted, (double)(std::size_t)-1 / 2.0);
+        const auto wav = stems::WavFile::read(bytes.data(), bytes.size(), fileCap);
         if (!wav.ok) return wav.error;
 
         std::vector<float> left = wav.left;
@@ -436,8 +455,13 @@ private:
         // A loaded file replaces the take entirely, so the old stems go with it
         // and playback starts from the beginning of the new material.
         recording_ = false;
+        cancelPendingCopy();
         worker_.invalidate();
         transport_.setBufferFrames(buffer_->framesStored());
+        // Back to the start. setBufferFrames only changes the length, so
+        // without this a file loaded part way through a loop begins at whatever
+        // phase the previous one had reached.
+        transport_.setPhaseForTest(0.0);
         submitSeparation(args);
     }
 
@@ -497,12 +521,10 @@ private:
     void captureForResample() {
         resampleLeft_.clear();
         resampleRight_.clear();
-        RingBuffer* held = nullptr;
-        if (buffer_ && buffer_->framesStored() >= 2) {
-            held = buffer_.get();
-        } else if (spare_ && spare_->framesStored() >= 2) {
-            held = spare_.get();
-        }
+        // The take always lives in buffer_ now, so there is only one place to
+        // look. It used to be swapped into a spare, which is what made this
+        // need two.
+        RingBuffer* held = (buffer_ && buffer_->framesStored() >= 2) ? buffer_.get() : nullptr;
         if (!held) return;
         const std::size_t frames = held->framesStored();
         resampleLeft_.resize(frames);
@@ -597,7 +619,6 @@ private:
         // Allocated once per sample rate change, on the UI thread, never in
         // process(). Sized for the 32 second ceiling the spec sets.
         buffer_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
-        spare_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
         // A third buffer, owned by the UI thread while a file is being prepared.
         loadBuffer_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
         loadPending_.store(false, std::memory_order_release);
@@ -703,7 +724,14 @@ private:
                                            : (trig || armEdge);
             if (start) {
                 if (mode != 2) {
+                    // The copy in flight reads this buffer, so it has to go
+                    // before the contents do.
+                    cancelPendingCopy();
                     buffer_->clear();
+                    // The buffer is no longer that file, so the patch must stop
+                    // claiming it is and reloading it on the next open.
+                    loadedPath_.clear();
+                    loadedTruncated_ = false;
                     // A new take supersedes the old one. Leaving the previous
                     // StemSet published meant the module kept playing the last
                     // recording all the way through the new one, and kept it
@@ -745,41 +773,52 @@ private:
         submitSeparation(args);
     }
 
-    void submitSeparation(const ProcessArgs& args) {
-        // SWAPPED, not copied. Copying up to 32 seconds of stereo float here
-        // meant two resizes and millions of samples inside one audio callback,
-        // and submit() then copied it again under a mutex. Two buffers and a
-        // pointer swap cost nothing: the worker owns the take it is separating
-        // and process() records into the other one.
-        const std::size_t frames = buffer_->framesStored();
-        if (frames < 2048) return;
-        pendingHandoff_ = true;
-        handoffFrames_ = frames;
-        handoffRate_ = (int)args.sampleRate;
-        std::swap(buffer_, spare_);
-        buffer_->clear();
-    }
-
     /**
-     * Complete a handoff. Called from process() but does the copy only when a
-     * take has just ended, which is once per recording rather than per sample.
+     * Begin handing the current take to the worker.
      *
-     * The copy itself still happens here rather than on the worker, because
-     * SeparationWorker::submit takes the snapshot under its own lock and that
-     * contract is what keeps the worker from ever reading a live buffer. What
-     * the swap removes is doing it from the buffer process() is writing.
+     * The take STAYS in buffer_. An earlier version swapped it into a spare and
+     * cleared the live buffer, which left the mixer with no fallback to play:
+     * every recording and every loaded file went silent until separation
+     * finished, which is the opposite of the graceful degradation the spec asks
+     * for. Nothing needs to move, because the audio thread only writes this
+     * buffer while recording and starting a recording cancels the copy.
      */
-    void completeHandoff() {
-        if (!pendingHandoff_) return;
-        pendingHandoff_ = false;
-        const std::size_t frames = std::min(handoffFrames_, spare_->framesStored());
-        if (frames < 2048) return;
+    void submitSeparation(const ProcessArgs& args) {
+        const std::size_t frames = buffer_->framesStored();
+        if (frames < 2048) { copyPending_ = false; return; }
+        copyPending_ = true;
+        copyCursor_ = 0;
+        copyFrames_ = frames;
+        copyRate_ = (int)args.sampleRate;
         scratchLeft_.resize(frames);
         scratchRight_.resize(frames);
-        for (std::size_t i = 0; i < frames; i++) {
-            spare_->readFrame(i, scratchLeft_[i], scratchRight_[i]);
+    }
+
+    /** Abandon a copy whose source is about to be overwritten. */
+    void cancelPendingCopy() { copyPending_ = false; }
+
+    /**
+     * Copy a slice of the take for the worker.
+     *
+     * Amortised, because a full 32 second stereo recording is millions of
+     * samples and doing it in the callback that happened to end the take is a
+     * spike in exactly the place a spike is least affordable.
+     */
+    void completeHandoff() {
+        if (!copyPending_) return;
+        const std::size_t total = std::min(copyFrames_, buffer_->framesStored());
+        const std::size_t remaining = (copyCursor_ < total) ? (total - copyCursor_) : 0;
+        const std::size_t count = std::min<std::size_t>(remaining, kCopyFramesPerCall);
+        for (std::size_t i = 0; i < count; i++) {
+            buffer_->readFrame(copyCursor_ + i, scratchLeft_[copyCursor_ + i],
+                               scratchRight_[copyCursor_ + i]);
         }
-        worker_.submit(scratchLeft_.data(), scratchRight_.data(), frames, handoffRate_);
+        copyCursor_ += count;
+        if (copyCursor_ < total) return;
+
+        copyPending_ = false;
+        if (total < 2048) return;
+        worker_.submit(scratchLeft_.data(), scratchRight_.data(), total, copyRate_);
     }
 
     void advanceTransport(const ProcessArgs& args) {
@@ -890,14 +929,16 @@ private:
     }
 
     std::unique_ptr<RingBuffer> buffer_;
-    std::unique_ptr<RingBuffer> spare_;
     std::unique_ptr<RingBuffer> loadBuffer_;
     std::atomic<bool> loadPending_{false};
     std::string loadedPath_;
     bool loadedTruncated_ = false;
-    bool pendingHandoff_ = false;
-    std::size_t handoffFrames_ = 0;
-    int handoffRate_ = 48000;
+    bool copyPending_ = false;
+    std::size_t copyCursor_ = 0;
+    std::size_t copyFrames_ = 0;
+    int copyRate_ = 48000;
+    /** Frames copied per call. A 32 second take spreads over about a second. */
+    static constexpr std::size_t kCopyFramesPerCall = 1024;
     std::size_t overdubRead_ = 0;
     float lastSpace_ = -1.f, lastLpgDecay_ = -1.f, lastGlide_ = -1.f, lastMorph_ = -1.f;
     Transport transport_{48000};
