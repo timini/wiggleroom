@@ -136,7 +136,19 @@ Window changes how much material is captured, **not** the oscillator's pitch. Fr
 | QCV | 1V/Oct | Quantised pitch, normalled internally to the oscillator |
 | Beat | Trigger | Fires on each loop downbeat |
 
+## Loading a file
+
+Right-click the panel and choose **Load WAV file**. The file replaces whatever is in the buffer, is resampled to the patch's rate if it does not match, and is separated straight away.
+
+It reads uncompressed WAV: PCM 8, 16, 24 and 32 bit, and 32 and 64 bit float, mono or stereo. Surround files are folded down to stereo rather than refused. Compressed formats need a decoder and are not supported, and you will get a message saying so rather than silence.
+
+Anything longer than the buffer is trimmed to fit, and the menu says so when that happens.
+
+The patch stores the **path**, not the audio, for the same reason a recording is not saved: 32 seconds of stereo float is tens of megabytes and would land in every patch file. Reopening a patch reloads the file from disk. If it has moved since, the module comes up empty and the menu still shows the name it was looking for.
+
 ## Typical uses
+
+**Sample mangling.** Load a WAV, mute everything but Harmonic, and the wavetable voice plays the pitched content of a sample that may have had none obvious in it.
 
 **Beat-synced resampler.** Clock it from your master clock, record four bars of a drum patch, and mix the layers back in different proportions. Muting Percussive and keeping Harmonic gives you the pad hiding inside your own beat.
 
@@ -152,4 +164,5 @@ Window changes how much material is captured, **not** the oscillator's pitch. Fr
 - Analysis is meaningless on an unpitched layer. Select Percussive and the confidence drops, the last confident key is held, and the analysis light goes out. That is working as intended, not a fault.
 - Window and Morph interact. A short window with fast morph tracks the playhead closely and sounds restless; a long window with slow morph smears, which is usually what you want for pads.
 - Colour at the lowpass end keeps the level up and only takes brightness away as the note decays. At the VCA end it takes level only. The middle does both, which is what makes it sound plucked.
-- The buffer is not saved with the patch. Reload and you will need to record again, but the detected key is restored so the quantiser behaves the way it did before.
+- The buffer is not saved with the patch. A recording has to be made again; a loaded file is reloaded from its path. Either way the detected key is restored, so the quantiser behaves the way it did before.
+- A loaded file replaces the take completely, including the separated stems, and playback restarts from the beginning of the new material.

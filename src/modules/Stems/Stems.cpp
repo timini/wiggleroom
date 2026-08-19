@@ -15,6 +15,8 @@
 
 #include "rack.hpp"
 
+#include <osdialog.h>
+
 #include "LowpassGate.hpp"
 #include "stems/Diffusion.hpp"
 #include "stems/GrainEngine.hpp"
@@ -24,6 +26,7 @@
 #include "stems/SeparationWorker.hpp"
 #include "stems/StemMixer.hpp"
 #include "stems/Transport.hpp"
+#include "stems/WavFile.hpp"
 #include "stems/WavetableExtract.hpp"
 #include "stems/WavetableOsc.hpp"
 #include "stems/Yin.hpp"
@@ -31,6 +34,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <vector>
 
@@ -280,6 +284,7 @@ struct Stems : Module {
         lights[ANALYSIS_ACTIVE_LIGHT].setBrightness(analysisActive_ ? 1.f : 0.f);
         lights[DOWNBEAT_LIGHT].setBrightnessSmooth(downbeat ? 1.f : 0.f, args.sampleTime * 8.f);
 
+        adoptLoadedFile(args);
         updateDisplay();
         completeHandoff();
         worker_.release(stems);
@@ -291,6 +296,12 @@ struct Stems : Module {
         // stereo float, which would put tens of megabytes into every patch
         // file; PixelProbe sets the precedent of storing a reference rather
         // than a payload. Parameters are saved by Rack itself.
+        // The path, never the audio. Same policy as the recorded buffer and as
+        // PixelProbe: a reference costs nothing in the patch file, and 32
+        // seconds of stereo float is tens of megabytes.
+        if (!loadedPath_.empty()) {
+            json_object_set_new(root, "audioPath", json_string(loadedPath_.c_str()));
+        }
         json_object_set_new(root, "detectedRoot", json_integer(detector_.held().root));
         json_object_set_new(root, "detectedMode",
                             json_integer((int)detector_.held().mode));
@@ -299,6 +310,16 @@ struct Stems : Module {
 
     void dataFromJson(json_t* root) override {
         if (!root) return;
+        json_t* audio = json_object_get(root, "audioPath");
+        if (audio && json_is_string(audio)) {
+            // Reloaded on a best-effort basis. The file may have moved since the
+            // patch was saved, which is not an error worth interrupting a patch
+            // load for; the module simply comes up empty and says so in its menu.
+            const std::string path = json_string_value(audio);
+            const std::string failure = loadAudioFile(path);
+            if (!failure.empty()) loadedPath_ = path;   // remembered, so the menu can show it
+        }
+
         json_t* r = json_object_get(root, "detectedRoot");
         json_t* m = json_object_get(root, "detectedMode");
         if (r && m) {
@@ -310,6 +331,73 @@ struct Stems : Module {
             // module has heard enough to decide again.
             detector_.setSeed(root_, mode);
         }
+    }
+
+    /**
+     * Load a WAV from disk, replacing whatever is in the buffer.
+     *
+     * UI thread only. The file is read, resampled and written into a buffer the
+     * audio thread never touches, and only then handed over by a flag that
+     * process() consumes with a pointer swap. Writing the live buffer from here
+     * would be a plain data race against recording and playback.
+     *
+     * @return an empty string on success, or a message to show the user.
+     */
+    std::string loadAudioFile(const std::string& path) {
+        if (path.empty()) return "No file chosen.";
+        if (loadPending_.load(std::memory_order_acquire)) {
+            // A previous load is still waiting to be picked up. It is consumed
+            // within one process() call, so this is a moment at worst.
+            return "Still loading the last file, try again.";
+        }
+
+        std::vector<unsigned char> bytes;
+        if (!readWholeFile(path, bytes)) return "Could not open that file.";
+
+        const std::size_t cap = loadBuffer_ ? loadBuffer_->capacityFrames() : 0;
+        if (cap == 0) return "Buffer is not ready.";
+        // The file is read at ITS rate, so the cap has to allow for the
+        // resample: a 96 kHz file becomes fewer frames at 48 and more at 192.
+        const auto wav = stems::WavFile::read(bytes.data(), bytes.size(),
+                                              cap * 8);
+        if (!wav.ok) return wav.error;
+
+        std::vector<float> left = wav.left;
+        std::vector<float> right = wav.right;
+        const double ratio = (double)sampleRate_ / (double)std::max(1, wav.sampleRate);
+        if (ratio < 1.0) {
+            const int span = std::max(1, 2 * (int)std::lround(1.0 / ratio));
+            if (span > 1) {
+                smoothInPlace(left, span);
+                smoothInPlace(right, span);
+            }
+        }
+
+        loadBuffer_->clear();
+        const std::size_t source = left.size();
+        if (source < 2) return "That file has no audio in it.";
+        const std::size_t target = std::min(cap, (std::size_t)((double)source * ratio));
+        for (std::size_t i = 0; i < target; i++) {
+            const double at = (double)i / ratio;
+            const std::size_t i0 = std::min((std::size_t)at, source - 1);
+            const std::size_t i1 = std::min(i0 + 1, source - 1);
+            const float f = (float)(at - (double)i0);
+            loadBuffer_->write(left[i0] + (left[i1] - left[i0]) * f,
+                               right[i0] + (right[i1] - right[i0]) * f);
+        }
+
+        loadedPath_ = path;
+        loadedTruncated_ = wav.truncated || target < (std::size_t)((double)source * ratio);
+        loadPending_.store(true, std::memory_order_release);
+        return "";
+    }
+
+    const std::string& loadedPath() const { return loadedPath_; }
+    bool loadedWasTruncated() const { return loadedTruncated_; }
+
+    void clearLoadedFile() {
+        loadedPath_.clear();
+        loadedTruncated_ = false;
     }
 
     /**
@@ -333,6 +421,47 @@ struct Stems : Module {
     }
 
 private:
+    /**
+     * Take ownership of a file the UI thread has finished preparing.
+     *
+     * The swap is the whole handover: after it the audio thread owns the loaded
+     * audio and the UI side holds whatever was in the buffer before, which it
+     * will not touch until the next load.
+     */
+    void adoptLoadedFile(const ProcessArgs& args) {
+        if (!loadPending_.load(std::memory_order_acquire)) return;
+        std::swap(buffer_, loadBuffer_);
+        loadPending_.store(false, std::memory_order_release);
+
+        // A loaded file replaces the take entirely, so the old stems go with it
+        // and playback starts from the beginning of the new material.
+        recording_ = false;
+        worker_.invalidate();
+        transport_.setBufferFrames(buffer_->framesStored());
+        submitSeparation(args);
+    }
+
+    /**
+     * Read a whole file into memory.
+     *
+     * The ceiling is a sanity bound rather than a format limit: choosing a
+     * multi-gigabyte file by mistake should not make the host allocate it.
+     */
+    static bool readWholeFile(const std::string& path, std::vector<unsigned char>& out) {
+        std::FILE* file = std::fopen(path.c_str(), "rb");
+        if (!file) return false;
+        std::fseek(file, 0, SEEK_END);
+        const long size = std::ftell(file);
+        std::fseek(file, 0, SEEK_SET);
+        const long limit = 512L * 1024L * 1024L;
+        if (size <= 0 || size > limit) { std::fclose(file); return false; }
+        out.resize((std::size_t)size);
+        const std::size_t got = std::fread(out.data(), 1, out.size(), file);
+        std::fclose(file);
+        out.resize(got);
+        return got > 0;
+    }
+
     /**
      * Fill one display column per call, so the cost is a handful of reads per
      * sample rather than a sweep of the whole buffer at draw time.
@@ -469,6 +598,9 @@ private:
         // process(). Sized for the 32 second ceiling the spec sets.
         buffer_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
         spare_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
+        // A third buffer, owned by the UI thread while a file is being prepared.
+        loadBuffer_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
+        loadPending_.store(false, std::memory_order_release);
         transport_.setSampleRate(rate);
         transport_.setBufferFrames(buffer_->capacityFrames());
         mixer_.setSampleRate(rate);
@@ -759,6 +891,10 @@ private:
 
     std::unique_ptr<RingBuffer> buffer_;
     std::unique_ptr<RingBuffer> spare_;
+    std::unique_ptr<RingBuffer> loadBuffer_;
+    std::atomic<bool> loadPending_{false};
+    std::string loadedPath_;
+    bool loadedTruncated_ = false;
     bool pendingHandoff_ = false;
     std::size_t handoffFrames_ = 0;
     int handoffRate_ = 48000;
@@ -926,6 +1062,44 @@ struct StemsWidget : ModuleWidget {
         addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(x + 132.f, jackRow)), module, Stems::DOWNBEAT_OUTPUT));
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(x + 88.f, outRow)), module, Stems::WT_OFFSET_CV_INPUT));
         addChild(createLightCentered<SmallLight<BlueLight>>(mm2px(Vec(x + 132.f, outRow)), module, Stems::DOWNBEAT_LIGHT));
+    }
+
+    void appendContextMenu(Menu* menu) override {
+        auto* module = dynamic_cast<Stems*>(this->module);
+        if (!module) return;
+
+        menu->addChild(new MenuSeparator);
+        menu->addChild(createMenuLabel("Audio"));
+
+        menu->addChild(createMenuItem("Load WAV file...", "", [module]() {
+            char* chosen = osdialog_file(OSDIALOG_OPEN, nullptr, nullptr, nullptr);
+            if (!chosen) return;
+            const std::string path = chosen;
+            std::free(chosen);
+            const std::string failure = module->loadAudioFile(path);
+            if (!failure.empty()) {
+                // Shown rather than swallowed. A file that will not load is
+                // something the user needs told, and the reader already returns
+                // a message written for them rather than for a developer.
+                osdialog_message(OSDIALOG_WARNING, OSDIALOG_OK, failure.c_str());
+            }
+        }));
+
+        const std::string& loaded = module->loadedPath();
+        if (!loaded.empty()) {
+            // Just the filename. Full paths are long enough to push the menu
+            // wider than the module.
+            std::string name = loaded;
+            const std::size_t slash = name.find_last_of("/\\");
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            menu->addChild(createMenuLabel(name));
+            if (module->loadedWasTruncated()) {
+                menu->addChild(createMenuLabel("(trimmed to the buffer length)"));
+            }
+            menu->addChild(createMenuItem("Forget loaded file", "", [module]() {
+                module->clearLoadedFile();
+            }));
+        }
     }
 };
 
