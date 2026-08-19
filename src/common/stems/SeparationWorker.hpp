@@ -49,6 +49,7 @@
 #include "FftBackend.hpp"
 #include "Hpss.hpp"
 #include "ReferenceFft.hpp"
+#include "Yin.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -260,6 +261,65 @@ public:
         hazard_.store(nullptr, std::memory_order_seq_cst);
     }
 
+    /** Longest analysis window the worker will accept. */
+    static constexpr std::size_t kAnalysisWindow = 4096;
+
+    /**
+     * Hand a window of audio over for pitch analysis.
+     *
+     * Lock-free on the caller's side, which is the point: YIN is
+     * O(window * maxTau), about two million operations, and running it from
+     * process() put all of that into a single audio deadline. It showed up as
+     * exactly what you would expect, a periodic CPU spike at the analysis rate.
+     *
+     * A single slot, not a queue. If the worker has not taken the last window
+     * this one is dropped, which is right for analysis: the scale detector
+     * accumulates over many windows and holds its last confident result, so
+     * missing some costs nothing. A queue would only add latency and memory to
+     * reach the same answer.
+     *
+     * @return true if the window was accepted.
+     */
+    bool submitAnalysis(const float* window, std::size_t length, int sampleRate) {
+        if (!window || length == 0) return false;
+        if (analysisPending_.load(std::memory_order_acquire)) return false;
+        const std::size_t n = std::min(length, kAnalysisWindow);
+        for (std::size_t i = 0; i < n; i++) analysisWindow_[i] = window[i];
+        analysisLength_ = n;
+        analysisRate_ = sampleRate;
+        analysisPending_.store(true, std::memory_order_release);
+        wake_.notify_one();
+        return true;
+    }
+
+    struct AnalysisResult {
+        float frequency = 0.f;
+        float confidence = 0.f;
+        bool voiced = false;
+    };
+
+    /**
+     * Collect a finished estimate, if there is one.
+     *
+     * @return true when @p out was filled.
+     */
+    bool takeAnalysis(AnalysisResult& out) {
+        if (!analysisReady_.load(std::memory_order_acquire)) return false;
+        out = analysisResult_;
+        analysisReady_.store(false, std::memory_order_release);
+        return true;
+    }
+
+    /** Analysis windows the worker completed. Diagnostics. */
+    uint64_t debugAnalysisDone() const {
+        return analysisDone_.load(std::memory_order_relaxed);
+    }
+
+    /** Analysis windows refused because the worker was still busy. Diagnostics. */
+    uint64_t debugAnalysisDropped() const {
+        return analysisDropped_.load(std::memory_order_relaxed);
+    }
+
     /** Sets currently allocated, live plus awaiting reclamation. Diagnostics. */
     std::size_t liveSetCount() const {
         std::lock_guard<std::mutex> lock(retiredMutex_);
@@ -300,6 +360,11 @@ private:
         Hpss hpss(*fft);
         hpss.setAbortFlag(&abort_);
 
+        // The worker's own copy, so the audio thread can refill its slot the
+        // moment this one is taken.
+        Yin yin(kAnalysisWindow);
+        std::vector<float> analysis(kAnalysisWindow, 0.f);
+
         while (running_.load(std::memory_order_acquire)) {
             std::vector<float> left, right;
             int channels = 1;
@@ -310,6 +375,7 @@ private:
                 std::unique_lock<std::mutex> lock(mutex_);
                 auto ready = [this] {
                     return hasPending_ || reclaimRequested_ ||
+                           analysisPending_.load(std::memory_order_acquire) ||
                            !running_.load(std::memory_order_acquire);
                 };
                 if (hasRetired()) {
@@ -321,6 +387,31 @@ private:
                     wake_.wait(lock, ready);
                 }
                 if (!running_.load(std::memory_order_acquire)) break;
+
+                // Analysis first: it is short, and separation can take seconds.
+                if (analysisPending_.load(std::memory_order_acquire)) {
+                    const std::size_t n = analysisLength_;
+                    const int rate = analysisRate_;
+                    for (std::size_t i = 0; i < n; i++) analysis[i] = analysisWindow_[i];
+                    // Released only after the copy, so the audio thread cannot
+                    // overwrite the window while it is being read.
+                    analysisPending_.store(false, std::memory_order_release);
+                    lock.unlock();
+
+                    yin.setSampleRate(rate);
+                    const auto estimate = yin.analyse(analysis.data(), n);
+                    if (!analysisReady_.load(std::memory_order_acquire)) {
+                        analysisResult_.frequency = estimate.frequency;
+                        analysisResult_.confidence = estimate.confidence;
+                        analysisResult_.voiced = estimate.voiced;
+                        analysisReady_.store(true, std::memory_order_release);
+                    } else {
+                        analysisDropped_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    analysisDone_.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+
                 if (!hasPending_) {
                     // Cleared before releasing the lock. Leaving it set would
                     // make the predicate true forever and spin the worker at
@@ -499,6 +590,15 @@ private:
     std::atomic<uint64_t> jobsStarted_{0};
     std::atomic<uint64_t> jobsDiscarded_{0};
     std::atomic<uint64_t> jobsFailed_{0};
+
+    std::atomic<bool> analysisPending_{false};
+    std::atomic<bool> analysisReady_{false};
+    std::size_t analysisLength_ = 0;
+    int analysisRate_ = 48000;
+    AnalysisResult analysisResult_;
+    std::atomic<uint64_t> analysisDone_{0};
+    std::atomic<uint64_t> analysisDropped_{0};
+    float analysisWindow_[kAnalysisWindow] = {};
 };
 
 }  // namespace stems
