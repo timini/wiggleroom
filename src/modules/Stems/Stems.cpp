@@ -264,7 +264,7 @@ struct Stems : Module {
 
         const auto loop = mixer_.process(stems, playhead, fallbackLeft, fallbackRight);
 
-        runAnalysis(stems, args);
+        runAnalysis(args);
         const float voice = runVoice(stems, playhead, args);
         const auto out = runGranular(loop, voice, args);
 
@@ -280,7 +280,19 @@ struct Stems : Module {
         outputs[DOWNBEAT_OUTPUT].setVoltage(downbeatPulse_.process(args.sampleTime) ? 10.f : 0.f);
 
         lights[REC_LIGHT].setBrightness(recording_ ? 1.f : 0.f);
-        lights[SEPARATING_LIGHT].setBrightness(stems == nullptr && !buffer_->empty() ? 1.f : 0.f);
+        // Separating means: a take exists, and no stems have arrived for it yet.
+        const bool separating = (stems == nullptr) && !buffer_->empty() && !recording_;
+        separating_.store(separating, std::memory_order_relaxed);
+        // The copy is the only part with a measurable position; the separation
+        // itself gives no progress, so the bar fills during the handoff and then
+        // pulses while HPSS runs. Better an honest two-phase indicator than a
+        // fake percentage.
+        const float copyProgress =
+            copyPending_ && copyFrames_ > 0
+                ? std::min(1.f, (float)((double)copyCursor_ / (double)copyFrames_))
+                : (separating ? 1.f : 0.f);
+        separationProgress_.store(copyProgress, std::memory_order_relaxed);
+        lights[SEPARATING_LIGHT].setBrightness(separating ? 1.f : 0.f);
         lights[ANALYSIS_ACTIVE_LIGHT].setBrightness(analysisActive_ ? 1.f : 0.f);
         lights[DOWNBEAT_LIGHT].setBrightnessSmooth(downbeat ? 1.f : 0.f, args.sampleTime * 8.f);
 
@@ -430,6 +442,14 @@ struct Stems : Module {
      * to fill cheaply and never reallocated.
      */
     static constexpr int kDisplayColumns = 256;
+
+    /** 0 while idle, or how far the take has got toward being separated. */
+    float separationProgress() const {
+        return separationProgress_.load(std::memory_order_relaxed);
+    }
+
+    bool isSeparating() const { return separating_.load(std::memory_order_relaxed); }
+    bool isRecording() const { return recording_; }
 
     void readDisplay(float* out, int count, float* playheadFraction) const {
         const int n = std::min(count, kDisplayColumns);
@@ -845,16 +865,29 @@ private:
         return std::min(std::max<std::size_t>(wanted, 1), cap);
     }
 
-    void runAnalysis(const StemSet* stems, const ProcessArgs& args) {
-        // Analysis runs on a window, not per sample, so it is spread across
-        // blocks: gathering samples here and estimating once the window is full
-        // keeps the per-call cost flat.
+    /**
+     * Gather a window and POST it to the worker.
+     *
+     * YIN used to run here, and it is O(window * maxTau): about two million
+     * operations dropped into one audio callback every 4096 samples. That is a
+     * periodic CPU spike big enough to see on a meter, and it is what this was
+     * reported as. All that happens on the audio thread now is filling an array
+     * and reading back an answer.
+     */
+    void runAnalysis(const ProcessArgs& args) {
         analysisWindow_[analysisFill_++] = mixer_.tap();
-        if (analysisFill_ < analysisWindow_.size()) return;
-        analysisFill_ = 0;
+        if (analysisFill_ >= analysisWindow_.size()) {
+            analysisFill_ = 0;
+            // Dropped if the worker is still busy, which is fine: the detector
+            // accumulates over many windows and holds its last confident result.
+            worker_.submitAnalysis(analysisWindow_.data(), analysisWindow_.size(),
+                                   (int)args.sampleRate);
+        }
 
-        const auto pitch = yin_.analyse(analysisWindow_.data(), analysisWindow_.size());
-        detector_.addPitch(pitch.frequency, pitch.confidence, pitch.voiced);
+        SeparationWorker::AnalysisResult estimate;
+        if (!worker_.takeAnalysis(estimate)) return;
+
+        detector_.addPitch(estimate.frequency, estimate.confidence, estimate.voiced);
         const auto key = detector_.detect();
         analysisActive_ = key.detected;
 
@@ -864,8 +897,6 @@ private:
                                           ? Quantizer::Scale::Major
                                           : Quantizer::Scale::NaturalMinor);
         }
-        (void)stems;
-        (void)args;
     }
 
     float runVoice(const StemSet* stems, double playhead, const ProcessArgs& args) {
@@ -980,6 +1011,8 @@ private:
 
     std::atomic<float> displayPeaks_[kDisplayColumns] = {};
     std::atomic<float> displayPlayhead_{0.f};
+    std::atomic<float> separationProgress_{0.f};
+    std::atomic<bool> separating_{false};
     int displayColumn_ = 0;
 };
 
@@ -1016,7 +1049,58 @@ struct StemsDisplay : LedDisplay {
         nvgStrokeColor(args.vg, nvgRGBA(0xff, 0xaa, 0x33, 0xdd));
         nvgStrokeWidth(args.vg, 1.5f);
         nvgStroke(args.vg);
+
+        drawStatus(args, w, h);
     }
+
+    /**
+     * Say what the module is doing, because separation takes seconds and a
+     * module that looks idle while it works reads as a module that is broken.
+     */
+    void drawStatus(const DrawArgs& args, float w, float h) {
+        if (module->isRecording()) {
+            nvgBeginPath(args.vg);
+            nvgCircle(args.vg, 8.f, 8.f, 3.f);
+            nvgFillColor(args.vg, nvgRGBA(0xff, 0x44, 0x44, 0xee));
+            nvgFill(args.vg);
+            label(args, 16.f, 11.f, "RECORDING", nvgRGBA(0xff, 0x88, 0x88, 0xdd));
+            return;
+        }
+        if (!module->isSeparating()) return;
+
+        // A bar across the bottom: filling while the take is copied, then
+        // sweeping while HPSS runs, which has no position to report.
+        const float progress = module->separationProgress();
+        const float barH = 3.f;
+        const float y = h - barH - 1.f;
+        nvgBeginPath(args.vg);
+        nvgRect(args.vg, 0, y, w, barH);
+        nvgFillColor(args.vg, nvgRGBA(0x22, 0x2c, 0x36, 0xcc));
+        nvgFill(args.vg);
+
+        nvgBeginPath(args.vg);
+        if (progress < 1.f) {
+            nvgRect(args.vg, 0, y, w * progress, barH);
+        } else {
+            // Indeterminate: a block sweeping left to right, so it is obviously
+            // "still working" rather than "stuck at 100 per cent".
+            sweep_ = std::fmod(sweep_ + 0.006f, 1.f);
+            const float blockW = w * 0.25f;
+            nvgRect(args.vg, (w + blockW) * sweep_ - blockW, y, blockW, barH);
+        }
+        nvgFillColor(args.vg, nvgRGBA(0x66, 0xdd, 0xff, 0xdd));
+        nvgFill(args.vg);
+
+        label(args, 4.f, y - 3.f, "SEPARATING", nvgRGBA(0x66, 0xdd, 0xff, 0xbb));
+    }
+
+    void label(const DrawArgs& args, float x, float y, const char* text, NVGcolor colour) {
+        nvgFontSize(args.vg, 8.f);
+        nvgFillColor(args.vg, colour);
+        nvgText(args.vg, x, y, text, nullptr);
+    }
+
+    float sweep_ = 0.f;
 };
 
 struct StemsWidget : ModuleWidget {

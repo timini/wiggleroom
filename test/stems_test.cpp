@@ -1423,6 +1423,76 @@ bool workerInvalidate(std::string& detail) {
     return true;
 }
 
+/**
+ * Pitch analysis must run on the worker, not the caller.
+ *
+ * YIN is O(window * maxTau), about two million operations. Running it from
+ * process() put all of that into one audio deadline and showed up as a periodic
+ * CPU spike at the analysis rate, which is what a user reported.
+ */
+bool workerAnalysis(std::string& detail) {
+    SeparationWorker worker;
+    worker.start();
+
+    const int sampleRate = 48000;
+    std::vector<float> tone(SeparationWorker::kAnalysisWindow, 0.f);
+    for (std::size_t i = 0; i < tone.size(); i++) {
+        tone[i] = (float)std::sin(2 * M_PI * 220.0 * (double)i / sampleRate);
+    }
+
+    if (!worker.submitAnalysis(tone.data(), tone.size(), sampleRate)) {
+        detail = "the first analysis window was refused";
+        worker.stop();
+        return false;
+    }
+
+    SeparationWorker::AnalysisResult result;
+    const bool got = waitFor([&] { return worker.takeAnalysis(result); }, 5000);
+    if (!got) { detail = "no analysis result came back"; worker.stop(); return false; }
+    if (!result.voiced) { detail = "a clean 220 Hz tone was not voiced"; worker.stop(); return false; }
+    const double cents = 1200.0 * std::log2(result.frequency / 220.0);
+    if (std::fabs(cents) > 20.0) {
+        detail = "analysis returned " + std::to_string(result.frequency) + " Hz";
+        worker.stop();
+        return false;
+    }
+
+    // The slot holds ONE window. A second offer while the first is outstanding
+    // must be refused rather than overwriting a window being read.
+    std::vector<float> noise(SeparationWorker::kAnalysisWindow, 0.f);
+    std::mt19937 rng(5);
+    std::uniform_real_distribution<float> dist(-1.f, 1.f);
+    for (auto& x : noise) x = dist(rng);
+    int accepted = 0, refused = 0;
+    for (int i = 0; i < 200; i++) {
+        if (worker.submitAnalysis(noise.data(), noise.size(), sampleRate)) accepted++;
+        else refused++;
+    }
+    if (accepted == 0) { detail = "no further windows were accepted"; worker.stop(); return false; }
+    if (refused == 0) {
+        detail = "every one of 200 back-to-back windows was accepted; the slot is "
+                 "not bounded and a window could be overwritten while it is read";
+        worker.stop();
+        return false;
+    }
+
+    // Analysis must not stop separation working.
+    auto input = makeJobInput(8192, 33);
+    const uint64_t gen = worker.submit(input.data(), input.size(), sampleRate);
+    const bool published = waitFor([&] {
+        const StemSet* set = worker.acquire();
+        const bool ok = (set != nullptr && set->generation == gen);
+        worker.release(set);
+        return ok;
+    });
+    const uint64_t done = worker.debugAnalysisDone();
+    worker.stop();
+
+    if (!published) { detail = "separation stopped working once analysis was in use"; return false; }
+    if (done == 0) { detail = "the worker never reported completing an analysis"; return false; }
+    return true;
+}
+
 /** acquire() must be safe before anything has ever been published. */
 bool workerEmptyAcquire(std::string& detail) {
     SeparationWorker worker;
@@ -8240,6 +8310,7 @@ const TestCase kCases[] = {
     {"--test-worker-stale",       "worker_stale",       workerDiscardsStale},
     {"--test-worker-retire",      "worker_retire",      workerRetiresOffAudioThread},
     {"--test-worker-invalidate",  "worker_invalidate",  workerInvalidate},
+    {"--test-worker-analysis",    "worker_analysis",    workerAnalysis},
     {"--test-worker-empty",       "worker_empty",       workerEmptyAcquire},
     {"--test-worker-stereo",      "worker_stereo",      workerStereo},
     {"--test-worker-failure",     "worker_failure",     workerSeparationFailureIsNonFatal},

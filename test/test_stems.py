@@ -466,6 +466,18 @@ class TestSeparationWorker:
         result = run_test(["--test-worker-invalidate"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_pitch_analysis_runs_on_the_worker(self):
+        """YIN is O(window * maxTau), about two million operations. Running it
+        from process() put all of that into one audio deadline and showed up as
+        a periodic CPU spike, which is what a user reported.
+
+        Also checks the slot is bounded: a second window offered while the first
+        is outstanding must be refused, or the audio thread could overwrite a
+        window the worker is reading.
+        """
+        result = run_test(["--test-worker-analysis"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_acquire_before_any_job_is_safe(self):
         """This is the state on patch load."""
         result = run_test(["--test-worker-empty"])

@@ -160,7 +160,8 @@ The patch stores the **path**, not the audio, for the same reason a recording is
 
 ## Tips
 
-- Separation takes a moment. Until it finishes the module plays the unseparated recording through channel 1 alone, at the same level, and crossfades to the real stems when they arrive. You will not hear a jump.
+- Separation takes a moment, and the display says so: a bar fills while the take is copied, then sweeps while the separation itself runs, because that part has no progress to report. Until it finishes the module plays the unseparated recording through channel 1 alone, at the same level, and crossfades to the real stems when they arrive. You will not hear a jump.
+- The display also shows RECORDING with a red dot while a take is in progress.
 - Analysis is meaningless on an unpitched layer. Select Percussive and the confidence drops, the last confident key is held, and the analysis light goes out. That is working as intended, not a fault.
 - Window and Morph interact. A short window with fast morph tracks the playhead closely and sounds restless; a long window with slow morph smears, which is usually what you want for pads.
 - Colour at the lowpass end keeps the level up and only takes brightness away as the note decays. At the VCA end it takes level only. The middle does both, which is what makes it sound plucked.
