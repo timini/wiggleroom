@@ -9,7 +9,7 @@
  *   - 4 independent Euclidean rhythm generators
  *   - Per-channel: Steps (1-64), Hits (0-Steps), Quant ratio, Probability
  *   - Per-step CV values (0-10V or -5V to 5V bipolar) with interactive bar editor
- *   - 4x Gate + 4x Trigger + 4x LFO + 4x CV outputs
+ *   - 4x Gate + 4x Trigger + 4x CV outputs
  *   - Right expander sends state to LogicMangler
  ******************************************************************************/
 
@@ -532,7 +532,9 @@ struct EucSeqModule : Module {
                 float cvOut = bipolar ? (cvVal * scale - scale * 0.5f) : (cvVal * scale);
                 msg->cv[i] = quantizeToScale(cvOut);
 
-                msg->currentStep[i] = currentStep;
+                // After tick(), currentStep points to the next step.
+                // Send the step that was actually just played.
+                msg->currentStep[i] = (currentStep > 0) ? currentStep - 1 : steps - 1;
                 msg->totalSteps[i] = steps;
 
                 // Store params for bank recall
@@ -633,6 +635,9 @@ struct CVStepDisplay : OpaqueWidget {
 
         int steps = static_cast<int>(module->params[EucSeqModule::STEPS_PARAM + channel].getValue());
         int currentStep = module->engines[channel].currentStep;
+        // After tick(), currentStep has already advanced to the next step.
+        // Display the step that was actually just played (same as CV output logic).
+        int displayStep = (currentStep > 0) ? currentStep - 1 : steps - 1;
         float barW = box.size.x / std::max(1, steps);
 
         for (int s = 0; s < steps; s++) {
@@ -640,7 +645,7 @@ struct CVStepDisplay : OpaqueWidget {
             float barH = val * (box.size.y - 2.f);
             float x = s * barW;
             float y = box.size.y - barH - 1.f;
-            bool isCurrent = (s == currentStep);
+            bool isCurrent = (s == displayStep);
             bool isHit = module->engines[channel].getHit(s);
 
             // Hit step background — subtle full-height gold wash
