@@ -2,6 +2,8 @@
  * INTERSECT
  * Rhythmic trigger generator using discrete gradient analysis
  * Generates Euclidean and Euclidean-adjacent rhythms from CV signals
+ * A separate CV input is sampled and held on each output event, quantised
+ * to the scale bus when one is patched
  ******************************************************************************/
 
 #include "rack.hpp"
@@ -33,6 +35,7 @@ struct Intersect : Module {
         DENSITY_CV_PARAM,
         GATE_MODE_PARAM,
         EDGE_MODE_PARAM,
+        SWING_PARAM,
         PARAMS_LEN
     };
     enum InputId {
@@ -40,11 +43,14 @@ struct Intersect : Module {
         RESET_INPUT,
         CV_INPUT,
         DENSITY_CV_INPUT,
+        SCALE_BUS_INPUT,
+        SH_CV_INPUT,
         INPUTS_LEN
     };
     enum OutputId {
         TRIG_OUTPUT,
         STEP_OUTPUT,
+        SH_OUTPUT,
         OUTPUTS_LEN
     };
     enum LightId {
@@ -81,6 +87,18 @@ struct Intersect : Module {
     float peakMinCV = 1.f;   // min normalized CV since last sample
     float peakMaxCV = 0.f;   // max normalized CV since last sample
 
+    // Scale bus: 12 polyphonic channels of scale mask, root on channel 16
+    int scaleMask = 0xFFF;  // chromatic by default
+    int scaleRoot = 0;
+    bool scaleConnected = false;
+
+    // S&H CV, latched on the same event that fires the output
+    float shHeldVoltage = 0.0f;
+
+    // Swing: every second sample is held back toward the next one
+    bool swingLate = false;
+    float pendingSwingTimer = 0.0f;
+
     // Thread-safe visualization data (written by audio, read by UI)
     static const int BUFFER_SIZE = 128;
     std::array<float, BUFFER_SIZE> cvBuffer{};
@@ -111,13 +129,18 @@ struct Intersect : Module {
 
         configSwitch(EDGE_MODE_PARAM, 0.0f, 2.0f, 1.0f, "Edge Mode", {"Rising", "Both", "Falling"});
 
+        configParam(SWING_PARAM, 50.0f, 75.0f, 50.0f, "Swing", "%");
+
         configInput(CLOCK_INPUT, "Clock");
         configInput(RESET_INPUT, "Reset");
         configInput(CV_INPUT, "CV");
         configInput(DENSITY_CV_INPUT, "Density CV");
+        configInput(SCALE_BUS_INPUT, "Scale bus");
+        configInput(SH_CV_INPUT, "S&H CV (normalled to CV)");
 
         configOutput(TRIG_OUTPUT, "Trigger");
         configOutput(STEP_OUTPUT, "Step");
+        configOutput(SH_OUTPUT, "S&H CV");
 
         configLight(TRIG_LIGHT, "Trigger");
 
@@ -141,6 +164,9 @@ struct Intersect : Module {
         displayFlashTime.store(-1.0f);
         peakMinCV = 1.f;
         peakMaxCV = 0.f;
+        shHeldVoltage = 0.0f;
+        swingLate = false;
+        pendingSwingTimer = 0.0f;
     }
 
     // Helper: Normalize CV to 0.0-1.0 range
@@ -161,10 +187,61 @@ struct Intersect : Module {
         }
     }
 
+    // Snap a V/oct voltage to the nearest note allowed by the scale bus.
+    // Passes the voltage through untouched when no bus is patched.
+    float quantizeToScale(float voltage) const {
+        if (!scaleConnected) return voltage;
+        float midiNote = voltage * 12.f + 60.f;
+        int octave = static_cast<int>(std::floor(midiNote / 12.f));
+        int chromaRaw = static_cast<int>(std::round(midiNote)) % 12;
+        int chroma = (chromaRaw + 12) % 12;
+        int relNote = (chroma - scaleRoot + 12) % 12;
+        if ((scaleMask >> relNote) & 1) {
+            float qMidi = octave * 12.f + chroma;
+            return (qMidi - 60.f) / 12.f;
+        }
+        for (int offset = 1; offset <= 6; offset++) {
+            int lower = (relNote - offset + 12) % 12;
+            int upper = (relNote + offset) % 12;
+            if ((scaleMask >> lower) & 1) {
+                int qChroma = (chroma - offset + 12) % 12;
+                float qMidi = octave * 12.f + qChroma;
+                return (qMidi - 60.f) / 12.f;
+            }
+            if ((scaleMask >> upper) & 1) {
+                int qChroma = (chroma + offset) % 12;
+                float qMidi = octave * 12.f + qChroma;
+                return (qMidi - 60.f) / 12.f;
+            }
+        }
+        return voltage;
+    }
+
     void process(const ProcessArgs& args) override {
         // Handle reset
         if (resetTrigger.process(inputs[RESET_INPUT].getVoltage(), SCHMITT_LOW, SCHMITT_HIGH)) {
             onReset();
+        }
+
+        // Read the scale bus
+        if (inputs[SCALE_BUS_INPUT].isConnected()) {
+            int channels = inputs[SCALE_BUS_INPUT].getChannels();
+            if (channels >= 12) {
+                scaleConnected = true;
+                scaleMask = 0;
+                for (int i = 0; i < 12; i++) {
+                    if (inputs[SCALE_BUS_INPUT].getVoltage(i) > 0.5f)
+                        scaleMask |= (1 << i);
+                }
+                if (channels >= 16) {
+                    scaleRoot = static_cast<int>(std::round(inputs[SCALE_BUS_INPUT].getVoltage(15) * 12.f)) % 12;
+                    scaleRoot = (scaleRoot + 12) % 12;
+                }
+                // An empty mask would leave nothing to quantise to
+                if (scaleMask == 0) scaleConnected = false;
+            }
+        } else {
+            scaleConnected = false;
         }
 
         // Get time ratio from knob
@@ -172,7 +249,7 @@ struct Intersect : Module {
         timeIndex = DSP::clamp(timeIndex, 0, NUM_TIME_RATIOS - 1);
         float timeRatio = TIME_RATIOS[timeIndex];
 
-        bool shouldSample = false;
+        bool gridSample = false;
 
         // Clock handling
         if (inputs[CLOCK_INPUT].isConnected()) {
@@ -192,12 +269,12 @@ struct Intersect : Module {
                     int divAmount = (int)(1.0f / timeRatio);
                     divCounter++;
                     if (divCounter >= divAmount) {
-                        shouldSample = true;
+                        gridSample = true;
                         divCounter = 0;
                     }
                 } else {
                     // Multiplication: sample now and schedule more
-                    shouldSample = true;
+                    gridSample = true;
                     clockMultCounter = 1;
                 }
             }
@@ -207,7 +284,7 @@ struct Intersect : Module {
                 float subPeriod = lastClockPeriod / timeRatio;
                 int expectedCount = (int)(timeSinceLastClock / subPeriod);
                 if (expectedCount >= clockMultCounter && clockMultCounter < (int)timeRatio) {
-                    shouldSample = true;
+                    gridSample = true;
                     clockMultCounter++;
                 }
             }
@@ -221,6 +298,28 @@ struct Intersect : Module {
 
             if (internalPhase >= 1.0f) {
                 internalPhase -= std::floor(internalPhase);
+                gridSample = true;
+            }
+        }
+
+        // Swing: hold back every second sample toward the next grid position.
+        // 50% is even; at 75% the late sample lands halfway to the next one.
+        float swingRatio = params[SWING_PARAM].getValue() / 100.0f;
+        float swingDelay = (swingRatio - 0.5f) * 2.0f * effectiveSamplePeriod;
+
+        bool shouldSample = false;
+        if (gridSample) {
+            if (swingLate && swingDelay > 0.0f) {
+                pendingSwingTimer = swingDelay;
+            } else {
+                shouldSample = true;
+            }
+            swingLate = !swingLate;
+        }
+        if (pendingSwingTimer > 0.0f) {
+            pendingSwingTimer -= args.sampleTime;
+            if (pendingSwingTimer <= 0.0f) {
+                pendingSwingTimer = 0.0f;
                 shouldSample = true;
             }
         }
@@ -313,6 +412,14 @@ struct Intersect : Module {
                     }
                     displayFlashBand.store(DSP::clamp(triggerBand, 0, divisions - 1));
                     displayFlashTime.store(0.0f);
+
+                    // Latch the S&H CV on the event that fires the output.
+                    // With nothing patched, normal to the analysed CV input so the
+                    // module is a self-contained quantised S&H.
+                    float shSource = inputs[SH_CV_INPUT].isConnected()
+                        ? inputs[SH_CV_INPUT].getVoltage()
+                        : inputs[CV_INPUT].getVoltage();
+                    shHeldVoltage = quantizeToScale(shSource);
                 }
             }
 
@@ -347,6 +454,7 @@ struct Intersect : Module {
 
         outputs[TRIG_OUTPUT].setVoltage(outputHigh ? 10.0f : 0.0f);
         outputs[STEP_OUTPUT].setVoltage(currentSteppedVoltage);
+        outputs[SH_OUTPUT].setVoltage(shHeldVoltage);
 
         lights[TRIG_LIGHT].setBrightness(outputHigh ? 1.0f : 0.0f);
     }
@@ -485,6 +593,7 @@ struct IntersectWidget : ModuleWidget {
         addParam(createParamCentered<RoundSmallBlackKnob>(Vec(xRight, yKnobs), module, Intersect::DENSITY_PARAM));
         addParam(createParamCentered<Trimpot>(Vec(xRight, yKnobs + 25.f), module, Intersect::DENSITY_CV_PARAM));
         addParam(createParamCentered<CKSS>(Vec(xCenter, yKnobs + 40.f), module, Intersect::SCALE_PARAM));
+        addParam(createParamCentered<RoundSmallBlackKnob>(Vec(xCenter, yKnobs), module, Intersect::SWING_PARAM));
 
         // Inputs
         float yInputs = 215.f;
@@ -492,6 +601,8 @@ struct IntersectWidget : ModuleWidget {
         addInput(createInputCentered<PJ301MPort>(Vec(xRight, yInputs), module, Intersect::RESET_INPUT));
         addInput(createInputCentered<PJ301MPort>(Vec(xLeft, yInputs + 45.f), module, Intersect::CV_INPUT));
         addInput(createInputCentered<PJ301MPort>(Vec(xRight, yInputs + 45.f), module, Intersect::DENSITY_CV_INPUT));
+        addInput(createInputCentered<PJ301MPort>(Vec(xCenter, yInputs), module, Intersect::SCALE_BUS_INPUT));
+        addInput(createInputCentered<PJ301MPort>(Vec(xCenter, yInputs + 45.f), module, Intersect::SH_CV_INPUT));
 
         // Mode switches (between inputs and outputs)
         float yModeSwitch = 290.f;
@@ -503,6 +614,7 @@ struct IntersectWidget : ModuleWidget {
         addOutput(createOutputCentered<PJ301MPort>(Vec(xLeft, yOutputs), module, Intersect::TRIG_OUTPUT));
         addChild(createLightCentered<SmallLight<RedLight>>(Vec(xLeft + 12.f, yOutputs - 12.f), module, Intersect::TRIG_LIGHT));
         addOutput(createOutputCentered<PJ301MPort>(Vec(xRight, yOutputs), module, Intersect::STEP_OUTPUT));
+        addOutput(createOutputCentered<PJ301MPort>(Vec(xCenter, yOutputs), module, Intersect::SH_OUTPUT));
     }
 };
 
