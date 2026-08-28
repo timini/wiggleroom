@@ -87,9 +87,10 @@ struct Intersect : Module {
     float peakMinCV = 1.f;   // min normalized CV since last sample
     float peakMaxCV = 0.f;   // max normalized CV since last sample
 
-    // Scale bus: 12 polyphonic channels of scale mask, root on channel 16
+    // Scale bus: 12 polyphonic channels of scale mask, in absolute chromatic
+    // positions. Channel 16 carries the root, which we do not need: the
+    // producer has already applied it to the mask.
     int scaleMask = 0xFFF;  // chromatic by default
-    int scaleRoot = 0;
     bool scaleConnected = false;
 
     // S&H CV, latched on the same event that fires the output
@@ -189,32 +190,29 @@ struct Intersect : Module {
 
     // Snap a V/oct voltage to the nearest note allowed by the scale bus.
     // Passes the voltage through untouched when no bus is patched.
+    //
+    // Bus channels 0-11 are ABSOLUTE chromatic positions: the producer has
+    // already rotated the mask to its root (see TheArchitect.cpp:361). Indexing
+    // by (chroma - root) would transpose it a second time and quantise to the
+    // wrong scale, so the mask is indexed by absolute chroma here.
     float quantizeToScale(float voltage) const {
         if (!scaleConnected) return voltage;
-        float midiNote = voltage * 12.f + 60.f;
-        int octave = static_cast<int>(std::floor(midiNote / 12.f));
-        int chromaRaw = static_cast<int>(std::round(midiNote)) % 12;
-        int chroma = (chromaRaw + 12) % 12;
-        int relNote = (chroma - scaleRoot + 12) % 12;
-        if ((scaleMask >> relNote) & 1) {
-            float qMidi = octave * 12.f + chroma;
-            return (qMidi - 60.f) / 12.f;
-        }
+
+        int midi = static_cast<int>(std::round(voltage * 12.f + 60.f));
+        if (noteInScale(midi)) return (midi - 60) / 12.f;
+
+        // Search outward in absolute MIDI, so a note chosen across the B/C
+        // boundary keeps the octave it actually lands in.
         for (int offset = 1; offset <= 6; offset++) {
-            int lower = (relNote - offset + 12) % 12;
-            int upper = (relNote + offset) % 12;
-            if ((scaleMask >> lower) & 1) {
-                int qChroma = (chroma - offset + 12) % 12;
-                float qMidi = octave * 12.f + qChroma;
-                return (qMidi - 60.f) / 12.f;
-            }
-            if ((scaleMask >> upper) & 1) {
-                int qChroma = (chroma + offset) % 12;
-                float qMidi = octave * 12.f + qChroma;
-                return (qMidi - 60.f) / 12.f;
-            }
+            if (noteInScale(midi - offset)) return (midi - offset - 60) / 12.f;
+            if (noteInScale(midi + offset)) return (midi + offset - 60) / 12.f;
         }
         return voltage;
+    }
+
+    bool noteInScale(int midiNote) const {
+        int chroma = ((midiNote % 12) + 12) % 12;
+        return (scaleMask >> chroma) & 1;
     }
 
     void process(const ProcessArgs& args) override {
@@ -223,25 +221,18 @@ struct Intersect : Module {
             onReset();
         }
 
-        // Read the scale bus
-        if (inputs[SCALE_BUS_INPUT].isConnected()) {
-            int channels = inputs[SCALE_BUS_INPUT].getChannels();
-            if (channels >= 12) {
-                scaleConnected = true;
-                scaleMask = 0;
-                for (int i = 0; i < 12; i++) {
-                    if (inputs[SCALE_BUS_INPUT].getVoltage(i) > 0.5f)
-                        scaleMask |= (1 << i);
-                }
-                if (channels >= 16) {
-                    scaleRoot = static_cast<int>(std::round(inputs[SCALE_BUS_INPUT].getVoltage(15) * 12.f)) % 12;
-                    scaleRoot = (scaleRoot + 12) % 12;
-                }
-                // An empty mask would leave nothing to quantise to
-                if (scaleMask == 0) scaleConnected = false;
+        // Read the scale bus. Anything short of a full 12-channel mask disables
+        // quantising outright, so a producer that drops its polyphony mid-patch
+        // cannot leave us quantising against a stale mask.
+        scaleConnected = false;
+        if (inputs[SCALE_BUS_INPUT].isConnected() && inputs[SCALE_BUS_INPUT].getChannels() >= 12) {
+            scaleMask = 0;
+            for (int i = 0; i < 12; i++) {
+                if (inputs[SCALE_BUS_INPUT].getVoltage(i) > 0.5f)
+                    scaleMask |= (1 << i);
             }
-        } else {
-            scaleConnected = false;
+            // An empty mask would leave nothing to quantise to
+            scaleConnected = (scaleMask != 0);
         }
 
         // Get time ratio from knob
@@ -309,14 +300,16 @@ struct Intersect : Module {
 
         bool shouldSample = false;
         if (gridSample) {
+            // A newer grid point supersedes any sample still waiting on swing.
+            // Without this, speeding the clock up fires the stale one off-grid.
+            pendingSwingTimer = 0.0f;
             if (swingLate && swingDelay > 0.0f) {
                 pendingSwingTimer = swingDelay;
             } else {
                 shouldSample = true;
             }
             swingLate = !swingLate;
-        }
-        if (pendingSwingTimer > 0.0f) {
+        } else if (pendingSwingTimer > 0.0f) {
             pendingSwingTimer -= args.sampleTime;
             if (pendingSwingTimer <= 0.0f) {
                 pendingSwingTimer = 0.0f;
