@@ -135,6 +135,7 @@ struct EucSeqModuleT : Module {
         ENUMS(GATE_OUTPUT, N),
         ENUMS(TRIG_OUTPUT, N),
         ENUMS(CV_OUTPUT, N),
+        ENUMS(LFO_OUTPUT, N),
         OUTPUTS_LEN
     };
 
@@ -246,6 +247,7 @@ struct EucSeqModuleT : Module {
             configOutput(GATE_OUTPUT + i, ch + " Gate");
             configOutput(TRIG_OUTPUT + i, ch + " Trigger");
             configOutput(CV_OUTPUT + i, ch + " CV");
+            configOutput(LFO_OUTPUT + i, ch + " LFO");
 
             gateStates[i].store(false);
         }
@@ -459,6 +461,12 @@ struct EucSeqModuleT : Module {
             float scale = params[SCALE_PARAM + i].getValue();
             float cvOut = bipolar ? (cvVal * scale - scale * 0.5f) : (cvVal * scale);
             outputs[CV_OUTPUT + i].setVoltage(quantizeToScale(cvOut));
+
+            // LFO: unipolar staircase tracking the step just played. Dividing by
+            // (steps - 1) makes the ramp reach a full 10V on the last step, which
+            // was the fix for issue #21 before the split removed this output.
+            float lfoPhase = (steps > 1) ? (float)stepIdx / (float)(steps - 1) : 0.f;
+            outputs[LFO_OUTPUT + i].setVoltage(lfoPhase * 10.f);
         }
     }
 
@@ -476,10 +484,11 @@ struct EucSeqModuleT : Module {
                 msg->triggers[i] = trigPulse[i].remaining > 0.f;
                 int steps = engines[i].steps;
                 int currentStep = engines[i].currentStep;
-                float phase = (steps > 1) ? (float)currentStep / (float)(steps - 1) : 0.f;
-                msg->lfo[i] = phase * 10.f;
-
                 int stepIdx = (currentStep > 0) ? currentStep - 1 : steps - 1;
+
+                // Same phase the LFO port emits, so the bus and the jack agree
+                float phase = (steps > 1) ? (float)stepIdx / (float)(steps - 1) : 0.f;
+                msg->lfo[i] = phase * 10.f;
                 bool bipolar = params[BIPOLAR_PARAM + i].getValue() > 0.5f;
                 float cvVal = cvValues[i][stepIdx % MAX_STEPS];
                 float scale = params[SCALE_PARAM + i].getValue();
@@ -724,6 +733,15 @@ struct EucSeqWidgetT : ModuleWidget {
             // CV output at end
             float cvOutX = PANEL_WIDTH_MM - 6.f;
             this->addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(cvOutX, y)), module, EucSeqModuleT<N>::CV_OUTPUT + i));
+        }
+
+        // LFO outputs get their own row: the per-channel rows are already full,
+        // and these were absent from the panel entirely before now.
+        float yLfo = std::min(yChannelStart + N * yChannelSpacing + 8.f, 120.f);
+        for (int i = 0; i < N; i++) {
+            float lfoX = (N > 1) ? (14.f + i * ((PANEL_WIDTH_MM - 28.f) / (N - 1)))
+                                 : (PANEL_WIDTH_MM / 2.f);
+            this->addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(lfoX, yLfo)), module, EucSeqModuleT<N>::LFO_OUTPUT + i));
         }
     }
 };

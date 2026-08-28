@@ -940,9 +940,9 @@ int testLfoPhase(int argc, char** argv) {
         WiggleRoom::EuclideanEngine engine;
         engine.configure(tc.steps, tc.steps, 0);  // all hits
 
-        // The LFO phase formula. Euclogic.cpp was split into the EucSeq chain,
-        // where this now feeds only EuclogicExpanderMessage::lfo; no module
-        // exposes an LFO output port since that split.
+        // The LFO phase formula, as restored on the EucSeq chain after the
+        // Euclogic split dropped it. currentStep is read before tick(), so it
+        // is the step being played, matching stepIdx in updateOutputs().
         // phase = (steps > 1) ? currentStep / (steps - 1) : 0
         // We tick through all steps and check the phase at each one
 

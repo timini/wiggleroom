@@ -9,7 +9,7 @@
  *   - 4 independent Euclidean rhythm generators
  *   - Per-channel: Steps (1-64), Hits (0-Steps), Quant ratio, Probability
  *   - Per-step CV values (0-10V or -5V to 5V bipolar) with interactive bar editor
- *   - 4x Gate + 4x Trigger + 4x CV outputs
+ *   - 4x Gate + 4x Trigger + 4x CV + 4x LFO outputs
  *   - Right expander sends state to LogicMangler
  ******************************************************************************/
 
@@ -128,6 +128,7 @@ struct EucSeqModule : Module {
         ENUMS(GATE_OUTPUT, NUM_CHANNELS),
         ENUMS(TRIG_OUTPUT, NUM_CHANNELS),
         ENUMS(CV_OUTPUT, NUM_CHANNELS),
+        ENUMS(LFO_OUTPUT, NUM_CHANNELS),
         OUTPUTS_LEN
     };
 
@@ -253,6 +254,7 @@ struct EucSeqModule : Module {
             configOutput(GATE_OUTPUT + i, ch + " Gate");
             configOutput(TRIG_OUTPUT + i, ch + " Trigger");
             configOutput(CV_OUTPUT + i, ch + " CV");
+            configOutput(LFO_OUTPUT + i, ch + " LFO");
 
             gateStates[i].store(false);
         }
@@ -506,6 +508,12 @@ struct EucSeqModule : Module {
                 cvOut = cvVal * scale;
             }
             outputs[CV_OUTPUT + i].setVoltage(quantizeToScale(cvOut));
+
+            // LFO: unipolar staircase tracking the step just played. Dividing by
+            // (steps - 1) makes the ramp reach a full 10V on the last step, which
+            // was the fix for issue #21 before the split removed this output.
+            float lfoPhase = (steps > 1) ? (float)stepIdx / (float)(steps - 1) : 0.f;
+            outputs[LFO_OUTPUT + i].setVoltage(lfoPhase * 10.f);
         }
     }
 
@@ -522,10 +530,11 @@ struct EucSeqModule : Module {
                 msg->triggers[i] = trigPulse[i].remaining > 0.f;
                 int steps = engines[i].steps;
                 int currentStep = engines[i].currentStep;
-                float phase = (steps > 1) ? (float)currentStep / (float)(steps - 1) : 0.f;
-                msg->lfo[i] = phase * 10.f;
-
                 int stepIdx = (currentStep > 0) ? currentStep - 1 : steps - 1;
+
+                // Same phase the LFO port emits, so the bus and the jack agree
+                float phase = (steps > 1) ? (float)stepIdx / (float)(steps - 1) : 0.f;
+                msg->lfo[i] = phase * 10.f;
                 bool bipolar = params[BIPOLAR_PARAM + i].getValue() > 0.5f;
                 float cvVal = cvValues[i][stepIdx % MAX_STEPS];
                 float scale = params[SCALE_PARAM + i].getValue();
@@ -792,6 +801,13 @@ struct EucSeqWidget : ModuleWidget {
             addChild(createLightCentered<SmallLight<GreenLight>>(mm2px(Vec(78.f, y - 5.f)), module, EucSeqModule::GATE_LIGHT + i));
             addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(87.f, y)), module, EucSeqModule::TRIG_OUTPUT + i));
             addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(96.f, y)), module, EucSeqModule::CV_OUTPUT + i));
+        }
+
+        // LFO outputs get their own row: the per-channel rows are already full,
+        // and these were absent from the panel entirely before now.
+        float yLfo = 120.f;
+        for (int i = 0; i < 4; i++) {
+            addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(20.f + i * 20.f, yLfo)), module, EucSeqModule::LFO_OUTPUT + i));
         }
     }
 };
