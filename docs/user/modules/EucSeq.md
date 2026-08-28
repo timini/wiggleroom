@@ -8,7 +8,8 @@ EucSeq is a WiggleRoom module in the **Sequencers & Clocks** category. A 4-chann
 
 - EucSeq is a sequencer — it does not process audio inline.
 - Inputs accept clock and per-channel CV for hits, steps, and probability.
-- Each of the four channels emits Gate, Trigger, and CV outputs, intended to drive voices, drum modules, or modulation destinations.
+- Each of the four channels emits Gate, Trigger, CV, and LFO outputs, intended to drive voices, drum modules, or modulation destinations.
+- The LFO output is a unipolar 0V to 10V staircase that ramps across the pattern, reaching full scale on the last step. It tracks the step being played, so it stays in phase with that channel's Gate and CV.
 
 ## Typical Uses
 
@@ -20,3 +21,4 @@ EucSeq is a WiggleRoom module in the **Sequencers & Clocks** category. A 4-chann
 
 - Slowly modulate Hits CV or Steps CV with an LFO for evolving Euclidean rotations.
 - Mute a channel's gate while leaving its CV output running to keep modulation without firing voices.
+- Patch a channel's LFO output to a filter or VCA to sweep it in lockstep with that channel's pattern. Shorter patterns give faster sweeps.

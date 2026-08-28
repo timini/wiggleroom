@@ -9,7 +9,7 @@
  *   - 4 independent Euclidean rhythm generators
  *   - Per-channel: Steps (1-64), Hits (0-Steps), Quant ratio, Probability
  *   - Per-step CV values (0-10V or -5V to 5V bipolar) with interactive bar editor
- *   - 4x Gate + 4x Trigger + 4x LFO + 4x CV outputs
+ *   - 4x Gate + 4x Trigger + 4x CV + 4x LFO outputs
  *   - Right expander sends state to LogicMangler
  ******************************************************************************/
 
@@ -128,6 +128,7 @@ struct EucSeqModule : Module {
         ENUMS(GATE_OUTPUT, NUM_CHANNELS),
         ENUMS(TRIG_OUTPUT, NUM_CHANNELS),
         ENUMS(CV_OUTPUT, NUM_CHANNELS),
+        ENUMS(LFO_OUTPUT, NUM_CHANNELS),
         OUTPUTS_LEN
     };
 
@@ -149,6 +150,12 @@ struct EucSeqModule : Module {
     dsp::SchmittTrigger clockTrigger;
     dsp::SchmittTrigger resetTrigger;
     dsp::SchmittTrigger randCvTrigger[NUM_CHANNELS];
+
+    // The step each channel last played, or -1 before the first tick.
+    // Deriving this from currentStep read as steps-1 at reset, which
+    // parked the LFO at 10V instead of 0V. Tracking it explicitly also
+    // survives a Steps change resetting the engine.
+    int playedStep[NUM_CHANNELS];
 
     float clockPeriod = EucSeqConstants::DEFAULT_CLOCK_PERIOD;
     float timeSinceClock = 0.f;
@@ -253,6 +260,7 @@ struct EucSeqModule : Module {
             configOutput(GATE_OUTPUT + i, ch + " Gate");
             configOutput(TRIG_OUTPUT + i, ch + " Trigger");
             configOutput(CV_OUTPUT + i, ch + " CV");
+            configOutput(LFO_OUTPUT + i, ch + " LFO");
 
             gateStates[i].store(false);
         }
@@ -271,6 +279,8 @@ struct EucSeqModule : Module {
             }
         }
 
+        for (int ch = 0; ch < NUM_CHANNELS; ch++) playedStep[ch] = -1;
+
         // Set up right expander
         rightExpander.producerMessage = &rightMessages[0];
         rightExpander.consumerMessage = &rightMessages[1];
@@ -279,6 +289,7 @@ struct EucSeqModule : Module {
     void onReset() override {
         for (int i = 0; i < NUM_CHANNELS; i++) {
             engines[i].reset();
+            playedStep[i] = -1;
             quantCounter[i] = 0;
             gateStates[i].store(false);
             prevGateHigh[i] = false;
@@ -334,6 +345,7 @@ struct EucSeqModule : Module {
                 EucSeqConstants::SCHMITT_LOW, EucSeqConstants::SCHMITT_HIGH)) {
             for (int i = 0; i < NUM_CHANNELS; i++) {
                 engines[i].reset();
+                playedStep[i] = -1;
                 quantCounter[i] = 0;
                 gateStates[i].store(false);
                 prevGateHigh[i] = false;
@@ -416,7 +428,14 @@ struct EucSeqModule : Module {
             int steps = static_cast<int>(params[STEPS_PARAM + i].getValue());
             int hitCount = static_cast<int>(params[HITS_PARAM + i].getValue());
             hitCount = DSP::clamp(hitCount, 0, steps);
+
+            // configure() zeroes currentStep when the length changes. The cached
+            // playhead would otherwise keep reporting the old pattern's index
+            // until the next tick, which on a divided channel is several master
+            // ticks away, so clear it and sit on step 0 until then.
+            int prevSteps = engines[i].steps;
             engines[i].configure(steps, hitCount, 0);
+            if (engines[i].steps != prevSteps) playedStep[i] = -1;
         }
 
         if (shouldTick) {
@@ -452,6 +471,7 @@ struct EucSeqModule : Module {
                 hitCount = DSP::clamp(hitCount, 0, steps);
 
                 engines[i].configure(steps, hitCount, 0);
+                playedStep[i] = engines[i].currentStep;
                 bool euclideanHit = engines[i].tick();
 
                 float probABase = params[PROB_A_PARAM + i].getValue();
@@ -494,8 +514,8 @@ struct EucSeqModule : Module {
 
             // CV output from step values
             int steps = engines[i].steps;
-            int currentStep = engines[i].currentStep;
-            int stepIdx = (currentStep > 0) ? currentStep - 1 : steps - 1; // tick advances, so current is next
+            // Before the first tick nothing has played, so sit on step 0
+            int stepIdx = (playedStep[i] >= 0) ? DSP::clamp(playedStep[i], 0, steps - 1) : 0;
             float cvVal = cvValues[i][stepIdx % MAX_STEPS];
             bool bipolar = params[BIPOLAR_PARAM + i].getValue() > 0.5f;
             float scale = params[SCALE_PARAM + i].getValue();
@@ -506,6 +526,12 @@ struct EucSeqModule : Module {
                 cvOut = cvVal * scale;
             }
             outputs[CV_OUTPUT + i].setVoltage(quantizeToScale(cvOut));
+
+            // LFO: unipolar staircase tracking the step just played. Dividing by
+            // (steps - 1) makes the ramp reach a full 10V on the last step, which
+            // was the fix for issue #21 before the split removed this output.
+            float lfoPhase = (steps > 1) ? (float)stepIdx / (float)(steps - 1) : 0.f;
+            outputs[LFO_OUTPUT + i].setVoltage(lfoPhase * 10.f);
         }
     }
 
@@ -521,18 +547,20 @@ struct EucSeqModule : Module {
                 msg->gates[i] = gateStates[i].load();
                 msg->triggers[i] = trigPulse[i].remaining > 0.f;
                 int steps = engines[i].steps;
-                int currentStep = engines[i].currentStep;
-                float phase = (steps > 1) ? (float)currentStep / (float)(steps - 1) : 0.f;
-                msg->lfo[i] = phase * 10.f;
+                // Before the first tick nothing has played, so sit on step 0
+                int stepIdx = (playedStep[i] >= 0) ? DSP::clamp(playedStep[i], 0, steps - 1) : 0;
 
-                int stepIdx = (currentStep > 0) ? currentStep - 1 : steps - 1;
+                // Same phase the LFO port emits, so the bus and the jack agree
+                float phase = (steps > 1) ? (float)stepIdx / (float)(steps - 1) : 0.f;
+                msg->lfo[i] = phase * 10.f;
                 bool bipolar = params[BIPOLAR_PARAM + i].getValue() > 0.5f;
                 float cvVal = cvValues[i][stepIdx % MAX_STEPS];
                 float scale = params[SCALE_PARAM + i].getValue();
                 float cvOut = bipolar ? (cvVal * scale - scale * 0.5f) : (cvVal * scale);
                 msg->cv[i] = quantizeToScale(cvOut);
 
-                msg->currentStep[i] = currentStep;
+                // The step actually played, matching the Gate, CV and LFO outputs
+                msg->currentStep[i] = stepIdx;
                 msg->totalSteps[i] = steps;
 
                 // Store params for bank recall
@@ -632,7 +660,9 @@ struct CVStepDisplay : OpaqueWidget {
         }
 
         int steps = static_cast<int>(module->params[EucSeqModule::STEPS_PARAM + channel].getValue());
-        int currentStep = module->engines[channel].currentStep;
+        // The step last played, or -1 before the first tick, so no bar is
+        // highlighted rather than falsely lighting the last one.
+        int displayStep = module->playedStep[channel];
         float barW = box.size.x / std::max(1, steps);
 
         for (int s = 0; s < steps; s++) {
@@ -640,7 +670,7 @@ struct CVStepDisplay : OpaqueWidget {
             float barH = val * (box.size.y - 2.f);
             float x = s * barW;
             float y = box.size.y - barH - 1.f;
-            bool isCurrent = (s == currentStep);
+            bool isCurrent = (s == displayStep);
             bool isHit = module->engines[channel].getHit(s);
 
             // Hit step background — subtle full-height gold wash
@@ -787,6 +817,13 @@ struct EucSeqWidget : ModuleWidget {
             addChild(createLightCentered<SmallLight<GreenLight>>(mm2px(Vec(78.f, y - 5.f)), module, EucSeqModule::GATE_LIGHT + i));
             addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(87.f, y)), module, EucSeqModule::TRIG_OUTPUT + i));
             addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(96.f, y)), module, EucSeqModule::CV_OUTPUT + i));
+        }
+
+        // LFO outputs get their own row: the per-channel rows are already full,
+        // and these were absent from the panel entirely before now.
+        float yLfo = 120.f;
+        for (int i = 0; i < 4; i++) {
+            addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(20.f + i * 20.f, yLfo)), module, EucSeqModule::LFO_OUTPUT + i));
         }
     }
 };

@@ -10,7 +10,8 @@ It runs the same Euclidean engine as the 4-channel [EucSeq](EucSeq.md), in a nar
 
 - EucSeq2 is a sequencer, it does not process audio inline.
 - Inputs accept Clock, Reset and Run, plus per-channel CV for Hits, Steps and Probability. A Scale Bus input carries scale information through the chain.
-- Each of the 2 channels emits Gate, Trigger and CV outputs, intended to drive voices, drum modules or modulation destinations.
+- Each of the 2 channels emits Gate, Trigger, CV and LFO outputs, intended to drive voices, drum modules or modulation destinations.
+- The LFO output is a unipolar 0V to 10V staircase that ramps across the pattern, reaching full scale on the last step. It tracks the step being played, so it stays in phase with that channel's Gate and CV.
 
 ## Controls
 
@@ -38,3 +39,4 @@ It runs the same Euclidean engine as the 4-channel [EucSeq](EucSeq.md), in a nar
 - Slowly modulate Hits CV or Steps CV with an LFO for evolving Euclidean rotations.
 - Set Probability below full and use Retrigger to get sparse patterns that still feel busy.
 - Feed the Scale Bus from [TheArchitect](TheArchitect.md) to keep CV output in key across the whole chain.
+- Patch a channel's LFO output to a filter or VCA to sweep it in lockstep with that channel's pattern. Shorter patterns give faster sweeps.
