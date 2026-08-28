@@ -34,8 +34,17 @@ graph LR
         GATE[Gate Mode] --> PULSE
     end
 
+    subgraph "Quantised S&H"
+        SHCV[S&H CV In] --> HOLD[Sample & Hold]
+        CV -.-> |normalled| SHCV
+        PULSE --> |latch| HOLD
+        SBUS[Scale Bus In] --> QUANT[Quantise]
+        HOLD --> QUANT
+    end
+
     PULSE --> TRIG[Trigger Out]
     BAND --> STEP[Step Out]
+    QUANT --> SHOUT[S&H CV Out]
 ```
 
 ## How It Works
@@ -44,6 +53,7 @@ graph LR
 2. On each clock pulse, Intersect samples the CV and determines which band it's in
 3. When the CV moves to a different band than the previous sample, a trigger is generated
 4. The **Step** output provides a quantized voltage corresponding to the center of the current band
+5. Every trigger also latches the **S&H CV** input and sends it to the **S&H CV** output. Patch a scale bus and the held voltage is snapped to the nearest note in that scale
 
 The display shows the CV waveform history with horizontal lines marking the band divisions. Active bands highlight, and trigger events flash.
 
@@ -57,6 +67,7 @@ The display shows the CV waveform history with horizontal lines marking the band
 | **Scale** | Bipolar / Unipolar | Bipolar | CV range: Bipolar (-5V to +5V) or Unipolar (0V to 10V) |
 | **Gate Mode** | Trigger / Gate | Trigger | Output mode (1ms triggers or clock-length gates) |
 | **Edge Mode** | Rising / Both / Falling | Both | Which band crossings generate triggers |
+| **Swing** | 50% to 75% | 50% | Holds back every second sample. 50% is even, 75% is hard swing |
 
 ## Inputs
 
@@ -66,6 +77,8 @@ The display shows the CV waveform history with horizontal lines marking the band
 | **Reset** | Resets all internal state |
 | **CV** | Signal to analyze for band crossings |
 | **Density CV** | Modulates the number of bands |
+| **Scale Bus** | Polyphonic scale bus. 12 channels of note mask, optional root on channel 16. Quantising is bypassed when unpatched |
+| **S&H CV** | Voltage sampled on each output event. Normalled to the **CV** input when unpatched |
 
 ## Outputs
 
@@ -73,6 +86,7 @@ The display shows the CV waveform history with horizontal lines marking the band
 |------|-------|-------------|
 | **Trigger** | 0V / 10V | Trigger/gate output on band crossings |
 | **Step** | ±5V or 0-10V | Quantized voltage (center of current band) |
+| **S&H CV** | Follows input | The S&H CV input, latched on each output event and quantised to the scale bus |
 
 ## Display
 
@@ -118,6 +132,17 @@ The oscilloscope-style display shows:
 2. Set Time Div to x4 or x8
 3. Clock from your master tempo
 4. Creates rhythmic triggers synced to audio dynamics
+
+### Quantised Melodies From Modulation
+1. Patch a scale bus from The Architect into **Scale Bus**
+2. Leave **S&H CV** unpatched so it normals to the analysed **CV** input
+3. **S&H CV** out now gives an in-key pitch that only changes when Intersect fires
+4. Add **Swing** for a less mechanical feel
+
+### Independent Rhythm and Pitch
+1. Feed **CV** with the signal that should decide the *rhythm*
+2. Feed **S&H CV** with a separate slow source that decides the *pitch*
+3. The two are then free to move at different rates
 
 ### Stepped Modulation
 1. Use the Step output instead of Trigger
