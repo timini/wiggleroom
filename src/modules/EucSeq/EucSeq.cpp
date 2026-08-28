@@ -428,7 +428,14 @@ struct EucSeqModule : Module {
             int steps = static_cast<int>(params[STEPS_PARAM + i].getValue());
             int hitCount = static_cast<int>(params[HITS_PARAM + i].getValue());
             hitCount = DSP::clamp(hitCount, 0, steps);
+
+            // configure() zeroes currentStep when the length changes. The cached
+            // playhead would otherwise keep reporting the old pattern's index
+            // until the next tick, which on a divided channel is several master
+            // ticks away, so clear it and sit on step 0 until then.
+            int prevSteps = engines[i].steps;
             engines[i].configure(steps, hitCount, 0);
+            if (engines[i].steps != prevSteps) playedStep[i] = -1;
         }
 
         if (shouldTick) {
