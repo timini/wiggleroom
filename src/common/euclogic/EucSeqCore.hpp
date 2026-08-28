@@ -154,6 +154,12 @@ struct EucSeqModuleT : Module {
     dsp::SchmittTrigger resetTrigger;
     dsp::SchmittTrigger randCvTrigger[N];
 
+    // The step each channel last played, or -1 before the first tick.
+    // Deriving this from currentStep read as steps-1 at reset, which
+    // parked the LFO at 10V instead of 0V. Tracking it explicitly also
+    // survives a Steps change resetting the engine.
+    int playedStep[N];
+
     float clockPeriod = EucSeqConstants::DEFAULT_CLOCK_PERIOD;
     float timeSinceClock = 0.f;
     float internalTickPhase = 0.f;
@@ -263,6 +269,8 @@ struct EucSeqModuleT : Module {
             for (int s = 0; s < MAX_STEPS; s++)
                 cvValues[ch][s] = 0.f;
 
+        for (int ch = 0; ch < N; ch++) playedStep[ch] = -1;
+
         rightExpander.producerMessage = &rightMessages[0];
         rightExpander.consumerMessage = &rightMessages[1];
     }
@@ -270,6 +278,7 @@ struct EucSeqModuleT : Module {
     void onReset() override {
         for (int i = 0; i < N; i++) {
             engines[i].reset();
+            playedStep[i] = -1;
             quantCounter[i] = 0;
             gateStates[i].store(false);
             prevGateHigh[i] = false;
@@ -319,6 +328,7 @@ struct EucSeqModuleT : Module {
                 EucSeqConstants::SCHMITT_LOW, EucSeqConstants::SCHMITT_HIGH)) {
             for (int i = 0; i < N; i++) {
                 engines[i].reset();
+                playedStep[i] = -1;
                 quantCounter[i] = 0;
                 gateStates[i].store(false);
                 prevGateHigh[i] = false;
@@ -421,6 +431,7 @@ struct EucSeqModuleT : Module {
                 hitCount = DSP::clamp(hitCount, 0, steps);
 
                 engines[i].configure(steps, hitCount, 0);
+                playedStep[i] = engines[i].currentStep;
                 bool euclideanHit = engines[i].tick();
 
                 float probABase = params[PROB_A_PARAM + i].getValue();
@@ -454,8 +465,8 @@ struct EucSeqModuleT : Module {
             lights[GATE_LIGHT + i].setBrightness(gate ? 1.f : 0.f);
 
             int steps = engines[i].steps;
-            int currentStep = engines[i].currentStep;
-            int stepIdx = (currentStep > 0) ? currentStep - 1 : steps - 1;
+            // Before the first tick nothing has played, so sit on step 0
+            int stepIdx = (playedStep[i] >= 0) ? DSP::clamp(playedStep[i], 0, steps - 1) : 0;
             float cvVal = cvValues[i][stepIdx % MAX_STEPS];
             bool bipolar = params[BIPOLAR_PARAM + i].getValue() > 0.5f;
             float scale = params[SCALE_PARAM + i].getValue();
@@ -483,8 +494,8 @@ struct EucSeqModuleT : Module {
                 msg->gates[i] = gateStates[i].load();
                 msg->triggers[i] = trigPulse[i].remaining > 0.f;
                 int steps = engines[i].steps;
-                int currentStep = engines[i].currentStep;
-                int stepIdx = (currentStep > 0) ? currentStep - 1 : steps - 1;
+                // Before the first tick nothing has played, so sit on step 0
+                int stepIdx = (playedStep[i] >= 0) ? DSP::clamp(playedStep[i], 0, steps - 1) : 0;
 
                 // Same phase the LFO port emits, so the bus and the jack agree
                 float phase = (steps > 1) ? (float)stepIdx / (float)(steps - 1) : 0.f;
@@ -495,9 +506,8 @@ struct EucSeqModuleT : Module {
                 float cvOut = bipolar ? (cvVal * scale - scale * 0.5f) : (cvVal * scale);
                 msg->cv[i] = quantizeToScale(cvOut);
 
-                // After tick(), currentStep points to the next step.
-                // Send the step that was actually just played.
-                msg->currentStep[i] = (currentStep > 0) ? currentStep - 1 : steps - 1;
+                // The step actually played, matching the Gate, CV and LFO outputs
+                msg->currentStep[i] = stepIdx;
                 msg->totalSteps[i] = steps;
                 msg->steps[i] = static_cast<int>(params[STEPS_PARAM + i].getValue());
                 msg->hits[i] = static_cast<int>(params[HITS_PARAM + i].getValue());
@@ -571,10 +581,9 @@ struct CVStepDisplayT : OpaqueWidget {
         }
 
         int steps = static_cast<int>(module->params[EucSeqModuleT<N>::STEPS_PARAM + channel].getValue());
-        int currentStep = module->engines[channel].currentStep;
-        // After tick(), currentStep has already advanced to the next step.
-        // Display the step that was actually just played (same as CV output logic).
-        int displayStep = (currentStep > 0) ? currentStep - 1 : steps - 1;
+        // The step last played, or -1 before the first tick, so no bar is
+        // highlighted rather than falsely lighting the last one.
+        int displayStep = module->playedStep[channel];
         float barW = box.size.x / std::max(1, steps);
 
         for (int s = 0; s < steps; s++) {
