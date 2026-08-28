@@ -11,6 +11,8 @@
 #include "ImagePanel.hpp"
 #include <atomic>
 #include <array>
+#include <cmath>
+#include <limits>
 
 using namespace rack;
 
@@ -198,16 +200,27 @@ struct Intersect : Module {
     float quantizeToScale(float voltage) const {
         if (!scaleConnected) return voltage;
 
-        int midi = static_cast<int>(std::round(voltage * 12.f + 60.f));
-        if (noteInScale(midi)) return (midi - 60) / 12.f;
+        // Compare candidates against the UNROUNDED pitch. Rounding first and
+        // then searching outward loses which neighbour is genuinely closer:
+        // at MIDI 61.4 with only C and D allowed, it would round to C# and pick
+        // C at 1.4 semitones over D at 0.6.
+        float exact = voltage * 12.f + 60.f;
+        int base = static_cast<int>(std::floor(exact));
 
-        // Search outward in absolute MIDI, so a note chosen across the B/C
-        // boundary keeps the octave it actually lands in.
-        for (int offset = 1; offset <= 6; offset++) {
-            if (noteInScale(midi - offset)) return (midi - offset - 60) / 12.f;
-            if (noteInScale(midi + offset)) return (midi + offset - 60) / 12.f;
+        // A full octave either side always contains every set bit in the mask,
+        // since it repeats every 12 semitones.
+        int best = 0;
+        float bestDist = std::numeric_limits<float>::max();
+        for (int cand = base - 12; cand <= base + 13; cand++) {
+            if (!noteInScale(cand)) continue;
+            float dist = std::fabs(exact - static_cast<float>(cand));
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = cand;
+            }
         }
-        return voltage;
+        if (bestDist == std::numeric_limits<float>::max()) return voltage;
+        return (best - 60) / 12.f;
     }
 
     bool noteInScale(int midiNote) const {
@@ -345,6 +358,13 @@ struct Intersect : Module {
 
         // The main algorithm: sample on clock
         if (shouldSample) {
+            // Swing makes the interval to the next sample uneven. A gate held
+            // for the even period would run past that sample, so consecutive
+            // crossings merge with no new edge between them. swingLate now says
+            // whether the NEXT sample is the delayed one.
+            float sampleInterval = swingLate ? (effectiveSamplePeriod + swingDelay)
+                                             : (effectiveSamplePeriod - swingDelay);
+
             // Calculate current band from the instantaneous CV
             int currentBandIndex = (int)std::floor(normalizedCV * divisions);
             if (currentBandIndex >= divisions) currentBandIndex = divisions - 1;
@@ -399,7 +419,7 @@ struct Intersect : Module {
                 if (shouldTrigger) {
                     bool isGateMode = params[GATE_MODE_PARAM].getValue() > 0.5f;
                     if (isGateMode) {
-                        gatePulse.trigger(effectiveSamplePeriod);
+                        gatePulse.trigger(sampleInterval);
                     } else {
                         triggerPulse.trigger(TRIGGER_PULSE_DURATION);
                     }
