@@ -79,7 +79,7 @@ static const int SCALES[] = {
 };
 
 static const std::vector<std::string> SCALE_NAMES = {
-    "Major", "Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Locrian",
+    "Major (Ionian)", "Minor (Aeolian)", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Locrian",
     "Harm Min", "Mel Min", "Hung Min", "Rom Min",
     "Pent Maj", "Pent Min", "Blues Maj", "Blues Min",
     "Whole", "Dim W-H", "Augment",
