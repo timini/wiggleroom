@@ -333,6 +333,8 @@ test-native:
     python3 test/test_octolfo.py
     echo "== test_euclogic.py =="
     python3 test/test_euclogic.py
+    echo "== test_mutagen.py =="
+    python3 test/test_mutagen.py
     echo "== test_stems.py =="
     python3 test/test_stems.py
     echo "== stems_test under RELEASE flags =="

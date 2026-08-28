@@ -24,6 +24,26 @@
       ]
     },
     {
+      "slug": "Mutagen",
+      "name": "Mutagen",
+      "description": "CV-addressable step sequencer with random values, a mutation rate and 16 banks - no per-step knobs",
+      "tags": [
+        "Sequencer",
+        "Random",
+        "Polyphonic"
+      ]
+    },
+    {
+      "slug": "MutagenX",
+      "name": "Mutagen X",
+      "description": "Slave lane expander for Mutagen - adds another sequencer lane locked to the same clock and address",
+      "tags": [
+        "Sequencer",
+        "Random",
+        "Expander"
+      ]
+    },
+    {
       "slug": "Cycloid",
       "name": "Cycloid",
       "description": "Polar Euclidean Sequencer - rotating clock hand triggers when crossing polygon vertices",
