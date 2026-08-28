@@ -4,7 +4,7 @@ A collection of creative modules for [VCV Rack 2](https://vcvrack.com/), built w
 
 **[Documentation](docs/README.md)** | **[Developer Guide](docs/developer/getting-started.md)** | **[Release Strategy](docs/RELEASE_STRATEGY.md)**
 
-## Modules (45)
+## Modules (47)
 
 ### Physical Modeling Synthesis
 | Module | Description |
@@ -51,6 +51,8 @@ A collection of creative modules for [VCV Rack 2](https://vcvrack.com/), built w
 | **EucMix** | 4x4 CV summing matrix for standalone or expander use |
 | **GravityClock** | Clock-synced bouncing ball trigger generator |
 | **Intersect** | Rhythmic trigger generator with set operations |
+| **Mutagen** | CV-addressable step sequencer with random values, a mutation rate and 16 banks |
+| **Mutagen X** | Slave lane expander for Mutagen, adds a CV lane on the same clock and address |
 | **Stems** | Beat-synced separation, wavetable voice and granular texturiser |
 | **PreFlightClock** | Master clock with Ableton-style count-in sequence |
 | **TheWeaver** | Scale-Bus-aware polyphonic arpeggiator with 11 patterns and addressable Index CV |

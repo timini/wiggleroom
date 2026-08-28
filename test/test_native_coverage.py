@@ -38,6 +38,7 @@ project_root = Path(__file__).resolve().parent.parent
 # source file -> built executable
 SUITES = {
     "euclogic_test.cpp": "euclogic_test",
+    "mutagen_test.cpp": "mutagen_test",
     "octolfo_test.cpp": "octolfo_test",
     "stems_test.cpp": "stems_test",
 }
