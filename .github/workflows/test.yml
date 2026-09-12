@@ -44,6 +44,7 @@ jobs:
   verify-manifest:
     name: "Stage 1: Verify Manifest"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -72,6 +73,7 @@ jobs:
   verify-test-infra:
     name: "Stage 2: Verify Test Infrastructure"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: verify-manifest
 
     steps:
@@ -101,6 +103,7 @@ jobs:
   verify-build:
     name: "Stage 3: Verify Build"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: verify-test-infra
 
     steps:
@@ -152,6 +155,7 @@ jobs:
   validate-audio:
     name: "Stage 4: Validate Audio Quality"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: verify-build
 
     steps:
@@ -211,6 +215,7 @@ jobs:
   validate-ai-quality-gate:
     name: "Stage 4b: AI Quality Gate"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: verify-build
     continue-on-error: true  # Don't fail the whole pipeline on AI quality issues
 
@@ -254,6 +259,7 @@ jobs:
   validate-report:
     name: "Stage 5: Validate Full Report"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: validate-audio
     if: always()
 
@@ -393,6 +399,7 @@ jobs:
   deploy-report:
     name: "Stage 6: Deploy"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: validate-report
     if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
 
@@ -415,6 +422,7 @@ jobs:
   sensitivity:
     name: "PR: Sensitivity Analysis"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: verify-build
     if: github.event_name == 'pull_request'
     continue-on-error: true  # Non-blocking - informational only
