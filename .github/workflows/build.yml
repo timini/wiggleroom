@@ -45,6 +45,7 @@ jobs:
           curl -fLsS "https://vcvrack.com/downloads/Rack-SDK-${SDK_VERSION}-${{ matrix.platform }}.zip" -o sdk.zip
           unzip -q sdk.zip
           export RACK_DIR="$PWD/Rack-SDK"
+          python3 scripts/verify_manifest.py
           make -j2 dist
           python3 scripts/verify_release_package.py dist/*.vcvplugin '${{ matrix.platform }}'
           scripts/test_acid_release.sh

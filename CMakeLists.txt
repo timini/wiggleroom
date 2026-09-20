@@ -45,7 +45,8 @@ else()
 endif()
 
 # First public release. Developer overrides remain available.
-set(RELEASE_MODULE_LIST "ACID9Voice" CACHE STRING "Release module slugs")
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/release-modules.txt" DEFAULT_RELEASE_MODULES)
+set(RELEASE_MODULE_LIST "${DEFAULT_RELEASE_MODULES}" CACHE STRING "Release module slugs")
 
 # 4. Auto-Discover Modules
 set(MODULE_TARGETS "")
@@ -66,7 +67,7 @@ endforeach()
 # Set RELEASE_MODULE_LIST to a semicolon-separated list of module slugs to build only those.
 # Example: cmake -DRELEASE_MODULE_LIST="Matter;ACID9Voice" ..
 # When empty (default), all modules are built.
-set(RELEASE_MODULE_LIST "" CACHE STRING "Semicolon-separated list of module slugs to include in release build. Empty = all modules.")
+
 
 # 6. The Plugin Artifact
 add_library(${PROJECT_NAME} MODULE src/plugin.cpp)
