@@ -68,6 +68,7 @@ jobs:
           unzip -q rack.zip -d build/rack-app
           mkdir -p build/rack-user/plugins-lin-x64
           cp dist/*.vcvplugin build/rack-user/plugins-lin-x64/
+          export LD_LIBRARY_PATH="$PWD/build/rack-app/Rack2Free"
           xvfb-run -a timeout 90 build/rack-app/Rack2Free/Rack -s "$PWD/build/rack-app/Rack2Free" -u "$PWD/build/rack-user" -t 2
           test -s build/rack-user/screenshots/WiggleRoom/ACID9Voice.png
           python3 scripts/smoke_rack.py build/rack-app/Rack2Free/Rack build/rack-app/Rack2Free build/rack-user examples/ACID9-first-sound.vcv
