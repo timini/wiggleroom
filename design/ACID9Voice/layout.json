@@ -1,0 +1,313 @@
+{
+  "width": 510,
+  "height": 380,
+  "hp": 34,
+  "controls": [
+    {
+      "kind": "param",
+      "id": 0,
+      "label": "SHAPE",
+      "x": 45,
+      "y": 92,
+      "w": 44,
+      "h": 44,
+      "asset": "RoundBigBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 1,
+      "label": "ISOTOPE",
+      "x": 125,
+      "y": 92,
+      "w": 44,
+      "h": 44,
+      "asset": "RoundBigBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 2,
+      "label": "SUB LEVEL",
+      "x": 45,
+      "y": 155,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 3,
+      "label": "SUB MODE",
+      "x": 125,
+      "y": 155,
+      "w": 14,
+      "h": 20.6411,
+      "asset": "CKSS"
+    },
+    {
+      "kind": "param",
+      "id": 4,
+      "label": "CUTOFF",
+      "x": 215,
+      "y": 92,
+      "w": 44,
+      "h": 44,
+      "asset": "RoundBigBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 5,
+      "label": "RESONANCE",
+      "x": 295,
+      "y": 92,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 6,
+      "label": "ENV MOD",
+      "x": 215,
+      "y": 155,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 7,
+      "label": "DECAY",
+      "x": 295,
+      "y": 155,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 9,
+      "label": "GRIT",
+      "x": 215,
+      "y": 211,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 8,
+      "label": "FILTER MODE",
+      "x": 295,
+      "y": 211,
+      "w": 14,
+      "h": 20.6411,
+      "asset": "CKSS"
+    },
+    {
+      "kind": "param",
+      "id": 10,
+      "label": "DELAY TIME",
+      "x": 385,
+      "y": 92,
+      "w": 28.3476,
+      "h": 28.3476,
+      "asset": "RoundBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 11,
+      "label": "FEEDBACK",
+      "x": 465,
+      "y": 92,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 12,
+      "label": "DELAY MIX",
+      "x": 385,
+      "y": 155,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 14,
+      "label": "GHOST",
+      "x": 465,
+      "y": 155,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 13,
+      "label": "SYNC RATIO",
+      "x": 425,
+      "y": 211,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "input",
+      "id": 0,
+      "label": "V/OCT",
+      "x": 45,
+      "y": 320,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "input",
+      "id": 1,
+      "label": "GATE",
+      "x": 125,
+      "y": 320,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "input",
+      "id": 2,
+      "label": "ACCENT",
+      "x": 205,
+      "y": 320,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "input",
+      "id": 3,
+      "label": "SLIDE",
+      "x": 285,
+      "y": 320,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "input",
+      "id": 4,
+      "label": "CUTOFF CV",
+      "x": 215,
+      "y": 270,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "input",
+      "id": 5,
+      "label": "FM IN",
+      "x": 45,
+      "y": 211,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "input",
+      "id": 6,
+      "label": "CLOCK",
+      "x": 385,
+      "y": 270,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "input",
+      "id": 7,
+      "label": "INSERT RETURN",
+      "x": 465,
+      "y": 270,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "input",
+      "id": 8,
+      "label": "SHAPE CV",
+      "x": 45,
+      "y": 270,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "input",
+      "id": 9,
+      "label": "ISOTOPE CV",
+      "x": 125,
+      "y": 270,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "input",
+      "id": 10,
+      "label": "DECAY CV",
+      "x": 295,
+      "y": 270,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "output",
+      "id": 0,
+      "label": "LEFT OUT",
+      "x": 365,
+      "y": 320,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "output",
+      "id": 1,
+      "label": "RIGHT OUT",
+      "x": 425,
+      "y": 320,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    },
+    {
+      "kind": "output",
+      "id": 2,
+      "label": "INSERT SEND",
+      "x": 485,
+      "y": 320,
+      "w": 23.7,
+      "h": 23.7,
+      "asset": "PJ301M"
+    }
+  ],
+  "light": [
+    310,
+    211
+  ],
+  "title_box": [
+    75,
+    10,
+    360,
+    34
+  ],
+  "brand_box": [
+    155,
+    346,
+    200,
+    25
+  ]
+}

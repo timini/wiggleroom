@@ -320,6 +320,14 @@ def validate_manifest(plugin_json_path: Path, src_dir: Path) -> Tuple[List[Valid
 
     # Get modules from code
     code_modules = find_code_modules(src_dir)
+    # A release may intentionally exclude experimental modules still in the tree.
+    # Compare the manifest with the explicit build scope, not all source folders.
+    scope_path = plugin_json_path.parent / "release-modules.txt"
+    if scope_path.exists():
+        release_modules = set(scope_path.read_text().split())
+        for slug in release_modules - code_modules:
+            errors.append(ValidationError("error", "Release module has no source", slug))
+        code_modules &= release_modules
 
     # Get modules from manifest
     manifest_modules = {}

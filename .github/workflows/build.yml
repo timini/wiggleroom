@@ -1,123 +1,86 @@
 name: Build Plugin
-
 on:
   push:
     branches: [main, "release/**"]
     tags: ["v*"]
   pull_request:
-
+  workflow_dispatch:
+concurrency:
+  group: build-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+permissions:
+  contents: read
 env:
-  PLUGIN_NAME: WiggleRoom
-
+  SDK_VERSION: 2.6.6
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: lin-x64
-          - os: macos-latest
-            platform: mac-x64+arm64
-          - os: windows-latest
+          - os: macos-15-intel
+            platform: mac-x64
+          - os: macos-15
+            platform: mac-arm64
+          - os: windows-2022
             platform: win-x64
     runs-on: ${{ matrix.os }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install Faust (Linux)
+      - uses: actions/checkout@v4
+      - name: Linux dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y faust
-
-      - name: Install Faust (macOS)
+        run: sudo apt-get update && sudo apt-get install -y jq zstd libglu1-mesa libx11-6 libasound2 libpulse0 libjack-jackd2-0 xvfb libgl1-mesa-dri
+      - name: macOS dependencies
         if: runner.os == 'macOS'
-        run: brew install faust
-
-      - name: Install MSYS2 (Windows)
+        run: brew install jq zstd
+      - name: Windows dependencies
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-make
-            zip
-            unzip
-
-      - name: Install Faust (Windows)
-        if: runner.os == 'Windows'
-        run: choco install faust -y
-
-      - name: Configure CMake (Linux/macOS)
+          install: mingw-w64-x86_64-gcc make jq zstd unzip curl python
+      - name: Build and verify (Linux/macOS)
         if: runner.os != 'Windows'
-        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-
-      - name: Configure CMake (Windows)
+        run: |
+          curl -fLsS "https://vcvrack.com/downloads/Rack-SDK-${SDK_VERSION}-${{ matrix.platform }}.zip" -o sdk.zip
+          unzip -q sdk.zip
+          export RACK_DIR="$PWD/Rack-SDK"
+          python3 scripts/verify_manifest.py
+          make -j2 dist
+          python3 scripts/verify_release_package.py dist/*.vcvplugin '${{ matrix.platform }}'
+          scripts/test_acid_release.sh
+      - name: Build and verify (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          export PATH="/c/Program Files/Faust/bin:$PATH"
-          cmake -G "MinGW Makefiles" -B build -S . -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: cmake --build build --target dist -j
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
+          curl -fLsS "https://vcvrack.com/downloads/Rack-SDK-${SDK_VERSION}-win-x64.zip" -o sdk.zip
+          unzip -q sdk.zip
+          export RACK_DIR="$PWD/Rack-SDK"
+          make -j2 dist
+          python scripts/verify_release_package.py dist/*.vcvplugin win-x64
+      - name: Load package and render real Rack panel (Linux)
+        if: runner.os == 'Linux'
         run: |
-          export PATH="/c/Program Files/Faust/bin:$PATH"
-          cmake --build build --target dist -j
-
-      - name: Package (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          cd build/dist
-          zip -r ../../${{ env.PLUGIN_NAME }}-${{ matrix.platform }}.vcvplugin ${{ env.PLUGIN_NAME }}
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        run: |
-          cd build/dist
-          zip -r ../../${{ env.PLUGIN_NAME }}-${{ matrix.platform }}.vcvplugin ${{ env.PLUGIN_NAME }}
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+          curl -fLsS https://vcvrack.com/downloads/RackFree-2.6.6-lin-x64.zip -o rack.zip
+          unzip -q rack.zip -d build/rack-app
+          mkdir -p build/rack-user/plugins-lin-x64
+          cp dist/*.vcvplugin build/rack-user/plugins-lin-x64/
+          export LD_LIBRARY_PATH="$PWD/build/rack-app/Rack2Free"
+          xvfb-run -a timeout 90 build/rack-app/Rack2Free/Rack -s "$PWD/build/rack-app/Rack2Free" -u "$PWD/build/rack-user" -t 2
+          test -s build/rack-user/screenshots/WiggleRoom/ACID9Voice.png
+          python3 scripts/smoke_rack.py build/rack-app/Rack2Free/Rack build/rack-app/Rack2Free build/rack-user examples/ACID9-first-sound.vcv
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
         with:
-          name: ${{ env.PLUGIN_NAME }}-${{ matrix.platform }}
-          path: ${{ env.PLUGIN_NAME }}-${{ matrix.platform }}.vcvplugin
-
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+          name: Rack-smoke-evidence
+          path: |
+            build/rack-user/screenshots/WiggleRoom/*.png
+            build/rack-user/log.txt
+      - uses: actions/upload-artifact@v4
         with:
-          path: artifacts
-
-      - name: Collect plugin files
-        run: |
-          mkdir -p dist
-          find artifacts -name "*.vcvplugin" -exec cp {} dist/ \;
-          ls -la dist/
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.vcvplugin
-          generate_release_notes: true
+          name: WiggleRoom-${{ matrix.platform }}
+          path: dist/*.vcvplugin
+          if-no-files-found: error

@@ -130,11 +130,11 @@ with {
     ghost_hp(sig) = sig : fi.highpass(2, 80 + ghost * 400);
 
     // Left delay
-    wet_l = l : (+ : de.fdelay(192000, delay_samps) : ghost_hp) ~ (*(fb_amt));
+    wet_l = l : (+ : de.fdelay(403200, delay_samps) : ghost_hp) ~ (*(fb_amt));
 
     // Right delay with slight offset
     delay_samps_r = delay_samps * 1.05;
-    wet_r = r : (+ : de.fdelay(192000, delay_samps_r) : ghost_hp) ~ (*(fb_amt));
+    wet_r = r : (+ : de.fdelay(403200, delay_samps_r) : ghost_hp) ~ (*(fb_amt));
 
     // Mix
     l_out = l * (1 - mix_smooth) + wet_l * mix_smooth;

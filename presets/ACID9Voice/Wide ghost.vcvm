@@ -1,0 +1,67 @@
+{
+  "plugin": "WiggleRoom",
+  "version": "2.1.1",
+  "model": "ACID9Voice",
+  "params": [
+    {
+      "id": 0,
+      "value": 0.6
+    },
+    {
+      "id": 1,
+      "value": 0.5
+    },
+    {
+      "id": 2,
+      "value": 0
+    },
+    {
+      "id": 3,
+      "value": 0
+    },
+    {
+      "id": 4,
+      "value": 1600
+    },
+    {
+      "id": 5,
+      "value": 0.4
+    },
+    {
+      "id": 6,
+      "value": 0.5
+    },
+    {
+      "id": 7,
+      "value": 0.3
+    },
+    {
+      "id": 8,
+      "value": 0
+    },
+    {
+      "id": 9,
+      "value": 0
+    },
+    {
+      "id": 10,
+      "value": 375
+    },
+    {
+      "id": 11,
+      "value": 0.6
+    },
+    {
+      "id": 12,
+      "value": 0.3
+    },
+    {
+      "id": 13,
+      "value": 2
+    },
+    {
+      "id": 14,
+      "value": 0.75
+    }
+  ]
+}
