@@ -317,8 +317,10 @@ struct ACID9Panel : widget::OpaqueWidget {
     std::shared_ptr<rack::window::Svg> labels;
     ACID9Panel() {
         box.size = Vec(510, 380);
-        artwork = APP->window->loadImage(asset::plugin(pluginInstance, "res/ACID9Voice.png"));
-        labels = APP->window->loadSvg(asset::plugin(pluginInstance, "res/ACID9Voice-labels.svg"));
+        if (APP->window) {
+            artwork = APP->window->loadImage(asset::plugin(pluginInstance, "res/ACID9Voice.png"));
+            labels = APP->window->loadSvg(asset::plugin(pluginInstance, "res/ACID9Voice-labels.svg"));
+        }
     }
     void draw(const DrawArgs& args) override {
         nvgBeginPath(args.vg);

@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y jq zstd libglu1-mesa libx11-6 libasound2 libjack-jackd2-0 xvfb libgl1-mesa-dri
+        run: sudo apt-get update && sudo apt-get install -y jq zstd libglu1-mesa libx11-6 libasound2 libpulse0 libjack-jackd2-0 xvfb libgl1-mesa-dri
       - name: macOS dependencies
         if: runner.os == 'macOS'
         run: brew install jq zstd
@@ -70,8 +70,7 @@ jobs:
           cp dist/*.vcvplugin build/rack-user/plugins-lin-x64/
           xvfb-run -a timeout 90 build/rack-app/Rack2Free/Rack -s "$PWD/build/rack-app/Rack2Free" -u "$PWD/build/rack-user" -t 2
           test -s build/rack-user/screenshots/WiggleRoom/ACID9Voice.png
-          timeout 10 build/rack-app/Rack2Free/Rack -s "$PWD/build/rack-app/Rack2Free" -u "$PWD/build/rack-user" -h "$PWD/examples/ACID9-first-sound.vcv" || test "$?" = 124
-          ! grep -Ei 'fatal|could not find module|failed to load' build/rack-user/log.txt
+          python3 scripts/smoke_rack.py build/rack-app/Rack2Free/Rack build/rack-app/Rack2Free build/rack-user examples/ACID9-first-sound.vcv
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:
