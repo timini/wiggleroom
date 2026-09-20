@@ -1,4 +1,8 @@
 // Tests the actual Rack module adapter and the committed Faust DSP together.
+// This pinned-SDK test executable acts as a Rack host, so it creates an Engine.
+// The distributed plugin itself uses only the public rack.hpp API.
+#include "engine/Engine.hpp"
+#undef PRIVATE
 #include "rack.hpp"
 #include <memory>
 #include <fstream>
