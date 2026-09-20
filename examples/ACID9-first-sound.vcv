@@ -1,0 +1,135 @@
+{
+  "version": "2.6.6",
+  "modules": [
+    {
+      "id": 1,
+      "plugin": "Core",
+      "model": "MIDIToCVInterface",
+      "version": "2.6.6",
+      "pos": [
+        0,
+        0
+      ],
+      "params": [],
+      "data": {}
+    },
+    {
+      "plugin": "WiggleRoom",
+      "version": "2.1.1",
+      "model": "ACID9Voice",
+      "params": [
+        {
+          "id": 0,
+          "value": 0
+        },
+        {
+          "id": 1,
+          "value": 0
+        },
+        {
+          "id": 2,
+          "value": 0
+        },
+        {
+          "id": 3,
+          "value": 0
+        },
+        {
+          "id": 4,
+          "value": 650
+        },
+        {
+          "id": 5,
+          "value": 0.65
+        },
+        {
+          "id": 6,
+          "value": 0.7
+        },
+        {
+          "id": 7,
+          "value": 0.3
+        },
+        {
+          "id": 8,
+          "value": 0
+        },
+        {
+          "id": 9,
+          "value": 0.2
+        },
+        {
+          "id": 10,
+          "value": 250
+        },
+        {
+          "id": 11,
+          "value": 0.3
+        },
+        {
+          "id": 12,
+          "value": 0
+        },
+        {
+          "id": 13,
+          "value": 2
+        },
+        {
+          "id": 14,
+          "value": 0
+        }
+      ],
+      "id": 2,
+      "pos": [
+        8,
+        0
+      ]
+    },
+    {
+      "id": 3,
+      "plugin": "Core",
+      "model": "AudioInterface2",
+      "version": "2.6.6",
+      "pos": [
+        42,
+        0
+      ],
+      "params": [],
+      "data": {}
+    }
+  ],
+  "cables": [
+    {
+      "id": 0,
+      "outputModuleId": 1,
+      "outputId": 0,
+      "inputModuleId": 2,
+      "inputId": 0,
+      "color": "#e6b84cff"
+    },
+    {
+      "id": 1,
+      "outputModuleId": 1,
+      "outputId": 1,
+      "inputModuleId": 2,
+      "inputId": 1,
+      "color": "#ee5577ff"
+    },
+    {
+      "id": 2,
+      "outputModuleId": 2,
+      "outputId": 0,
+      "inputModuleId": 3,
+      "inputId": 0,
+      "color": "#55cceeff"
+    },
+    {
+      "id": 3,
+      "outputModuleId": 2,
+      "outputId": 1,
+      "inputModuleId": 3,
+      "inputId": 1,
+      "color": "#bb88ffff"
+    }
+  ]
+}

@@ -85,3 +85,9 @@ TODO.local
 !.claude/agents/
 !.claude/skills/
 !.claude/.claude-plugin/
+
+# Reproducible ACID9 design intermediates
+/design/ACID9Voice/*.svg
+/design/ACID9Voice/artwork.png
+/design/ACID9Voice/native.png
+/design/ACID9Voice/rack-screenshot.png
