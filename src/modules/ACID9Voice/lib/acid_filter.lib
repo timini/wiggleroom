@@ -1,74 +1,55 @@
 // acid_filter.lib - Dual filter architecture (ACID / LEAD)
 // Part of ACID9Voice module for WiggleRoom VCV Rack plugin
 //
-// ACID mode: 18dB diode ladder (TB-303 style, bass loss at high resonance)
-// LEAD mode: 24dB OTA ladder (self-oscillating, cleaner)
-// Crossfade: Equal-power blend between filter modes
+// ACID mode: coupled four-stage diode ladder, bass loss at high resonance
+// LEAD mode: four-pole TPT ladder with progressive, bounded resonance
+// Crossfade: smoothed linear blend between continuously running filters
 
 import("stdfaust.lib");
 
-// ============================================================================
-// DIODE LADDER FILTER (18dB/octave) - ACID MODE
-// ============================================================================
-
-// TB-303 style diode ladder filter
-// Characteristics:
-// - 18dB/octave slope (3-pole)
-// - Bass loss at high resonance (authentic 303 behavior)
-// - Soft saturation in feedback path
-diode_ladder(fc, res, sig) = output
+// Coupled TPT diode ladder, adapted from Csound wpfilters.c (Steven Yi, 2017),
+// LGPL-2.1-or-later, based on Will Pirkle's zero-delay-feedback formulation.
+// Reference: https://github.com/csound/csound/blob/develop/Opcodes/wpfilters.c
+// The four integrator states are solved with their instantaneous feedback;
+// this is not four independent biquads. Input saturation models drive.
+diode_ladder_zdf(fc,res,sig) = sig : (loop ~ (_,_,_,_) : !,!,!,!,_)
 with {
-    // Frequency coefficient (cutoff normalized to sample rate)
-    g = tan(ma.PI * min(fc, ma.SR * 0.45) / ma.SR);
-
-    // Resonance with bass compensation factor
-    // Higher resonance = more bass loss (303 characteristic)
-    k = res * 4.0;  // Resonance scaling (0-4)
-    bass_comp = 1.0 - (res * 0.3);  // Reduce bass as res increases
-
-    // Diode saturation function (soft clip)
-    diode_sat(x) = ma.tanh(x * 1.5) / 1.5;
-
-    // 3-pole cascade with feedback
-    // Each stage is a one-pole lowpass with diode saturation
-    stage1(x) = fi.pole(g, diode_sat(x * bass_comp));
-    stage2(x) = fi.pole(g, diode_sat(x));
-    stage3(x) = fi.pole(g, diode_sat(x));
-
-    // Feedback from output
-    fb = _ : stage1 : stage2 : stage3;
-    output = sig - (fb ~ _) * k : stage1 : stage2 : stage3;
-};
-
-// Simplified diode ladder using basic resonant lowpass
-// Provides 303-like sound without complex diode modeling
-diode_ladder_simple(fc, res) = fi.resonlp(fc_safe, q, 1.0)
-with {
-    fc_safe = max(20, min(fc, ma.SR * 0.45));
-    q = 0.5 + res * 10;  // Q from 0.5 to 10.5
+    g = tan(ma.PI*max(20,min(fc,ma.SR*.4))/ma.SR);
+    gp = 1+g; alpha=g/gp; k=16.5*max(0,min(res,1));
+    G4=.5*g/gp; G3=.5*g/(gp-.5*g*G4);
+    G2=.5*g/(gp-.5*g*G3); G1=g/(gp-g*G2);
+    b1=1/(gp-g*G2); b2=1/(gp-.5*g*G3); b3=1/(gp-.5*g*G4); b4=1/gp;
+    loop(z1,z2,z3,z4,x) = z1+2*v1,z2+2*v2,z3+2*v3,z4+2*v4,y4
+    with {
+        f4=b4*z4; f3=b3*(z3+.5*g*f4); f2=b2*(z2+.5*g*f3); f1=b1*(z1+g*f2);
+        sigma=G4*G3*G2*f1+G4*G3*f2+G4*f3+f4;
+        u=(ma.tanh(x)-k*sigma)/(1+k*G1*G2*G3*G4);
+        v1=alpha*(u*(1+G1*G2)+f2+G2*f1-z1); y1=v1+z1;
+        v2=alpha*(.5*(y1*(1+G2*G3)+f3+G3*f2)-z2); y2=v2+z2;
+        v3=alpha*(.5*(y2*(1+G3*G4)+f4+G4*f3)-z3); y3=v3+z3;
+        v4=alpha*(.5*y3-z4); y4=v4+z4;
+    };
 };
 
 // ============================================================================
 // OTA LADDER FILTER (24dB/octave) - LEAD MODE
 // ============================================================================
 
-// Moog-style OTA ladder filter using resonant lowpass cascade
-// Provides 24dB/oct slope with self-oscillation capability
-ota_ladder(fc, res) = fi.resonlp(fc_safe, q, 1.0) : fi.resonlp(fc_safe, q * 0.7, 1.0)
+// Faust's coupled TPT ladder (Dario Sanfilippo, vaeffects.lib).
+// Keep feedback below the k=4 oscillation threshold. Squaring the control
+// spreads the useful mild-resonance range across more of the knob travel.
+ota_ladder(fc, res) = ma.tanh : ve.lowpassLadder4(k, fc_safe)
 with {
-    fc_safe = max(20, min(fc, ma.SR * 0.45));
-    q = 0.5 + res * 15;  // Higher Q for self-oscillation
+    fc_safe = max(20, min(fc, ma.SR * 0.4));
+    k = 3.6 * res * res;
 };
-
-// Alternative using resonant lowpass
-ota_ladder_alt(fc, res, sig) = sig : fi.resonlp(fc, res * 10, 1.0);
 
 // ============================================================================
 // DUAL FILTER WITH CROSSFADE
 // ============================================================================
 
-// Dual filter with equal-power crossfade
-// mode: 0 = ACID (diode ladder), 1 = LEAD (OTA ladder)
+// Dual filter with partial Acid bass-loss compensation and linear crossfade
+// mode: 0 = ACID (diode ladder), 1 = LEAD (four-pole TPT ladder)
 // fc: cutoff frequency in Hz
 // res: resonance (0-1)
 dual_filter(fc, res, mode, sig) = output
@@ -78,13 +59,13 @@ with {
     res_clamped = max(0, min(res, 0.99));
 
     // Filter outputs
-    acid_out = sig : diode_ladder_simple(fc_clamped, res_clamped);
+    acid_out = (sig : diode_ladder_zdf(fc_clamped, res_clamped)) * (1 + 4.5 * res_clamped) * (1.5 - 0.8 * res_clamped * res_clamped);
     lead_out = sig : ota_ladder(fc_clamped, res_clamped);
 
-    // Equal-power crossfade coefficients
-    mode_smooth = mode : si.smoo;  // Smooth mode changes
-    acid_gain = cos(mode_smooth * ma.PI * 0.5);
-    lead_gain = sin(mode_smooth * ma.PI * 0.5);
+    // Correlated signals must not receive the equal-power midpoint boost.
+    mode_smooth = max(0, min(mode, 1)) : si.smooth(ba.tau2pole(0.01));
+    acid_gain = 1 - mode_smooth;
+    lead_gain = mode_smooth;
 
     // Mix
     output = acid_out * acid_gain + lead_out * lead_gain;

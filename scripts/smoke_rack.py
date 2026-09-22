@@ -10,7 +10,7 @@ except subprocess.TimeoutExpired:
     output, _ = p.communicate(input=b'\n', timeout=15)
 assert p.returncode == 0, output.decode(errors='replace')
 log = (user / 'log.txt').read_text()
-assert 'Loaded plugin WiggleRoom 2.1.1' in log
+assert 'Loaded plugin WiggleRoom 2.1.2' in log
 for module in ['Wiggle Room ACID9 Voice', 'VCV MIDI to CV', 'VCV Audio 2']:
     assert 'Creating module widget ' + module in log, module
 assert 'fatal' not in log.lower() and 'could not find module' not in log.lower()

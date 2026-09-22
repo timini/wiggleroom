@@ -43,7 +43,7 @@ void wav(const std::string& path,const std::vector<float>& data,int sr){
 int main(int argc,char**argv){
  try {
  rack::Context context;context.engine=new rack::engine::Engine;rack::contextSet(&context);
- rack::Plugin plugin;plugin.slug="WiggleRoom";plugin.version="2.1.1";plugin.addModel(modelACID9Voice);pluginInstance=&plugin;rack::plugin::plugins.push_back(&plugin);
+ rack::Plugin plugin;plugin.slug="WiggleRoom";plugin.version="2.1.2";plugin.addModel(modelACID9Voice);pluginInstance=&plugin;rack::plugin::plugins.push_back(&plugin);
  for(float sr:{44100.f,48000.f,96000.f,192000.f}){
   Rig r(sr);check(r.run(sr/5)<1e-12,"Unpatched voice should be silent");r.input(M::GATE_INPUT,10);check(r.run(sr/3)>1e-5,"Gate does not sound");r.input(M::GATE_INPUT,0);r.run(sr);check(r.run(sr/4)<1e-8,"Gate release does not settle");r.input(M::GATE_INPUT,10);check(r.run(sr/4)>1e-5,"Gate did not retrigger");
   auto base=note(sr);

@@ -10,9 +10,9 @@ with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
     def read(name):
         return archive.extractfile('WiggleRoom/' + name).read()
     manifest = json.loads(read('plugin.json'))
-    assert manifest['version'] == '2.1.1'
+    assert manifest['version'] == '2.1.2'
     assert [m['slug'] for m in manifest['modules']] == ['ACID9Voice']
-    for name in ['LICENSE', 'res/ACID9Voice.png', 'res/ACID9Voice-labels.svg',
+    for name in ['licenses/ACID9-diode-ladder-NOTICE.md', 'licenses/LGPL-2.1.txt', 'LICENSE', 'res/ACID9Voice.png', 'res/ACID9Voice-labels.svg',
                  'docs/user/modules/ACID9Voice.md', 'presets/ACID9Voice/Classic acid.vcvm']:
         assert read(name), name
     assert not any(n.startswith('WiggleRoom/res/') and 'ACID9Voice' not in n and n != 'WiggleRoom/res' for n in names)

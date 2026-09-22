@@ -5,6 +5,36 @@
   "controls": [
     {
       "kind": "param",
+      "id": 16,
+      "label": "SLIDE TIME",
+      "x": 170,
+      "y": 155,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 17,
+      "label": "ACCENT AMT",
+      "x": 170,
+      "y": 211,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "param",
+      "id": 15,
+      "label": "OCTAVE",
+      "x": 125,
+      "y": 211,
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
+    },
+    {
+      "kind": "param",
       "id": 0,
       "label": "SHAPE",
       "x": 45,
@@ -96,12 +126,12 @@
     {
       "kind": "param",
       "id": 8,
-      "label": "FILTER MODE",
+      "label": "FILTER MORPH",
       "x": 295,
       "y": 211,
-      "w": 14,
-      "h": 20.6411,
-      "asset": "CKSS"
+      "w": 22.6758,
+      "h": 22.6758,
+      "asset": "RoundSmallBlackKnob"
     },
     {
       "kind": "param",

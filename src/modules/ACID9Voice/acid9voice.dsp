@@ -5,7 +5,7 @@
 // - Tri-core morphing oscillator with ISOTOPE detune/spread
 // - Sub oscillator (sine/square switchable)
 // - Pre-filter grit saturation
-// - Dual filters (ACID diode ladder / LEAD OTA)
+// - Dual filters (ACID diode ladder / LEAD TPT ladder)
 // - Filter envelope with accent boost
 // - Insert loop (send/return)
 // - Stereo delay with clock sync and ghost mode
@@ -23,6 +23,9 @@ import("lib/acid_delay.lib");
 // PARAMETERS (alphabetically ordered for Faust indexing)
 // ============================================================================
 
+accent_amount = hslider("accent_amount", 0.5, 0, 1, 0.001);
+note_trigger = button("note_trigger");
+slide_time_ms = hslider("slide_time_ms", 60, 10, 200, 1);
 accent = hslider("accent", 0, 0, 10, 0.001);
 cutoff = hslider("cutoff", 1000, 20, 20000, 1) : si.smoo;
 cutoff_cv = hslider("cutoff_cv", 0, -5, 5, 0.001);
@@ -52,7 +55,7 @@ volts = hslider("volts", 0, -5, 10, 0.001);
 // PITCH PROCESSING WITH SLIDE
 // ============================================================================
 
-slide_time = select2(slide > 0.9, 0.001, 0.06);
+slide_time = select2(slide > 0.9, 0.001, slide_time_ms / (1000*log(10)));
 pitched_volts = volts : si.smooth(ba.tau2pole(slide_time));
 
 // V/Oct to frequency (0V = C4 = 261.62 Hz)
@@ -63,30 +66,34 @@ freq = max(20, min(base_freq, 20000));
 // ENVELOPE PROCESSING
 // ============================================================================
 
-// Smooth the gate to prevent clicks
-gate_smooth = gate : si.smooth(ba.tau2pole(0.002));
-gate_on = gate_smooth > 0.9;
-accent_on = accent > 0.9;
-
-// Filter envelope (AD shape) - slightly slower attack for organic feel
-attack_time = 0.008;  // 8ms attack
-filter_env_raw = en.adsr(attack_time, decay, 0, 0.05, gate_on);
-accent_boost_filt = select2(accent_on, 1.0, 1.5);
-filter_env_val = filter_env_raw * accent_boost_filt;
-
-// VCA envelope - match filter attack to prevent clicks
-// Longer attack (8ms) and release (150ms) for smoother sound
-vca_env_raw = en.adsr(0.008, 0.15, 0.7, 0.15, gate_on);
-accent_boost_vca = select2(accent_on, 1.0, 1.3);
-vca_env_val = vca_env_raw * accent_boost_vca;
-
-// ============================================================================
-// FILTER MODULATION
-// ============================================================================
-
-cv_mod = cutoff * (2.0 ^ (cutoff_cv));
-env_mod_hz = cutoff * env_mod * 4 * filter_env_val;
-final_cutoff = max(20, min(cv_mod + env_mod_hz, 20000));
+// The wrapper supplies the tied internal gate, latched accent and a one-sample
+// trigger only for untied notes. Envelopes attack from their current level.
+gate_on = gate > .9;
+accent_on = (accent > .9) & (accent_amount > 0);
+continuous_env(trig,hold,at,dt,rt) = step ~ _
+with {
+    elapsed = (+(1) : min(ma.SR*4) : *(1-trig)) ~ _;
+    seen = max(trig) ~ _;
+    step(y) = select2(hold & seen, y*exp(-1/(rt*ma.SR)),
+        select2(elapsed<at*ma.SR, y*exp(-1/(dt*ma.SR)), min(1,y+1/(at*ma.SR))));
+};
+main_decay = select2(accent_on,decay,.06);
+filter_env_raw = continuous_env(note_trigger,1,.001,main_decay,.003);
+vca_env_raw = continuous_env(note_trigger,gate_on,.003,1.2,.003);
+// Accent sweep: capacitor charged through 47k + resonance*100k, discharged
+// through 100k, C=1uF. Resonance moves the mix from direct MEG to stored charge.
+accent_drive = filter_env_raw*accent_on*accent_amount;
+accent_cap = charge ~ _
+with {
+    charge(c) = c + max(0,accent_drive-c)/(ma.SR*(.047+.1*resonance)) - c/(ma.SR*.1);
+};
+accent_sweep = (1-resonance)*max(0,(100.0/147)*accent_drive-accent_cap)+resonance*accent_cap;
+accent_vca = accent_drive : si.smooth(ba.tau2pole(.001551));
+// Preserve the short release instead of multiplying the whole voice by a gate.
+// Accent contribution releases through the same continuous amplitude envelope.
+vca_env_val = vca_env_raw*(1+.3*accent_vca) : si.smooth(ba.tau2pole(.001));
+filter_env_val = filter_env_raw : si.smooth(ba.tau2pole(.001));
+final_cutoff = max(20,min(cutoff*pow(2,cutoff_cv+4*env_mod*filter_env_val+2*accent_sweep),20000));
 
 // ============================================================================
 // MAIN PROCESS
@@ -146,7 +153,7 @@ with {
 output_gain = 0.7;
 output_stereo(l, r, send) = (l * output_gain : fi.dcblocker : ma.tanh),
                             (r * output_gain : fi.dcblocker : ma.tanh),
-                            (send * output_gain);
+                            (send * output_gain : fi.dcblocker : ma.tanh);
 
 // Main process: chain all stages
 process = osc_stereo : grit_stereo : filter_stereo : vca_stereo : insert_stereo : delay_stereo : output_stereo;
