@@ -12,3 +12,7 @@ FLAGS += -fno-finite-math-only
 CXXFLAGS += -std=c++17
 .PHONY: dep
 dep:
+
+.PHONY: release-static-check
+release-static-check:
+	RACK_DIR="$(abspath $(RACK_DIR))" scripts/run_release_static_checks.sh
