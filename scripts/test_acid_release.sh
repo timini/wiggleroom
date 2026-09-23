@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 # uploading packages. A failed review check therefore blocks release artifacts.
 if [[ "$(uname -s)" == Linux ]]; then
     python3 test/test_release_static_checks.py
+    python3 test/test_initialize_faust_members.py
     scripts/run_release_static_checks.sh
 fi
 mkdir -p build/release-tests

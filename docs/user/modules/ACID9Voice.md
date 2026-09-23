@@ -1,6 +1,6 @@
 # ACID9 Voice
 
-ACID9 Voice is a monophonic acid synth with a stereo oscillator, two filter characters, accent, slide, an insert loop and stereo delay. It occupies **34HP**. This is the only module in WiggleRoom 2.1.2; Matter and the other experimental modules are deferred.
+ACID9 Voice is a monophonic acid synth with a stereo oscillator, two filter characters, accent, slide, an insert loop and stereo delay. It occupies **34HP**. This is the only module in WiggleRoom 2.1.3; Matter and the other experimental modules are deferred.
 
 ![ACID9 Voice panel](../../../design/ACID9Voice/preview.png)
 
@@ -72,7 +72,7 @@ Loading, resetting, bypassing and changing sample rate clear runtime articulatio
 
 ## Compatibility
 
-WiggleRoom 2.1.2 retains the `WiggleRoom/ACID9Voice` slug and existing parameter/port IDs. The panel has grown from 20HP to 34HP; leave space or rearrange neighbours when opening older development patches. Patches using deferred WiggleRoom modules require the development build that supplied them.
+WiggleRoom 2.1.3 retains the `WiggleRoom/ACID9Voice` slug and existing parameter/port IDs. The panel has grown from 20HP to 34HP; leave space or rearrange neighbours when opening older development patches. Patches using deferred WiggleRoom modules require the development build that supplied them.
 
 ## Source and licence
 

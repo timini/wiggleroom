@@ -199,7 +199,7 @@ struct TheCauldron : FaustModule<VCVRackDSP> {
 
 // Scope widget for displaying output waveform
 struct CauldronScopeWidget : Widget {
-    TheCauldron* module;
+    TheCauldron* module = nullptr;
     NVGcolor waveColor;
 
     CauldronScopeWidget() {

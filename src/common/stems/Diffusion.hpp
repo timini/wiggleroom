@@ -201,19 +201,19 @@ private:
         auto sizeFor = [&](float ms, float scale) {
             return (std::size_t)(ms * scale * maxRate / 1000.f) + kSearchHeadroom;
         };
-        auto bind = [&](Line& line, float ms, float scale) {
+        auto allocateLine = [&](Line& line, float ms, float scale) {
             storage_[at].assign(sizeFor(ms, scale), 0.f);
             line.data = storage_[at].data();
             line.capacity = storage_[at].size();
             at++;
         };
         for (int i = 0; i < kNumAllpass; i++) {
-            bind(allpassLeft_[i], kAllpassMs[i], 1.f);
-            bind(allpassRight_[i], kAllpassMs[i], kStereoOffset);
+            allocateLine(allpassLeft_[i], kAllpassMs[i], 1.f);
+            allocateLine(allpassRight_[i], kAllpassMs[i], kStereoOffset);
         }
         for (int i = 0; i < kNumCombs; i++) {
-            bind(combLeft_[i], kCombMs[i], 1.f);
-            bind(combRight_[i], kCombMs[i], kStereoOffset);
+            allocateLine(combLeft_[i], kCombMs[i], 1.f);
+            allocateLine(combRight_[i], kCombMs[i], kStereoOffset);
         }
     }
 
@@ -224,7 +224,7 @@ private:
         // share a factor of four and the first two share five. Shared periods
         // make several loops return energy together and the tail acquires the
         // pitched flutter the spread is supposed to prevent.
-        std::size_t chosen[2 * (kNumAllpass + kNumCombs)];
+        std::size_t chosen[2 * (kNumAllpass + kNumCombs)] = {};
         int count = 0;
         auto pick = [&](float ms, float scale, const Line& line) {
             std::size_t n = lengthFor(ms, scale);

@@ -59,7 +59,7 @@ struct ChaosPad : FaustModule<VCVRackDSP> {
     bool clockDetected = false;
 
     // Latch toggle
-    dsp::BooleanTrigger latchTrigger;
+    dsp::BooleanTrigger latchTrigger{};
     bool latchState = false;
 
     // Gate envelope (slew-limited)

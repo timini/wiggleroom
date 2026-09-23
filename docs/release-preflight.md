@@ -39,3 +39,32 @@ Reports are written to `build/release-static/`: `sources.txt`, `cppcheck.xml`,
 `cppcheck.stdout.txt`, `patterns.json` and `summary.txt`. The readable report is
 printed to the CI log even when findings fail the job. Existing reported problems
 are intentionally still blockers; adding the gate does not fix or resubmit 2.1.2.
+
+## 2.1.3 fixes and analyzer compatibility
+
+Use `scripts/regenerate_acid9_dsp.sh` when updating the Faust DSP. Its final step
+adds explicit zero initializers to generated state fields. Rack still calls the
+normal DSP initialization before processing. No uninitialized-member suppression
+is used.
+
+Cppcheck 2.21.0 cannot parse the SDK's GLEW declarations containing a parameter
+named identically to its type (`GLsync GLsync`). The runner creates an analysis-only
+GLEW copy with that parameter renamed to `sync`. All types, declarations and bodies
+remain present; the SDK used to compile the plugin is untouched. Non-Linux platform
+macros are explicitly undefined for this Linux-targeted check.
+
+The reported Stems `bind()` was a local allocation lambda, not a networking API;
+it is now named `allocateLine`. The scratch array is explicitly zero-initialized.
+Missing ACID9Seq and Linkage panel files are restored to the source tree only;
+the release manifest and packaged module selection remain ACID9Voice-only.
+
+The null-module draw advisories in OctoLFO, TheCauldron and PixelProbe were reviewed:
+they concern optional waveform/image displays with separate background rendering,
+not a missing whole module panel. These unreleased modules remain excluded. The
+advisories stay visible in reports rather than being silently suppressed.
+
+SDK-only diagnostics are retained in the raw XML and counted separately from
+plugin findings. Only diagnostics whose every location is inside the supplied
+SDK or its analysis overlay are classified this way. Parsing/preprocessor/internal
+errors always fail, regardless of location, to prevent partial analysis passing.
+All project-source errors and warnings still block; no project baseline is used.

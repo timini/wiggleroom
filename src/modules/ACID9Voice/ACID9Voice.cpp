@@ -349,23 +349,18 @@ struct ACID9Panel : widget::OpaqueWidget {
     std::shared_ptr<rack::window::Svg> labels;
     ACID9Panel() {
         box.size = Vec(510, 380);
-        loadArtwork();
-    }
-    void loadArtwork() {
-        if (APP->window) {
-            artwork = APP->window->loadImage(asset::plugin(pluginInstance, "res/ACID9Voice.png"));
+        if (APP->window)
             labels = APP->window->loadSvg(asset::plugin(pluginInstance, "res/ACID9Voice-labels.svg"));
-        }
-    }
-    void onContextCreate(const ContextCreateEvent& e) override {
-        loadArtwork();
-        OpaqueWidget::onContextCreate(e);
     }
     void onContextDestroy(const ContextDestroyEvent& e) override {
         artwork.reset();
         OpaqueWidget::onContextDestroy(e);
     }
     void draw(const DrawArgs& args) override {
+        // Image handles belong to the active graphics context. Load lazily here,
+        // and drop our reference in onContextDestroy before that context closes.
+        if (!artwork && APP->window)
+            artwork = APP->window->loadImage(asset::plugin(pluginInstance, "res/ACID9Voice.png"));
         nvgBeginPath(args.vg);
         nvgRect(args.vg, 0, 0, box.size.x, box.size.y);
         nvgFillColor(args.vg, nvgRGB(20, 16, 30));

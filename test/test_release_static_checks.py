@@ -22,4 +22,17 @@ class Patterns(unittest.TestCase):
     def test_comments_are_ignored(self):
         self.assertEqual(self.scan('// loadImage(x);\n/* bind(x); */'),[])
 
+class DiagnosticScope(unittest.TestCase):
+    def test_sdk_only_and_mixed_locations(self):
+        import xml.etree.ElementTree as ET
+        root=Path('/test/sdk')
+        e=ET.fromstring('<error id="uninitvar"><location file="/test/sdk/include/a.hpp"/></error>')
+        self.assertTrue(checks.is_external_diagnostic(e,(root,)))
+        ET.SubElement(e,'location',file='/test/project/src/a.cpp')
+        self.assertFalse(checks.is_external_diagnostic(e,(root,)))
+    def test_parse_failure_never_hidden(self):
+        import xml.etree.ElementTree as ET
+        e=ET.fromstring('<error id="syntaxError"><location file="/test/sdk/a.hpp"/></error>')
+        self.assertFalse(checks.is_external_diagnostic(e,(Path('/test/sdk'),)))
+
 if __name__ == '__main__': unittest.main()

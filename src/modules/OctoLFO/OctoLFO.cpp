@@ -394,8 +394,8 @@ struct OctoLFO : Module {
 
 // Mini scope widget for displaying LFO waveform
 struct MiniScopeWidget : Widget {
-    OctoLFO* module;
-    int lfoIndex;
+    OctoLFO* module = nullptr;
+    int lfoIndex = 0;
     NVGcolor waveColor;
 
     MiniScopeWidget() {
