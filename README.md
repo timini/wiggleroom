@@ -2,6 +2,8 @@
 
 A collection of creative modules for [VCV Rack 2](https://vcvrack.com/), built with [Faust](https://faust.grame.fr/) physical modeling DSP.
 
+![Panels from SpaceCello, TheAbyss, ChaosFlute, Matter, ModalBell, Cycloid, ACID9Voice and BigReverb](docs/images/panels.jpg)
+
 **[Documentation](docs/README.md)** | **[Developer Guide](docs/developer/getting-started.md)** | **[Release Strategy](docs/RELEASE_STRATEGY.md)**
 
 ## Modules (45)
