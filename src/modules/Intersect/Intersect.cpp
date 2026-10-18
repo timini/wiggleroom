@@ -9,6 +9,8 @@
 #include "rack.hpp"
 #include "DSP.hpp"
 #include "ImagePanel.hpp"
+#include "mutagen/MutagenMessage.hpp"
+#include "mutagen/MutagenModels.hpp"
 #include <atomic>
 #include <array>
 #include <cmath>
@@ -47,6 +49,7 @@ struct Intersect : Module {
         DENSITY_CV_INPUT,
         SCALE_BUS_INPUT,
         SH_CV_INPUT,
+        RUN_INPUT,
         INPUTS_LEN
     };
     enum OutputId {
@@ -102,6 +105,9 @@ struct Intersect : Module {
     bool swingLate = false;
     float pendingSwingTimer = 0.0f;
 
+    // Transport published to a Mutagen chain on the right
+    WiggleRoom::MutagenExpanderMessage rightMessages[2];
+
     // Thread-safe visualization data (written by audio, read by UI)
     static const int BUFFER_SIZE = 128;
     std::array<float, BUFFER_SIZE> cvBuffer{};
@@ -140,6 +146,7 @@ struct Intersect : Module {
         configInput(DENSITY_CV_INPUT, "Density CV");
         configInput(SCALE_BUS_INPUT, "Scale bus");
         configInput(SH_CV_INPUT, "S&H CV (normalled to CV)");
+        configInput(RUN_INPUT, "Run");
 
         configOutput(TRIG_OUTPUT, "Trigger");
         configOutput(STEP_OUTPUT, "Step");
@@ -149,6 +156,9 @@ struct Intersect : Module {
 
         // Initialize buffer
         cvBuffer.fill(0.5f);
+
+        rightExpander.producerMessage = &rightMessages[0];
+        rightExpander.consumerMessage = &rightMessages[1];
     }
 
     void onReset() override {
@@ -356,7 +366,15 @@ struct Intersect : Module {
         int divisions = DSP::clamp((int)(densityBase + densityCV * DENSITY_CV_SCALE), 1, 32);
         currentDivisions.store(divisions);
 
+        // Run gate. Unpatched means running, so nothing changes for
+        // patches built before this input existed.
+        bool running = inputs[RUN_INPUT].isConnected()
+                         ? inputs[RUN_INPUT].getVoltage() > SCHMITT_HIGH
+                         : true;
+        shouldSample = shouldSample && running;
+
         // The main algorithm: sample on clock
+        bool firedThisSample = false;
         if (shouldSample) {
             // Swing makes the interval to the next sample uneven. A gate held
             // for the even period would run past that sample, so consecutive
@@ -425,6 +443,7 @@ struct Intersect : Module {
                     }
                     displayFlashBand.store(DSP::clamp(triggerBand, 0, divisions - 1));
                     displayFlashTime.store(0.0f);
+                    firedThisSample = true;
 
                     // Latch the S&H CV on the event that fires the output.
                     // With nothing patched, normal to the analysed CV input so the
@@ -470,6 +489,25 @@ struct Intersect : Module {
         outputs[SH_OUTPUT].setVoltage(shHeldVoltage);
 
         lights[TRIG_LIGHT].setBrightness(outputHigh ? 1.0f : 0.0f);
+
+        sendToMutagen(firedThisSample, running);
+    }
+
+    // A Mutagen placed directly to the right clocks from our trigger, so
+    // the pair works with no cable between them.
+    void sendToMutagen(bool firedThisSample, bool running) {
+        if (!rightExpander.module || rightExpander.module->model != modelMutagen)
+            return;
+        auto* msg = static_cast<WiggleRoom::MutagenExpanderMessage*>(rightExpander.producerMessage);
+        msg->clear();
+        msg->clockTick = firedThisSample;
+        msg->resetPulse = resetTrigger.isHigh();
+        msg->running = running;
+        // Intersect has no address or bank of its own to offer.
+        msg->stepAddress = -1;
+        msg->bankIndex = -1;
+        msg->valid = true;
+        rightExpander.requestMessageFlip();
     }
 };
 
@@ -621,6 +659,7 @@ struct IntersectWidget : ModuleWidget {
         float yModeSwitch = 290.f;
         addParam(createParamCentered<CKSS>(Vec(xLeft, yModeSwitch), module, Intersect::GATE_MODE_PARAM));
         addParam(createParamCentered<CKSSThree>(Vec(xRight, yModeSwitch), module, Intersect::EDGE_MODE_PARAM));
+        addInput(createInputCentered<PJ301MPort>(Vec(xCenter, yModeSwitch), module, Intersect::RUN_INPUT));
 
         // Outputs
         float yOutputs = 325.f;

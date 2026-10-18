@@ -185,6 +185,22 @@ set_target_properties(euclogic_test PROPERTIES
     CXX_STANDARD_REQUIRED ON
 )
 
+# Mutagen test executable (standalone C++ test, no Faust/VCV dependencies)
+# The Mutagen core in src/common/mutagen/ is framework-free, so this links nothing.
+add_executable(mutagen_test
+    mutagen_test.cpp
+)
+
+target_include_directories(mutagen_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+
+set_target_properties(mutagen_test PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
+
 # PreFlightClock test executable (standalone C++ test, no Faust/VCV dependencies)
 add_executable(preflight_clock_test
     preflight_clock_test.cpp

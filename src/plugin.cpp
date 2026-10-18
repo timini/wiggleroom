@@ -12,6 +12,12 @@ extern Model* modelStems;
 #ifdef HAS_INTERSECT
 extern Model* modelIntersect;
 #endif
+#ifdef HAS_MUTAGEN
+extern Model* modelMutagen;
+#endif
+#ifdef HAS_MUTAGENX
+extern Model* modelMutagenX;
+#endif
 #ifdef HAS_CYCLOID
 extern Model* modelCycloid;
 #endif
@@ -150,6 +156,12 @@ void init(Plugin* p) {
 #endif
 #ifdef HAS_INTERSECT
     p->addModel(modelIntersect);
+#endif
+#ifdef HAS_MUTAGEN
+    p->addModel(modelMutagen);
+#endif
+#ifdef HAS_MUTAGENX
+    p->addModel(modelMutagenX);
 #endif
 #ifdef HAS_CYCLOID
     p->addModel(modelCycloid);
