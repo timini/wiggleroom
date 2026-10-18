@@ -46,6 +46,7 @@
 #include "common/stems/Yin.hpp"
 #include "common/stems/Stft.hpp"
 #include "common/stems/Transport.hpp"
+#include "common/stems/WavFile.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1419,6 +1420,76 @@ bool workerInvalidate(std::string& detail) {
         return false;
     }
     if (!republished) { detail = "no take published after invalidate()"; return false; }
+    return true;
+}
+
+/**
+ * Pitch analysis must run on the worker, not the caller.
+ *
+ * YIN is O(window * maxTau), about two million operations. Running it from
+ * process() put all of that into one audio deadline and showed up as a periodic
+ * CPU spike at the analysis rate, which is what a user reported.
+ */
+bool workerAnalysis(std::string& detail) {
+    SeparationWorker worker;
+    worker.start();
+
+    const int sampleRate = 48000;
+    std::vector<float> tone(SeparationWorker::kAnalysisWindow, 0.f);
+    for (std::size_t i = 0; i < tone.size(); i++) {
+        tone[i] = (float)std::sin(2 * M_PI * 220.0 * (double)i / sampleRate);
+    }
+
+    if (!worker.submitAnalysis(tone.data(), tone.size(), sampleRate)) {
+        detail = "the first analysis window was refused";
+        worker.stop();
+        return false;
+    }
+
+    SeparationWorker::AnalysisResult result;
+    const bool got = waitFor([&] { return worker.takeAnalysis(result); }, 5000);
+    if (!got) { detail = "no analysis result came back"; worker.stop(); return false; }
+    if (!result.voiced) { detail = "a clean 220 Hz tone was not voiced"; worker.stop(); return false; }
+    const double cents = 1200.0 * std::log2(result.frequency / 220.0);
+    if (std::fabs(cents) > 20.0) {
+        detail = "analysis returned " + std::to_string(result.frequency) + " Hz";
+        worker.stop();
+        return false;
+    }
+
+    // The slot holds ONE window. A second offer while the first is outstanding
+    // must be refused rather than overwriting a window being read.
+    std::vector<float> noise(SeparationWorker::kAnalysisWindow, 0.f);
+    std::mt19937 rng(5);
+    std::uniform_real_distribution<float> dist(-1.f, 1.f);
+    for (auto& x : noise) x = dist(rng);
+    int accepted = 0, refused = 0;
+    for (int i = 0; i < 200; i++) {
+        if (worker.submitAnalysis(noise.data(), noise.size(), sampleRate)) accepted++;
+        else refused++;
+    }
+    if (accepted == 0) { detail = "no further windows were accepted"; worker.stop(); return false; }
+    if (refused == 0) {
+        detail = "every one of 200 back-to-back windows was accepted; the slot is "
+                 "not bounded and a window could be overwritten while it is read";
+        worker.stop();
+        return false;
+    }
+
+    // Analysis must not stop separation working.
+    auto input = makeJobInput(8192, 33);
+    const uint64_t gen = worker.submit(input.data(), input.size(), sampleRate);
+    const bool published = waitFor([&] {
+        const StemSet* set = worker.acquire();
+        const bool ok = (set != nullptr && set->generation == gen);
+        worker.release(set);
+        return ok;
+    });
+    const uint64_t done = worker.debugAnalysisDone();
+    worker.stop();
+
+    if (!published) { detail = "separation stopped working once analysis was in use"; return false; }
+    if (done == 0) { detail = "the worker never reported completing an analysis"; return false; }
     return true;
 }
 
@@ -7753,6 +7824,439 @@ bool emptyBufferSweep(std::string& detail) {
     return true;
 }
 
+
+// ---------------------------------------------------------------------------
+// WavFile
+// ---------------------------------------------------------------------------
+
+using WiggleRoom::stems::WavFile;
+
+namespace {
+/** Little-endian writers, so the fixtures are built the way a WAV is laid out. */
+void put16(std::vector<unsigned char>& v, uint16_t x) {
+    v.push_back((unsigned char)(x & 0xFF));
+    v.push_back((unsigned char)(x >> 8));
+}
+void put32(std::vector<unsigned char>& v, uint32_t x) {
+    for (int i = 0; i < 4; i++) v.push_back((unsigned char)((x >> (8 * i)) & 0xFF));
+}
+void putTag(std::vector<unsigned char>& v, const char* tag) {
+    for (int i = 0; i < 4; i++) v.push_back((unsigned char)tag[i]);
+}
+
+/** A complete WAV built in memory, so the tests need no fixture files. */
+std::vector<unsigned char> makeWav(int codec, int bits, int channels, int sampleRate,
+                                   const std::vector<float>& interleaved,
+                                   bool extensible = false) {
+    std::vector<unsigned char> body;
+    const int bytes = bits / 8;
+    for (float v : interleaved) {
+        if (codec == 3 && bits == 32) {
+            unsigned char raw[4];
+            std::memcpy(raw, &v, 4);
+            for (int i = 0; i < 4; i++) body.push_back(raw[i]);
+        } else if (codec == 3 && bits == 64) {
+            const double d = v;
+            unsigned char raw[8];
+            std::memcpy(raw, &d, 8);
+            for (int i = 0; i < 8; i++) body.push_back(raw[i]);
+        } else if (bits == 8) {
+            body.push_back((unsigned char)std::lround(v * 128.0 + 128.0));
+        } else if (bits == 16) {
+            put16(body, (uint16_t)(int16_t)std::lround(v * 32767.0));
+        } else if (bits == 24) {
+            const int32_t x = (int32_t)std::lround(v * 8388607.0);
+            body.push_back((unsigned char)(x & 0xFF));
+            body.push_back((unsigned char)((x >> 8) & 0xFF));
+            body.push_back((unsigned char)((x >> 16) & 0xFF));
+        } else {
+            put32(body, (uint32_t)(int32_t)std::llround((double)v * 2147483647.0));
+        }
+    }
+    (void)bytes;
+
+    std::vector<unsigned char> fmt;
+    put16(fmt, (uint16_t)(extensible ? 0xFFFE : codec));
+    put16(fmt, (uint16_t)channels);
+    put32(fmt, (uint32_t)sampleRate);
+    put32(fmt, (uint32_t)(sampleRate * channels * bits / 8));
+    put16(fmt, (uint16_t)(channels * bits / 8));
+    put16(fmt, (uint16_t)bits);
+    if (extensible) {
+        put16(fmt, 22);                       // extension size
+        put16(fmt, (uint16_t)bits);           // valid bits
+        put32(fmt, 0);                        // channel mask
+        put16(fmt, (uint16_t)codec);          // the real codec, first of the GUID
+        for (int i = 0; i < 14; i++) fmt.push_back(0);
+    }
+
+    std::vector<unsigned char> out;
+    putTag(out, "RIFF");
+    put32(out, (uint32_t)(4 + 8 + fmt.size() + 8 + body.size()));
+    putTag(out, "WAVE");
+    putTag(out, "fmt ");
+    put32(out, (uint32_t)fmt.size());
+    out.insert(out.end(), fmt.begin(), fmt.end());
+    putTag(out, "data");
+    put32(out, (uint32_t)body.size());
+    out.insert(out.end(), body.begin(), body.end());
+    return out;
+}
+
+std::vector<float> testTone(std::size_t frames, int channels) {
+    std::vector<float> v(frames * (std::size_t)channels, 0.f);
+    for (std::size_t f = 0; f < frames; f++) {
+        for (int c = 0; c < channels; c++) {
+            const double phase = 2 * M_PI * 4.0 * (double)f / (double)frames;
+            v[f * channels + c] = (float)(0.8 * std::sin(phase + c));
+        }
+    }
+    return v;
+}
+}  // namespace
+
+/** Every format the reader claims to support must round-trip. */
+bool wavFormats(std::string& detail) {
+    struct Case { int codec, bits; const char* name; };
+    const Case cases[] = {
+        {1, 8, "PCM 8"},   {1, 16, "PCM 16"}, {1, 24, "PCM 24"}, {1, 32, "PCM 32"},
+        {3, 32, "float 32"}, {3, 64, "float 64"},
+    };
+    for (const auto& c : cases) {
+        for (int channels : {1, 2}) {
+            const auto samples = testTone(256, channels);
+            const auto file = makeWav(c.codec, c.bits, channels, 44100, samples);
+            const auto r = WavFile::read(file.data(), file.size(), 100000);
+            if (!r.ok) {
+                detail = std::string(c.name) + " with " + std::to_string(channels) +
+                         " channels failed: " + r.error;
+                return false;
+            }
+            if (r.sampleRate != 44100) {
+                detail = std::string(c.name) + " reported rate " +
+                         std::to_string(r.sampleRate);
+                return false;
+            }
+            if (r.frames() != 256) {
+                detail = std::string(c.name) + " returned " + std::to_string(r.frames()) +
+                         " frames";
+                return false;
+            }
+            // Eight bit has a coarse step, so it gets a looser bar than the rest.
+            const double tolerance = (c.bits == 8) ? 0.02 : 0.001;
+            for (std::size_t f = 0; f < r.frames(); f++) {
+                const double wantL = samples[f * channels];
+                const double wantR = samples[f * channels + (channels > 1 ? 1 : 0)];
+                if (std::fabs(r.left[f] - wantL) > tolerance ||
+                    std::fabs(r.right[f] - wantR) > tolerance) {
+                    detail = std::string(c.name) + " sample " + std::to_string(f) +
+                             " read " + std::to_string(r.left[f]) + " expected " +
+                             std::to_string(wantL);
+                    return false;
+                }
+            }
+            // Mono must arrive on both sides rather than leaving one silent.
+            if (channels == 1) {
+                for (std::size_t f = 0; f < r.frames(); f++) {
+                    if (r.left[f] != r.right[f]) {
+                        detail = "mono was not duplicated to both channels";
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+/** WAVE_FORMAT_EXTENSIBLE carries the real codec in its GUID. */
+bool wavExtensible(std::string& detail) {
+    for (int bits : {16, 24, 32}) {
+        const auto samples = testTone(128, 2);
+        const auto file = makeWav(1, bits, 2, 48000, samples, /*extensible=*/true);
+        const auto r = WavFile::read(file.data(), file.size(), 100000);
+        if (!r.ok) {
+            detail = "extensible PCM " + std::to_string(bits) + " failed: " + r.error;
+            return false;
+        }
+        if (r.frames() != 128 || r.sampleRate != 48000) {
+            detail = "extensible PCM " + std::to_string(bits) + " decoded wrongly";
+            return false;
+        }
+    }
+    // A float file wrapped in EXTENSIBLE too.
+    const auto samples = testTone(128, 2);
+    const auto file = makeWav(3, 32, 2, 48000, samples, true);
+    const auto r = WavFile::read(file.data(), file.size(), 100000);
+    if (!r.ok) { detail = "extensible float failed: " + r.error; return false; }
+    return true;
+}
+
+/** More than two channels must be folded in, not thrown away. */
+bool wavMultichannel(std::string& detail) {
+    const int channels = 6;
+    const std::size_t frames = 64;
+    std::vector<float> samples(frames * channels, 0.f);
+    // Front pair silent, everything else loud: dropping the rest gives silence.
+    for (std::size_t f = 0; f < frames; f++) {
+        for (int c = 2; c < channels; c++) samples[f * channels + c] = 0.75f;
+    }
+    const auto file = makeWav(1, 16, channels, 48000, samples);
+    const auto r = WavFile::read(file.data(), file.size(), 100000);
+    if (!r.ok) { detail = "six channel file failed: " + r.error; return false; }
+    if (r.channels != 2) {
+        detail = "six channels became " + std::to_string(r.channels);
+        return false;
+    }
+    double peak = 0.0;
+    for (float v : r.left) peak = std::max(peak, (double)std::fabs(v));
+    if (peak < 0.2) {
+        detail = "the surround channels were discarded; peak was " + std::to_string(peak);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Malformed and hostile files must be refused, not parsed.
+ *
+ * This is the only component whose input the user chose, so it is the only one
+ * where a wrong length field is an attack rather than a bug.
+ */
+bool wavMalformed(std::string& detail) {
+    const auto samples = testTone(64, 2);
+    const auto good = makeWav(1, 16, 2, 44100, samples);
+
+    struct Case { std::vector<unsigned char> data; const char* what; };
+    std::vector<Case> cases;
+
+    cases.push_back({{}, "empty"});
+    cases.push_back({{'R', 'I', 'F', 'F'}, "four bytes"});
+    {
+        auto v = good;
+        v[0] = 'X';
+        cases.push_back({v, "wrong magic"});
+    }
+    {
+        auto v = good;
+        v[8] = 'X';
+        cases.push_back({v, "not WAVE"});
+    }
+    {
+        // A data chunk claiming to be far larger than the file.
+        auto v = good;
+        for (std::size_t i = 0; i + 8 <= v.size(); i++) {
+            if (std::memcmp(&v[i], "data", 4) == 0) {
+                v[i + 4] = 0xFF; v[i + 5] = 0xFF; v[i + 6] = 0xFF; v[i + 7] = 0x7F;
+                break;
+            }
+        }
+        cases.push_back({v, "oversized data chunk"});
+    }
+    {
+        // A format chunk claiming to be far larger than the file.
+        auto v = good;
+        for (std::size_t i = 0; i + 8 <= v.size(); i++) {
+            if (std::memcmp(&v[i], "fmt ", 4) == 0) {
+                v[i + 4] = 0xFF; v[i + 5] = 0xFF; v[i + 6] = 0xFF; v[i + 7] = 0x7F;
+                break;
+            }
+        }
+        cases.push_back({v, "oversized fmt chunk"});
+    }
+    {
+        // A zero-length chunk, which a naive walker loops on forever.
+        std::vector<unsigned char> v;
+        putTag(v, "RIFF"); put32(v, 20); putTag(v, "WAVE");
+        putTag(v, "junk"); put32(v, 0);
+        cases.push_back({v, "zero-length chunk"});
+    }
+    {
+        auto v = good;
+        v.resize(v.size() / 2);   // truncated mid-audio
+        cases.push_back({v, "truncated"});
+    }
+    {
+        const auto s = testTone(32, 2);
+        auto v = makeWav(2, 16, 2, 44100, s);   // codec 2 is ADPCM
+        cases.push_back({v, "compressed codec"});
+    }
+    {
+        const auto s = testTone(32, 2);
+        auto v = makeWav(1, 16, 2, 44100, s);
+        for (std::size_t i = 0; i + 8 <= v.size(); i++) {
+            if (std::memcmp(&v[i], "fmt ", 4) == 0) {
+                v[i + 12] = 0; v[i + 13] = 0; v[i + 14] = 0; v[i + 15] = 0;  // rate 0
+                break;
+            }
+        }
+        cases.push_back({v, "zero sample rate"});
+    }
+
+    for (const auto& c : cases) {
+        const auto r = WavFile::read(c.data.empty() ? nullptr : c.data.data(),
+                                     c.data.size(), 100000);
+        // Truncated files are allowed to succeed with fewer frames; what must
+        // never happen is a crash, a bogus frame count, or a silent lie.
+        if (r.ok) {
+            if (r.frames() * (std::size_t)std::max(1, r.channels) > c.data.size()) {
+                detail = std::string(c.what) + " decoded more audio than the file holds";
+                return false;
+            }
+            for (std::size_t i = 0; i < r.frames(); i++) {
+                if (!std::isfinite(r.left[i]) || !std::isfinite(r.right[i])) {
+                    detail = std::string(c.what) + " produced a non-finite sample";
+                    return false;
+                }
+            }
+        } else if (r.error.empty()) {
+            detail = std::string(c.what) + " failed without saying why";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** A float file may legally contain NaN, and one sample poisons everything. */
+bool wavNonFiniteSamples(std::string& detail) {
+    std::vector<float> samples(128 * 2, 0.3f);
+    samples[40] = std::nanf("");
+    samples[41] = std::numeric_limits<float>::infinity();
+    samples[80] = -std::numeric_limits<float>::infinity();
+    samples[81] = 1e30f;
+    const auto file = makeWav(3, 32, 2, 48000, samples);
+    const auto r = WavFile::read(file.data(), file.size(), 100000);
+    if (!r.ok) { detail = "a float file with NaN failed to read: " + r.error; return false; }
+    for (std::size_t i = 0; i < r.frames(); i++) {
+        if (!std::isfinite(r.left[i]) || !std::isfinite(r.right[i])) {
+            detail = "a NaN in the file reached the output at frame " + std::to_string(i);
+            return false;
+        }
+        if (std::fabs(r.left[i]) > 4.f || std::fabs(r.right[i]) > 4.f) {
+            detail = "an out-of-range sample was not clamped";
+            return false;
+        }
+    }
+    return true;
+}
+
+/** The frame cap must bound what a large file can allocate. */
+bool wavFrameCap(std::string& detail) {
+    const auto samples = testTone(4096, 2);
+    const auto file = makeWav(1, 16, 2, 48000, samples);
+    const auto r = WavFile::read(file.data(), file.size(), 1000);
+    if (!r.ok) { detail = "capped read failed: " + r.error; return false; }
+    if (r.frames() != 1000) {
+        detail = "a cap of 1000 returned " + std::to_string(r.frames()) + " frames";
+        return false;
+    }
+    if (!r.truncated) {
+        detail = "a capped read did not report that it was truncated";
+        return false;
+    }
+    const auto full = WavFile::read(file.data(), file.size(), 100000);
+    if (full.truncated) {
+        detail = "an uncapped read reported truncation";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Read the WAV files the repository already has.
+ *
+ * The other cases here use fixtures this file builds itself, which only proves
+ * the reader agrees with the writer twenty lines above it. These were produced
+ * by the audio tooling, so they exercise chunk layouts and headers nothing here
+ * chose. Skipped rather than failed when they are absent, since they are
+ * generated output and a clean checkout may not have them.
+ */
+bool wavRealFiles(std::string& detail) {
+    const char* paths[] = {
+        "test/audio_samples/ChaosFlute.wav", "test/audio_samples/Linkage.wav",
+        "test/audio_samples/Matter.wav",     "test/audio_samples/ModalBell.wav",
+        "test/audio_samples/PluckedString.wav", "test/audio_samples/SpaceCello.wav",
+        "test/audio_samples/TheAbyss.wav",
+    };
+    int read = 0;
+    for (const char* path : paths) {
+        std::FILE* file = std::fopen(path, "rb");
+        if (!file) continue;
+        std::fseek(file, 0, SEEK_END);
+        const long size = std::ftell(file);
+        std::fseek(file, 0, SEEK_SET);
+        if (size <= 0) { std::fclose(file); continue; }
+        std::vector<unsigned char> bytes((std::size_t)size);
+        const std::size_t got = std::fread(bytes.data(), 1, bytes.size(), file);
+        std::fclose(file);
+        bytes.resize(got);
+
+        const auto r = WavFile::read(bytes.data(), bytes.size(), 48000 * 32);
+        if (!r.ok) {
+            detail = std::string(path) + " was refused: " + r.error;
+            return false;
+        }
+        if (r.sampleRate < 8000 || r.frames() < 1000) {
+            detail = std::string(path) + " decoded to " + std::to_string(r.frames()) +
+                     " frames at " + std::to_string(r.sampleRate) + " Hz";
+            return false;
+        }
+        double peak = 0.0;
+        for (std::size_t i = 0; i < r.frames(); i++) {
+            if (!std::isfinite(r.left[i]) || !std::isfinite(r.right[i])) {
+                detail = std::string(path) + " produced a non-finite sample";
+                return false;
+            }
+            peak = std::max(peak, (double)std::fabs(r.left[i]));
+        }
+        if (peak < 1e-4) {
+            detail = std::string(path) + " decoded to silence";
+            return false;
+        }
+        read++;
+    }
+    if (read == 0) {
+        // Not a failure: these are generated files and may not be present.
+        return true;
+    }
+    return true;
+}
+
+/** Unknown chunks before the audio must be skipped, including odd-sized ones. */
+bool wavSkipsChunks(std::string& detail) {
+    const auto samples = testTone(64, 2);
+    std::vector<unsigned char> fmt;
+    put16(fmt, 1); put16(fmt, 2); put32(fmt, 44100);
+    put32(fmt, 44100 * 2 * 2); put16(fmt, 4); put16(fmt, 16);
+
+    std::vector<unsigned char> body;
+    for (float v : samples) put16(body, (uint16_t)(int16_t)std::lround(v * 32767.0));
+
+    // An odd-length chunk, which is padded to even. Missing that pad leaves the
+    // reader one byte out and reading chunk ids from the middle of the audio.
+    const std::vector<unsigned char> odd = {'h', 'i', '!'};
+
+    std::vector<unsigned char> out;
+    putTag(out, "RIFF");
+    put32(out, 0);
+    putTag(out, "WAVE");
+    putTag(out, "LIST"); put32(out, (uint32_t)odd.size());
+    out.insert(out.end(), odd.begin(), odd.end());
+    out.push_back(0);                       // the pad byte
+    putTag(out, "fmt "); put32(out, (uint32_t)fmt.size());
+    out.insert(out.end(), fmt.begin(), fmt.end());
+    putTag(out, "data"); put32(out, (uint32_t)body.size());
+    out.insert(out.end(), body.begin(), body.end());
+
+    const auto r = WavFile::read(out.data(), out.size(), 100000);
+    if (!r.ok) { detail = "a file with a LIST chunk failed: " + r.error; return false; }
+    if (r.frames() != 64) {
+        detail = "chunk skipping returned " + std::to_string(r.frames()) + " frames";
+        return false;
+    }
+    return true;
+}
+
 struct TestCase {
     const char* cmd;
     const char* name;
@@ -7806,6 +8310,7 @@ const TestCase kCases[] = {
     {"--test-worker-stale",       "worker_stale",       workerDiscardsStale},
     {"--test-worker-retire",      "worker_retire",      workerRetiresOffAudioThread},
     {"--test-worker-invalidate",  "worker_invalidate",  workerInvalidate},
+    {"--test-worker-analysis",    "worker_analysis",    workerAnalysis},
     {"--test-worker-empty",       "worker_empty",       workerEmptyAcquire},
     {"--test-worker-stereo",      "worker_stereo",      workerStereo},
     {"--test-worker-failure",     "worker_failure",     workerSeparationFailureIsNonFatal},
@@ -7942,6 +8447,14 @@ const TestCase kCases[] = {
     {"--test-buffer-rate-change", "buffer_rate_change", bufferSurvivesRateChange},
     {"--test-diffusion-no-alloc", "diffusion_no_alloc", diffusionNoAlloc},
     {"--test-empty-buffer",       "empty_buffer",       emptyBufferSweep},
+    {"--test-wav-formats",        "wav_formats",        wavFormats},
+    {"--test-wav-extensible",     "wav_extensible",     wavExtensible},
+    {"--test-wav-multichannel",   "wav_multichannel",   wavMultichannel},
+    {"--test-wav-malformed",      "wav_malformed",      wavMalformed},
+    {"--test-wav-non-finite",     "wav_non_finite",     wavNonFiniteSamples},
+    {"--test-wav-cap",            "wav_cap",            wavFrameCap},
+    {"--test-wav-chunks",         "wav_chunks",         wavSkipsChunks},
+    {"--test-wav-real-files",     "wav_real_files",     wavRealFiles},
     {"--test-extreme-sweep",      "extreme_sweep",      extremeInputSweep},
 };
 

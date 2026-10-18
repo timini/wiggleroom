@@ -466,6 +466,18 @@ class TestSeparationWorker:
         result = run_test(["--test-worker-invalidate"])
         assert result["failed"] == 0, result.get("detail", "")
 
+    def test_pitch_analysis_runs_on_the_worker(self):
+        """YIN is O(window * maxTau), about two million operations. Running it
+        from process() put all of that into one audio deadline and showed up as
+        a periodic CPU spike, which is what a user reported.
+
+        Also checks the slot is bounded: a second window offered while the first
+        is outstanding must be refused, or the audio thread could overwrite a
+        window the worker is reading.
+        """
+        result = run_test(["--test-worker-analysis"])
+        assert result["failed"] == 0, result.get("detail", "")
+
     def test_acquire_before_any_job_is_safe(self):
         """This is the state on patch load."""
         result = run_test(["--test-worker-empty"])
@@ -1725,6 +1737,66 @@ class TestEmptyBuffer:
         in Rack for that.
         """
         result = run_test(["--test-empty-buffer"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+
+class TestWavFile:
+    """Reading WAV files from disk. The only component whose input the user chose."""
+
+    def test_every_supported_format_round_trips(self):
+        """PCM 8, 16, 24 and 32 bit, and IEEE float 32 and 64, mono and stereo.
+        Eight bit is unsigned unlike every other depth, which is the classic way
+        to read it an octave of amplitude off centre.
+        """
+        result = run_test(["--test-wav-formats"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_extensible_files_are_read(self):
+        """WAVE_FORMAT_EXTENSIBLE carries the real codec in a GUID after the
+        extension size, which is what most modern encoders emit."""
+        result = run_test(["--test-wav-extensible"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_surround_files_are_downmixed_not_truncated(self):
+        """Driven with a file whose front pair is silent and whose surround
+        channels carry everything, so dropping them gives silence."""
+        result = run_test(["--test-wav-multichannel"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_malformed_files_are_refused_not_parsed(self):
+        """Empty, truncated, wrong magic, a chunk claiming to be larger than the
+        file, a zero-length chunk that loops a naive walker forever, and a
+        compressed codec. This is the only component whose input the user chose,
+        so a wrong length field is an attack rather than a bug.
+        """
+        result = run_test(["--test-wav-malformed"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_non_finite_samples_in_the_file_are_neutralised(self):
+        """A float WAV can legally contain NaN, and one sample poisons HPSS, the
+        mixer and every oscillator frame after it."""
+        result = run_test(["--test-wav-non-finite"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_frame_cap_bounds_what_is_allocated(self):
+        """Without it a large file decides how much memory the host allocates.
+        Also checks the truncation is reported rather than silent."""
+        result = run_test(["--test-wav-cap"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_unknown_chunks_are_skipped_including_odd_sized_ones(self):
+        """Chunks are padded to an even length. Missing that leaves the reader
+        one byte out, reading chunk ids from the middle of the audio."""
+        result = run_test(["--test-wav-chunks"])
+        assert result["failed"] == 0, result.get("detail", "")
+
+    def test_the_repositorys_own_wav_files_read(self):
+        """The other cases use fixtures this suite builds itself, which only
+        proves the reader agrees with the writer beside it. These were produced
+        by the audio tooling, so they exercise headers nothing here chose.
+        Skipped when absent, since they are generated output.
+        """
+        result = run_test(["--test-wav-real-files"])
         assert result["failed"] == 0, result.get("detail", "")
 
 

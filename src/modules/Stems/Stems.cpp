@@ -15,6 +15,8 @@
 
 #include "rack.hpp"
 
+#include <osdialog.h>
+
 #include "LowpassGate.hpp"
 #include "stems/Diffusion.hpp"
 #include "stems/GrainEngine.hpp"
@@ -24,6 +26,7 @@
 #include "stems/SeparationWorker.hpp"
 #include "stems/StemMixer.hpp"
 #include "stems/Transport.hpp"
+#include "stems/WavFile.hpp"
 #include "stems/WavetableExtract.hpp"
 #include "stems/WavetableOsc.hpp"
 #include "stems/Yin.hpp"
@@ -31,6 +34,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <vector>
 
@@ -260,7 +264,7 @@ struct Stems : Module {
 
         const auto loop = mixer_.process(stems, playhead, fallbackLeft, fallbackRight);
 
-        runAnalysis(stems, args);
+        runAnalysis(args);
         const float voice = runVoice(stems, playhead, args);
         const auto out = runGranular(loop, voice, args);
 
@@ -276,10 +280,23 @@ struct Stems : Module {
         outputs[DOWNBEAT_OUTPUT].setVoltage(downbeatPulse_.process(args.sampleTime) ? 10.f : 0.f);
 
         lights[REC_LIGHT].setBrightness(recording_ ? 1.f : 0.f);
-        lights[SEPARATING_LIGHT].setBrightness(stems == nullptr && !buffer_->empty() ? 1.f : 0.f);
+        // Separating means: a take exists, and no stems have arrived for it yet.
+        const bool separating = (stems == nullptr) && !buffer_->empty() && !recording_;
+        separating_.store(separating, std::memory_order_relaxed);
+        // The copy is the only part with a measurable position; the separation
+        // itself gives no progress, so the bar fills during the handoff and then
+        // pulses while HPSS runs. Better an honest two-phase indicator than a
+        // fake percentage.
+        const float copyProgress =
+            copyPending_ && copyFrames_ > 0
+                ? std::min(1.f, (float)((double)copyCursor_ / (double)copyFrames_))
+                : (separating ? 1.f : 0.f);
+        separationProgress_.store(copyProgress, std::memory_order_relaxed);
+        lights[SEPARATING_LIGHT].setBrightness(separating ? 1.f : 0.f);
         lights[ANALYSIS_ACTIVE_LIGHT].setBrightness(analysisActive_ ? 1.f : 0.f);
         lights[DOWNBEAT_LIGHT].setBrightnessSmooth(downbeat ? 1.f : 0.f, args.sampleTime * 8.f);
 
+        adoptLoadedFile(args);
         updateDisplay();
         completeHandoff();
         worker_.release(stems);
@@ -291,6 +308,12 @@ struct Stems : Module {
         // stereo float, which would put tens of megabytes into every patch
         // file; PixelProbe sets the precedent of storing a reference rather
         // than a payload. Parameters are saved by Rack itself.
+        // The path, never the audio. Same policy as the recorded buffer and as
+        // PixelProbe: a reference costs nothing in the patch file, and 32
+        // seconds of stereo float is tens of megabytes.
+        if (!loadedPath_.empty()) {
+            json_object_set_new(root, "audioPath", json_string(loadedPath_.c_str()));
+        }
         json_object_set_new(root, "detectedRoot", json_integer(detector_.held().root));
         json_object_set_new(root, "detectedMode",
                             json_integer((int)detector_.held().mode));
@@ -299,6 +322,24 @@ struct Stems : Module {
 
     void dataFromJson(json_t* root) override {
         if (!root) return;
+        json_t* audio = json_object_get(root, "audioPath");
+        if (audio && json_is_string(audio)) {
+            // Reloaded on a best-effort basis. The file may have moved since the
+            // patch was saved, which is not an error worth interrupting a patch
+            // load for; the module simply comes up empty and says so in its menu.
+            const std::string path = json_string_value(audio);
+            const std::string failure = loadAudioFile(path);
+            if (!failure.empty()) {
+                // Applying a preset to a module that already has audio must not
+                // leave the previous file playing under the new preset's name.
+                // The buffer goes even though the load did not happen.
+                if (buffer_) buffer_->clear();
+                cancelPendingCopy();
+                worker_.invalidate();
+                loadedPath_ = path;   // remembered, so the menu can show it
+            }
+        }
+
         json_t* r = json_object_get(root, "detectedRoot");
         json_t* m = json_object_get(root, "detectedMode");
         if (r && m) {
@@ -313,6 +354,84 @@ struct Stems : Module {
     }
 
     /**
+     * Load a WAV from disk, replacing whatever is in the buffer.
+     *
+     * UI thread only. The file is read, resampled and written into a buffer the
+     * audio thread never touches, and only then handed over by a flag that
+     * process() consumes with a pointer swap. Writing the live buffer from here
+     * would be a plain data race against recording and playback.
+     *
+     * @return an empty string on success, or a message to show the user.
+     */
+    std::string loadAudioFile(const std::string& path) {
+        if (path.empty()) return "No file chosen.";
+        if (loadPending_.load(std::memory_order_acquire)) {
+            // A previous load is still waiting to be picked up. It is consumed
+            // within one process() call, so this is a moment at worst.
+            return "Still loading the last file, try again.";
+        }
+
+        std::vector<unsigned char> bytes;
+        if (!readWholeFile(path, bytes)) return "Could not open that file.";
+
+        const std::size_t cap = loadBuffer_ ? loadBuffer_->capacityFrames() : 0;
+        if (cap == 0) return "Buffer is not ready.";
+        // The cap is in the FILE's frames, and the file's rate is not known
+        // until its header is read, so the header is parsed first with a token
+        // amount of audio and the real read follows.
+        //
+        // A fixed multiple does not work: at eight times the buffer, a 768 kHz
+        // file loaded into a 48 kHz patch is cut to a fraction of its length
+        // before the resample has a chance to shorten it.
+        const auto probe = stems::WavFile::read(bytes.data(), bytes.size(), 1);
+        if (!probe.ok) return probe.error;
+        const double fileRatio =
+            (double)probe.sampleRate / (double)std::max(1, sampleRate_);
+        const double wanted = (double)cap * std::max(1.0, fileRatio) + 8.0;
+        const std::size_t fileCap =
+            (std::size_t)std::min(wanted, (double)(std::size_t)-1 / 2.0);
+        const auto wav = stems::WavFile::read(bytes.data(), bytes.size(), fileCap);
+        if (!wav.ok) return wav.error;
+
+        std::vector<float> left = wav.left;
+        std::vector<float> right = wav.right;
+        const double ratio = (double)sampleRate_ / (double)std::max(1, wav.sampleRate);
+        if (ratio < 1.0) {
+            const int span = std::max(1, 2 * (int)std::lround(1.0 / ratio));
+            if (span > 1) {
+                smoothInPlace(left, span);
+                smoothInPlace(right, span);
+            }
+        }
+
+        loadBuffer_->clear();
+        const std::size_t source = left.size();
+        if (source < 2) return "That file has no audio in it.";
+        const std::size_t target = std::min(cap, (std::size_t)((double)source * ratio));
+        for (std::size_t i = 0; i < target; i++) {
+            const double at = (double)i / ratio;
+            const std::size_t i0 = std::min((std::size_t)at, source - 1);
+            const std::size_t i1 = std::min(i0 + 1, source - 1);
+            const float f = (float)(at - (double)i0);
+            loadBuffer_->write(left[i0] + (left[i1] - left[i0]) * f,
+                               right[i0] + (right[i1] - right[i0]) * f);
+        }
+
+        loadedPath_ = path;
+        loadedTruncated_ = wav.truncated || target < (std::size_t)((double)source * ratio);
+        loadPending_.store(true, std::memory_order_release);
+        return "";
+    }
+
+    const std::string& loadedPath() const { return loadedPath_; }
+    bool loadedWasTruncated() const { return loadedTruncated_; }
+
+    void clearLoadedFile() {
+        loadedPath_.clear();
+        loadedTruncated_ = false;
+    }
+
+    /**
      * A snapshot for the display, written by the audio thread and read by the
      * UI thread.
      *
@@ -324,6 +443,14 @@ struct Stems : Module {
      */
     static constexpr int kDisplayColumns = 256;
 
+    /** 0 while idle, or how far the take has got toward being separated. */
+    float separationProgress() const {
+        return separationProgress_.load(std::memory_order_relaxed);
+    }
+
+    bool isSeparating() const { return separating_.load(std::memory_order_relaxed); }
+    bool isRecording() const { return recording_; }
+
     void readDisplay(float* out, int count, float* playheadFraction) const {
         const int n = std::min(count, kDisplayColumns);
         for (int i = 0; i < n; i++) {
@@ -333,6 +460,52 @@ struct Stems : Module {
     }
 
 private:
+    /**
+     * Take ownership of a file the UI thread has finished preparing.
+     *
+     * The swap is the whole handover: after it the audio thread owns the loaded
+     * audio and the UI side holds whatever was in the buffer before, which it
+     * will not touch until the next load.
+     */
+    void adoptLoadedFile(const ProcessArgs& args) {
+        if (!loadPending_.load(std::memory_order_acquire)) return;
+        std::swap(buffer_, loadBuffer_);
+        loadPending_.store(false, std::memory_order_release);
+
+        // A loaded file replaces the take entirely, so the old stems go with it
+        // and playback starts from the beginning of the new material.
+        recording_ = false;
+        cancelPendingCopy();
+        worker_.invalidate();
+        transport_.setBufferFrames(buffer_->framesStored());
+        // Back to the start. setBufferFrames only changes the length, so
+        // without this a file loaded part way through a loop begins at whatever
+        // phase the previous one had reached.
+        transport_.setPhaseForTest(0.0);
+        submitSeparation(args);
+    }
+
+    /**
+     * Read a whole file into memory.
+     *
+     * The ceiling is a sanity bound rather than a format limit: choosing a
+     * multi-gigabyte file by mistake should not make the host allocate it.
+     */
+    static bool readWholeFile(const std::string& path, std::vector<unsigned char>& out) {
+        std::FILE* file = std::fopen(path.c_str(), "rb");
+        if (!file) return false;
+        std::fseek(file, 0, SEEK_END);
+        const long size = std::ftell(file);
+        std::fseek(file, 0, SEEK_SET);
+        const long limit = 512L * 1024L * 1024L;
+        if (size <= 0 || size > limit) { std::fclose(file); return false; }
+        out.resize((std::size_t)size);
+        const std::size_t got = std::fread(out.data(), 1, out.size(), file);
+        std::fclose(file);
+        out.resize(got);
+        return got > 0;
+    }
+
     /**
      * Fill one display column per call, so the cost is a handful of reads per
      * sample rather than a sweep of the whole buffer at draw time.
@@ -360,20 +533,18 @@ private:
     /**
      * Copy the current take out before the buffers are replaced.
      *
-     * Reads whichever buffer actually holds it. After a take ends,
-     * submitSeparation() swaps the completed audio into spare_ and clears
-     * buffer_, so reading buffer_ unconditionally would capture nothing during
-     * exactly the state the module spends most of its time in.
+     * The take always lives in buffer_. It used to be swapped into a spare on
+     * submission, which meant this had to look in two places and which left the
+     * mixer with nothing to fall back on; removing the swap removed both
+     * problems.
      */
     void captureForResample() {
         resampleLeft_.clear();
         resampleRight_.clear();
-        RingBuffer* held = nullptr;
-        if (buffer_ && buffer_->framesStored() >= 2) {
-            held = buffer_.get();
-        } else if (spare_ && spare_->framesStored() >= 2) {
-            held = spare_.get();
-        }
+        // The take always lives in buffer_ now, so there is only one place to
+        // look. It used to be swapped into a spare, which is what made this
+        // need two.
+        RingBuffer* held = (buffer_ && buffer_->framesStored() >= 2) ? buffer_.get() : nullptr;
         if (!held) return;
         const std::size_t frames = held->framesStored();
         resampleLeft_.resize(frames);
@@ -468,7 +639,9 @@ private:
         // Allocated once per sample rate change, on the UI thread, never in
         // process(). Sized for the 32 second ceiling the spec sets.
         buffer_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
-        spare_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
+        // A third buffer, owned by the UI thread while a file is being prepared.
+        loadBuffer_.reset(new RingBuffer(rate, kMaxBufferSeconds, 2));
+        loadPending_.store(false, std::memory_order_release);
         transport_.setSampleRate(rate);
         transport_.setBufferFrames(buffer_->capacityFrames());
         mixer_.setSampleRate(rate);
@@ -571,7 +744,14 @@ private:
                                            : (trig || armEdge);
             if (start) {
                 if (mode != 2) {
+                    // The copy in flight reads this buffer, so it has to go
+                    // before the contents do.
+                    cancelPendingCopy();
                     buffer_->clear();
+                    // The buffer is no longer that file, so the patch must stop
+                    // claiming it is and reloading it on the next open.
+                    loadedPath_.clear();
+                    loadedTruncated_ = false;
                     // A new take supersedes the old one. Leaving the previous
                     // StemSet published meant the module kept playing the last
                     // recording all the way through the new one, and kept it
@@ -613,41 +793,52 @@ private:
         submitSeparation(args);
     }
 
-    void submitSeparation(const ProcessArgs& args) {
-        // SWAPPED, not copied. Copying up to 32 seconds of stereo float here
-        // meant two resizes and millions of samples inside one audio callback,
-        // and submit() then copied it again under a mutex. Two buffers and a
-        // pointer swap cost nothing: the worker owns the take it is separating
-        // and process() records into the other one.
-        const std::size_t frames = buffer_->framesStored();
-        if (frames < 2048) return;
-        pendingHandoff_ = true;
-        handoffFrames_ = frames;
-        handoffRate_ = (int)args.sampleRate;
-        std::swap(buffer_, spare_);
-        buffer_->clear();
-    }
-
     /**
-     * Complete a handoff. Called from process() but does the copy only when a
-     * take has just ended, which is once per recording rather than per sample.
+     * Begin handing the current take to the worker.
      *
-     * The copy itself still happens here rather than on the worker, because
-     * SeparationWorker::submit takes the snapshot under its own lock and that
-     * contract is what keeps the worker from ever reading a live buffer. What
-     * the swap removes is doing it from the buffer process() is writing.
+     * The take STAYS in buffer_. An earlier version swapped it into a spare and
+     * cleared the live buffer, which left the mixer with no fallback to play:
+     * every recording and every loaded file went silent until separation
+     * finished, which is the opposite of the graceful degradation the spec asks
+     * for. Nothing needs to move, because the audio thread only writes this
+     * buffer while recording and starting a recording cancels the copy.
      */
-    void completeHandoff() {
-        if (!pendingHandoff_) return;
-        pendingHandoff_ = false;
-        const std::size_t frames = std::min(handoffFrames_, spare_->framesStored());
-        if (frames < 2048) return;
+    void submitSeparation(const ProcessArgs& args) {
+        const std::size_t frames = buffer_->framesStored();
+        if (frames < 2048) { copyPending_ = false; return; }
+        copyPending_ = true;
+        copyCursor_ = 0;
+        copyFrames_ = frames;
+        copyRate_ = (int)args.sampleRate;
         scratchLeft_.resize(frames);
         scratchRight_.resize(frames);
-        for (std::size_t i = 0; i < frames; i++) {
-            spare_->readFrame(i, scratchLeft_[i], scratchRight_[i]);
+    }
+
+    /** Abandon a copy whose source is about to be overwritten. */
+    void cancelPendingCopy() { copyPending_ = false; }
+
+    /**
+     * Copy a slice of the take for the worker.
+     *
+     * Amortised, because a full 32 second stereo recording is millions of
+     * samples and doing it in the callback that happened to end the take is a
+     * spike in exactly the place a spike is least affordable.
+     */
+    void completeHandoff() {
+        if (!copyPending_) return;
+        const std::size_t total = std::min(copyFrames_, buffer_->framesStored());
+        const std::size_t remaining = (copyCursor_ < total) ? (total - copyCursor_) : 0;
+        const std::size_t count = std::min<std::size_t>(remaining, kCopyFramesPerCall);
+        for (std::size_t i = 0; i < count; i++) {
+            buffer_->readFrame(copyCursor_ + i, scratchLeft_[copyCursor_ + i],
+                               scratchRight_[copyCursor_ + i]);
         }
-        worker_.submit(scratchLeft_.data(), scratchRight_.data(), frames, handoffRate_);
+        copyCursor_ += count;
+        if (copyCursor_ < total) return;
+
+        copyPending_ = false;
+        if (total < 2048) return;
+        worker_.submit(scratchLeft_.data(), scratchRight_.data(), total, copyRate_);
     }
 
     void advanceTransport(const ProcessArgs& args) {
@@ -674,16 +865,29 @@ private:
         return std::min(std::max<std::size_t>(wanted, 1), cap);
     }
 
-    void runAnalysis(const StemSet* stems, const ProcessArgs& args) {
-        // Analysis runs on a window, not per sample, so it is spread across
-        // blocks: gathering samples here and estimating once the window is full
-        // keeps the per-call cost flat.
+    /**
+     * Gather a window and POST it to the worker.
+     *
+     * YIN used to run here, and it is O(window * maxTau): about two million
+     * operations dropped into one audio callback every 4096 samples. That is a
+     * periodic CPU spike big enough to see on a meter, and it is what this was
+     * reported as. All that happens on the audio thread now is filling an array
+     * and reading back an answer.
+     */
+    void runAnalysis(const ProcessArgs& args) {
         analysisWindow_[analysisFill_++] = mixer_.tap();
-        if (analysisFill_ < analysisWindow_.size()) return;
-        analysisFill_ = 0;
+        if (analysisFill_ >= analysisWindow_.size()) {
+            analysisFill_ = 0;
+            // Dropped if the worker is still busy, which is fine: the detector
+            // accumulates over many windows and holds its last confident result.
+            worker_.submitAnalysis(analysisWindow_.data(), analysisWindow_.size(),
+                                   (int)args.sampleRate);
+        }
 
-        const auto pitch = yin_.analyse(analysisWindow_.data(), analysisWindow_.size());
-        detector_.addPitch(pitch.frequency, pitch.confidence, pitch.voiced);
+        SeparationWorker::AnalysisResult estimate;
+        if (!worker_.takeAnalysis(estimate)) return;
+
+        detector_.addPitch(estimate.frequency, estimate.confidence, estimate.voiced);
         const auto key = detector_.detect();
         analysisActive_ = key.detected;
 
@@ -693,8 +897,6 @@ private:
                                           ? Quantizer::Scale::Major
                                           : Quantizer::Scale::NaturalMinor);
         }
-        (void)stems;
-        (void)args;
     }
 
     float runVoice(const StemSet* stems, double playhead, const ProcessArgs& args) {
@@ -758,10 +960,16 @@ private:
     }
 
     std::unique_ptr<RingBuffer> buffer_;
-    std::unique_ptr<RingBuffer> spare_;
-    bool pendingHandoff_ = false;
-    std::size_t handoffFrames_ = 0;
-    int handoffRate_ = 48000;
+    std::unique_ptr<RingBuffer> loadBuffer_;
+    std::atomic<bool> loadPending_{false};
+    std::string loadedPath_;
+    bool loadedTruncated_ = false;
+    bool copyPending_ = false;
+    std::size_t copyCursor_ = 0;
+    std::size_t copyFrames_ = 0;
+    int copyRate_ = 48000;
+    /** Frames copied per call. A 32 second take spreads over about a second. */
+    static constexpr std::size_t kCopyFramesPerCall = 1024;
     std::size_t overdubRead_ = 0;
     float lastSpace_ = -1.f, lastLpgDecay_ = -1.f, lastGlide_ = -1.f, lastMorph_ = -1.f;
     Transport transport_{48000};
@@ -803,6 +1011,8 @@ private:
 
     std::atomic<float> displayPeaks_[kDisplayColumns] = {};
     std::atomic<float> displayPlayhead_{0.f};
+    std::atomic<float> separationProgress_{0.f};
+    std::atomic<bool> separating_{false};
     int displayColumn_ = 0;
 };
 
@@ -839,7 +1049,58 @@ struct StemsDisplay : LedDisplay {
         nvgStrokeColor(args.vg, nvgRGBA(0xff, 0xaa, 0x33, 0xdd));
         nvgStrokeWidth(args.vg, 1.5f);
         nvgStroke(args.vg);
+
+        drawStatus(args, w, h);
     }
+
+    /**
+     * Say what the module is doing, because separation takes seconds and a
+     * module that looks idle while it works reads as a module that is broken.
+     */
+    void drawStatus(const DrawArgs& args, float w, float h) {
+        if (module->isRecording()) {
+            nvgBeginPath(args.vg);
+            nvgCircle(args.vg, 8.f, 8.f, 3.f);
+            nvgFillColor(args.vg, nvgRGBA(0xff, 0x44, 0x44, 0xee));
+            nvgFill(args.vg);
+            label(args, 16.f, 11.f, "RECORDING", nvgRGBA(0xff, 0x88, 0x88, 0xdd));
+            return;
+        }
+        if (!module->isSeparating()) return;
+
+        // A bar across the bottom: filling while the take is copied, then
+        // sweeping while HPSS runs, which has no position to report.
+        const float progress = module->separationProgress();
+        const float barH = 3.f;
+        const float y = h - barH - 1.f;
+        nvgBeginPath(args.vg);
+        nvgRect(args.vg, 0, y, w, barH);
+        nvgFillColor(args.vg, nvgRGBA(0x22, 0x2c, 0x36, 0xcc));
+        nvgFill(args.vg);
+
+        nvgBeginPath(args.vg);
+        if (progress < 1.f) {
+            nvgRect(args.vg, 0, y, w * progress, barH);
+        } else {
+            // Indeterminate: a block sweeping left to right, so it is obviously
+            // "still working" rather than "stuck at 100 per cent".
+            sweep_ = std::fmod(sweep_ + 0.006f, 1.f);
+            const float blockW = w * 0.25f;
+            nvgRect(args.vg, (w + blockW) * sweep_ - blockW, y, blockW, barH);
+        }
+        nvgFillColor(args.vg, nvgRGBA(0x66, 0xdd, 0xff, 0xdd));
+        nvgFill(args.vg);
+
+        label(args, 4.f, y - 3.f, "SEPARATING", nvgRGBA(0x66, 0xdd, 0xff, 0xbb));
+    }
+
+    void label(const DrawArgs& args, float x, float y, const char* text, NVGcolor colour) {
+        nvgFontSize(args.vg, 8.f);
+        nvgFillColor(args.vg, colour);
+        nvgText(args.vg, x, y, text, nullptr);
+    }
+
+    float sweep_ = 0.f;
 };
 
 struct StemsWidget : ModuleWidget {
@@ -926,6 +1187,44 @@ struct StemsWidget : ModuleWidget {
         addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(x + 132.f, jackRow)), module, Stems::DOWNBEAT_OUTPUT));
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(x + 88.f, outRow)), module, Stems::WT_OFFSET_CV_INPUT));
         addChild(createLightCentered<SmallLight<BlueLight>>(mm2px(Vec(x + 132.f, outRow)), module, Stems::DOWNBEAT_LIGHT));
+    }
+
+    void appendContextMenu(Menu* menu) override {
+        auto* module = dynamic_cast<Stems*>(this->module);
+        if (!module) return;
+
+        menu->addChild(new MenuSeparator);
+        menu->addChild(createMenuLabel("Audio"));
+
+        menu->addChild(createMenuItem("Load WAV file...", "", [module]() {
+            char* chosen = osdialog_file(OSDIALOG_OPEN, nullptr, nullptr, nullptr);
+            if (!chosen) return;
+            const std::string path = chosen;
+            std::free(chosen);
+            const std::string failure = module->loadAudioFile(path);
+            if (!failure.empty()) {
+                // Shown rather than swallowed. A file that will not load is
+                // something the user needs told, and the reader already returns
+                // a message written for them rather than for a developer.
+                osdialog_message(OSDIALOG_WARNING, OSDIALOG_OK, failure.c_str());
+            }
+        }));
+
+        const std::string& loaded = module->loadedPath();
+        if (!loaded.empty()) {
+            // Just the filename. Full paths are long enough to push the menu
+            // wider than the module.
+            std::string name = loaded;
+            const std::size_t slash = name.find_last_of("/\\");
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            menu->addChild(createMenuLabel(name));
+            if (module->loadedWasTruncated()) {
+                menu->addChild(createMenuLabel("(trimmed to the buffer length)"));
+            }
+            menu->addChild(createMenuItem("Forget loaded file", "", [module]() {
+                module->clearLoadedFile();
+            }));
+        }
     }
 };
 
